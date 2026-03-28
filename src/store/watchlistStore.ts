@@ -33,6 +33,6 @@ export const useWatchlistStore = create<WatchlistStore>()(
         set((state) => ({ items: state.items.filter((i) => i.symbol !== symbol) })),
       hasItem: (symbol) => get().items.some((i) => i.symbol === symbol),
     }),
-    { name: 'marketlens-watchlist' }
+    { name: 'moneytalks-watchlist' }
   )
 );

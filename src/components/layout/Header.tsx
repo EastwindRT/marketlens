@@ -52,7 +52,7 @@ export function Header({ onMenuClick }: HeaderProps) {
             className="font-bold text-sm tracking-tight"
             style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}
           >
-            MarketLens
+            MoneyTalks
           </span>
         </Link>
 
@@ -88,7 +88,7 @@ export function Header({ onMenuClick }: HeaderProps) {
             className="font-bold text-sm tracking-tight"
             style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}
           >
-            MarketLens
+            MoneyTalks
           </span>
         </Link>
 

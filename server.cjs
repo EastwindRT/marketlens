@@ -47,5 +47,5 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`MarketLens server running on port ${PORT}`);
+  console.log(`MoneyTalks server running on port ${PORT}`);
 });
