@@ -1,0 +1,42 @@
+import type { FinnhubCandleResponse, Quote, InsiderTransaction, CompanyProfile, SearchResult } from './types';
+
+const BASE = 'https://finnhub.io/api/v1';
+const KEY = import.meta.env.VITE_FINNHUB_API_KEY || '';
+
+async function request<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Finnhub ${res.status}`);
+  const json = await res.json();
+  // Finnhub returns 200 with {"error":"..."} for paywalled resources
+  if (json && json.error) throw new Error(json.error);
+  return json as T;
+}
+
+export const finnhub = {
+  getCandles: (symbol: string, from: number, to: number, resolution = 'D') =>
+    request<FinnhubCandleResponse>(
+      `${BASE}/stock/candle?symbol=${symbol}&resolution=${resolution}&from=${from}&to=${to}&token=${KEY}`
+    ),
+
+  getQuote: (symbol: string) =>
+    request<Quote>(`${BASE}/quote?symbol=${symbol}&token=${KEY}`),
+
+  // from/to are optional ISO date strings e.g. "2023-01-01"
+  getInsiderTransactions: (symbol: string, from?: string, to?: string) => {
+    let url = `${BASE}/stock/insider-transactions?symbol=${symbol}&token=${KEY}`;
+    if (from) url += `&from=${from}`;
+    if (to)   url += `&to=${to}`;
+    return request<{ data: InsiderTransaction[] }>(url);
+  },
+
+  getProfile: (symbol: string) =>
+    request<CompanyProfile>(`${BASE}/stock/profile2?symbol=${symbol}&token=${KEY}`),
+
+  search: (query: string) =>
+    request<{ result: SearchResult[] }>(`${BASE}/search?q=${query}&token=${KEY}`),
+};
+
+export function formatTickerForFinnhub(ticker: string, exchange?: string): string {
+  if (exchange === 'TSX' || ticker.endsWith('.TO')) return ticker.includes('.') ? ticker : `${ticker}.TO`;
+  return ticker;
+}

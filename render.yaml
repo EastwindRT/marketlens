@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: marketlens
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: VITE_FINNHUB_API_KEY
+        sync: false
+      - key: VITE_POLYGON_API_KEY
+        sync: false
