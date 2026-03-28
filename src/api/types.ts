@@ -71,5 +71,5 @@ export interface FinnhubCandleResponse {
 }
 
 export type TimeRange = '1D' | '1W' | '1M' | '3M' | '1Y' | 'ALL';
-export type ChartType = 'candlestick' | 'line';
+export type ChartType = 'area' | 'candlestick' | 'line';
 export type InsiderFilter = 'all' | 'buy' | 'sell';

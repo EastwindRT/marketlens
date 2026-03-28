@@ -125,11 +125,11 @@ export default function StockDetail() {
               className="flex rounded-xl overflow-hidden"
               style={{ border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', flexShrink: 0 }}
             >
-              {(['candlestick', 'line'] as const).map(type => (
+              {(['area', 'candlestick'] as const).map(type => (
                 <button
                   key={type}
                   onClick={() => setChartType(type)}
-                  className="px-3 text-xs font-semibold capitalize"
+                  className="px-3 text-xs font-semibold"
                   style={{
                     height: 44,
                     background: chartType === type ? 'var(--bg-hover)' : 'transparent',
@@ -139,7 +139,7 @@ export default function StockDetail() {
                     transition: 'all 150ms ease-out',
                   }}
                 >
-                  {type === 'candlestick' ? 'Candle' : 'Line'}
+                  {type === 'area' ? 'Area' : 'Candle'}
                 </button>
               ))}
             </div>

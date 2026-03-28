@@ -16,7 +16,7 @@ interface ChartStore {
 
 export const useChartStore = create<ChartStore>((set) => ({
   timeRange: '3M',
-  chartType: 'candlestick',
+  chartType: 'area',
   showSMA20: true,
   showSMA50: true,
   showVolume: true,
