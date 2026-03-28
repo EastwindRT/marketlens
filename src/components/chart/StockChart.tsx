@@ -35,6 +35,10 @@ function compactValue(v: number): string {
   return `$${v.toFixed(0)}`;
 }
 
+// Detect touch device
+const isTouchDevice = () =>
+  typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+
 export function StockChart({
   data,
   chartType,
@@ -61,6 +65,8 @@ export function StockChart({
       chartRef.current = null;
     }
 
+    const touch = isTouchDevice();
+
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth || containerRef.current.offsetWidth,
       height,
@@ -75,7 +81,8 @@ export function StockChart({
         horzLines: { color: 'rgba(255,255,255,0.03)' },
       },
       crosshair: {
-        mode: CrosshairMode.Normal,
+        // Magnet on touch: snaps to nearest candle instead of floating freely
+        mode: touch ? CrosshairMode.Magnet : CrosshairMode.Normal,
         vertLine: {
           color: 'rgba(45,107,255,0.35)',
           width: 1,
@@ -101,8 +108,10 @@ export function StockChart({
         secondsVisible: false,
         tickMarkMaxCharacterLength: 8,
       },
-      handleScroll: { mouseWheel: true, pressedMouseMove: true },
-      handleScale: { mouseWheel: true, pinch: true },
+      // On touch: disable scroll/scale so the chart doesn't fight page scroll.
+      // The user taps to see crosshair; they scroll the page by dragging outside the chart.
+      handleScroll: touch ? false : { mouseWheel: true, pressedMouseMove: true },
+      handleScale: touch ? false : { mouseWheel: true, pinch: true },
     });
 
     chartRef.current = chart;
@@ -305,7 +314,15 @@ export function StockChart({
     <div
       ref={containerRef}
       className="w-full"
-      style={{ background: 'var(--bg-primary)', height }}
+      style={{
+        background: 'var(--bg-primary)',
+        height,
+        // Prevent browser scroll/zoom from fighting the chart's touch handlers
+        touchAction: 'none',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        overflow: 'hidden',
+      }}
     />
   );
 }

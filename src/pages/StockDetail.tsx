@@ -1,3 +1,4 @@
+import { useRef, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Plus, Check, RefreshCw } from 'lucide-react';
 import { useStockCandles, useStockQuote, useStockProfile } from '../hooks/useStockData';
@@ -6,6 +7,7 @@ import { useRealTimeQuote } from '../hooks/useRealTimeQuote';
 import { useChartStore } from '../store/chartStore';
 import { useWatchlistStore } from '../store/watchlistStore';
 import { StockChart } from '../components/chart/StockChart';
+import type { OHLCVBar, ChartType, InsiderTransaction } from '../api/types';
 import { PriceDisplay } from '../components/ui/PriceDisplay';
 import { TimeRangePicker } from '../components/ui/TimeRangePicker';
 import { InsiderPanel } from '../components/insider/InsiderPanel';
@@ -181,7 +183,7 @@ export default function StockDetail() {
 
       {/* ── Chart ── */}
       <div style={{ background: 'var(--bg-primary)' }}>
-        <StockChart
+        <ChartWithResponsiveHeight
           data={candles || []}
           chartType={chartType}
           showSMA20={showSMA20}
@@ -190,7 +192,6 @@ export default function StockDetail() {
           insiders={insiders || []}
           loading={candlesLoading}
           currency={currency}
-          height={440}
         />
       </div>
 
@@ -218,6 +219,51 @@ export default function StockDetail() {
           isCanadian={isCanadian}
         />
       </div>
+    </div>
+  );
+}
+
+// Measures container width and picks 280px (mobile) or 440px (desktop)
+function ChartWithResponsiveHeight({
+  data, chartType, showSMA20, showSMA50, showVolume, insiders, loading, currency,
+}: {
+  data: OHLCVBar[];
+  chartType: ChartType;
+  showSMA20: boolean;
+  showSMA50: boolean;
+  showVolume: boolean;
+  insiders: InsiderTransaction[];
+  loading: boolean;
+  currency: string;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(440);
+
+  useEffect(() => {
+    const update = () => {
+      if (wrapRef.current) {
+        setHeight(wrapRef.current.clientWidth < 640 ? 280 : 440);
+      }
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    if (wrapRef.current) ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div ref={wrapRef} className="w-full">
+      <StockChart
+        data={data}
+        chartType={chartType}
+        showSMA20={showSMA20}
+        showSMA50={showSMA50}
+        showVolume={showVolume}
+        insiders={insiders}
+        loading={loading}
+        currency={currency}
+        height={height}
+      />
     </div>
   );
 }
