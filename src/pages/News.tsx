@@ -6,7 +6,7 @@ import type { MarketFiling } from '../api/edgar';
 import { format, subDays } from 'date-fns';
 
 function formStyle(formType: string): { bg: string; color: string; border: string } {
-  if (formType.startsWith('SC 13D'))
+  if (formType.startsWith('13D') || formType.startsWith('SCHEDULE 13D'))
     return { bg: 'rgba(247,147,26,0.12)', color: '#F7931A', border: 'rgba(247,147,26,0.3)' };
   return { bg: 'rgba(45,107,255,0.12)', color: 'var(--accent-blue-light)', border: 'rgba(45,107,255,0.3)' };
 }

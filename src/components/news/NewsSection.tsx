@@ -393,7 +393,7 @@ function FilingsTab({
   if (loading) return <FilingsSkeleton />;
 
   const formColor = (form: string): { bg: string; color: string; border: string } => {
-    if (form.startsWith('SC 13D') || form.startsWith('SC+13D')) {
+    if (form.startsWith('13D') || form.startsWith('SC 13D') || form.startsWith('SCHEDULE 13D')) {
       return { bg: 'rgba(247,147,26,0.12)', color: '#F7931A', border: 'rgba(247,147,26,0.25)' };
     }
     return { bg: 'rgba(45,107,255,0.12)', color: 'var(--accent-blue-light)', border: 'rgba(45,107,255,0.25)' };
