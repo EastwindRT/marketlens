@@ -67,7 +67,7 @@ export function fmtPerf(pct: number | null): string {
  * Return the semantic colour for a performance value given the trade type.
  * A buy that goes up = good (green), a sell that goes up = bad (red), etc.
  */
-export function perfColor(pct: number | null, tradeType: 'BUY' | 'SELL'): string {
+export function perfColor(pct: number | null, tradeType: 'BUY' | 'SELL' | 'GRANT'): string {
   if (pct === null) return 'var(--text-tertiary)';
   const positive = pct >= 0;
   // For a BUY: price up = green (thesis confirmed), price down = red (underwater)

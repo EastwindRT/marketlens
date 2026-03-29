@@ -12,8 +12,8 @@ const TO_DATE   = format(new Date(), 'yyyy-MM-dd');
 
 const hasApiKey = () => !!import.meta.env.VITE_FINNHUB_API_KEY;
 
-// SEC Form 4 codes — only purchases and sales
-const SEC_RELEVANT = ['P', 'S', 'S-'];
+// SEC Form 4 codes — purchases, sales, grants, and tax-withholding sells
+const SEC_RELEVANT = ['P', 'S', 'S-', 'A', 'F'];
 
 /** Full label for each SEC Form 4 transaction code */
 export const SEC_CODE_LABELS: Record<string, string> = {
@@ -142,12 +142,13 @@ export function useInsiderData(symbol: string) {
 }
 
 /**
- * Determine BUY or SELL from transaction code.
+ * Determine BUY, SELL, or GRANT from transaction code.
  * Works for both Finnhub SEC codes and mapped TMX codes.
  */
-export function getInsiderType(code: string, change?: number): 'BUY' | 'SELL' {
+export function getInsiderType(code: string, change?: number): 'BUY' | 'SELL' | 'GRANT' {
   if (code === 'P') return 'BUY';
-  if (code === 'S' || code === 'S-') return 'SELL';
+  if (code === 'S' || code === 'S-' || code === 'F') return 'SELL';
+  if (code === 'A') return 'GRANT';
   // Fallback: use change direction
   return (change ?? 0) >= 0 ? 'BUY' : 'SELL';
 }

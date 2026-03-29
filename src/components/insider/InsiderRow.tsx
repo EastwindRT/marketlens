@@ -25,6 +25,9 @@ interface InsiderRowProps {
 export function InsiderRow({ transaction, candles = [], currency = 'USD', isCanadian = false, onClick }: InsiderRowProps) {
   const type = getInsiderType(transaction.transactionCode, transaction.change);
   const isBuy = type === 'BUY';
+  const isGrant = type === 'GRANT';
+  const typeBg = isBuy ? 'rgba(5,177,105,0.1)' : isGrant ? 'rgba(45,107,255,0.12)' : 'rgba(246,70,93,0.1)';
+  const typeColor = isBuy ? 'var(--color-up)' : isGrant ? 'var(--accent-blue-light)' : 'var(--color-down)';
   const shares = Math.abs(transaction.share ?? transaction.change);
   const value = shares * transaction.transactionPrice;
   const codeLabel = getCodeLabel(transaction.rawCode, isCanadian);
@@ -71,8 +74,8 @@ export function InsiderRow({ transaction, candles = [], currency = 'USD', isCana
           <span
             className="px-1.5 py-0.5 text-xs font-bold rounded"
             style={{
-              background: isBuy ? 'rgba(5,177,105,0.1)' : 'rgba(246,70,93,0.1)',
-              color: isBuy ? 'var(--color-up)' : 'var(--color-down)',
+              background: typeBg,
+              color: typeColor,
               letterSpacing: '0.04em',
               fontSize: 10,
             }}
@@ -85,7 +88,7 @@ export function InsiderRow({ transaction, candles = [], currency = 'USD', isCana
         <span
           className="self-center text-right text-xs font-semibold"
           style={{
-            color: isBuy ? 'var(--color-up)' : 'var(--color-down)',
+            color: typeColor,
             fontFamily: "'Roboto Mono', monospace",
           }}
         >
@@ -124,8 +127,8 @@ export function InsiderRow({ transaction, candles = [], currency = 'USD', isCana
           <span
             className="px-2 py-0.5 text-xs font-bold rounded"
             style={{
-              background: isBuy ? 'rgba(5,177,105,0.1)' : 'rgba(246,70,93,0.1)',
-              color: isBuy ? 'var(--color-up)' : 'var(--color-down)',
+              background: typeBg,
+              color: typeColor,
               letterSpacing: '0.05em',
             }}
           >

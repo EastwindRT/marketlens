@@ -235,20 +235,21 @@ export function StockChart({
     // ── Insider markers — grouped by date ─────────────────────────────────
     const primarySeries = areaSeriesRef.current || candleSeriesRef.current || lineSeriesRef.current;
     if (insiders.length > 0 && primarySeries) {
-      const byDate = new Map<string, { buys: InsiderTransaction[]; sells: InsiderTransaction[] }>();
+      const byDate = new Map<string, { buys: InsiderTransaction[]; sells: InsiderTransaction[]; grants: InsiderTransaction[] }>();
       insiders
         .filter(t => t.transactionDate && t.transactionPrice > 0)
         .forEach(t => {
           const date = t.transactionDate.slice(0, 10);
-          if (!byDate.has(date)) byDate.set(date, { buys: [], sells: [] });
+          if (!byDate.has(date)) byDate.set(date, { buys: [], sells: [], grants: [] });
           const group = byDate.get(date)!;
-          getInsiderType(t.transactionCode, t.change) === 'BUY'
-            ? group.buys.push(t)
-            : group.sells.push(t);
+          const type = getInsiderType(t.transactionCode, t.change);
+          if (type === 'BUY') group.buys.push(t);
+          else if (type === 'GRANT') group.grants.push(t);
+          else group.sells.push(t);
         });
 
       const markers: any[] = [];
-      byDate.forEach(({ buys, sells }, date) => {
+      byDate.forEach(({ buys, sells, grants }, date) => {
         if (buys.length > 0) {
           const totalVal = buys.reduce(
             (s, t) => s + Math.abs((t.share ?? Math.abs(t.change)) * t.transactionPrice), 0
@@ -260,6 +261,19 @@ export function StockChart({
             shape: 'arrowUp',
             text: compactValue(totalVal),
             size: 2,
+          });
+        }
+        if (grants.length > 0) {
+          const totalVal = grants.reduce(
+            (s, t) => s + Math.abs((t.share ?? Math.abs(t.change)) * t.transactionPrice), 0
+          );
+          markers.push({
+            time: date,
+            position: 'belowBar',
+            color: '#2D6BFF',
+            shape: 'arrowUp',
+            text: `G ${compactValue(totalVal)}`,
+            size: 1,
           });
         }
         if (sells.length > 0) {
