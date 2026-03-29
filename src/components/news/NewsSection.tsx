@@ -379,7 +379,7 @@ function FilingsTab({
           Canadian major ownership filings are reported on <strong>SEDAR+</strong> (Early Warning Reports require 10%+ ownership).
         </p>
         <a
-          href="https://www.sedarplus.ca/landingpage/"
+          href={`https://www.sedarplus.ca/csa-party/party/search.html?lang=EN&company=${encodeURIComponent(baseTicker)}`}
           target="_blank"
           rel="noopener noreferrer"
           style={{ color: 'var(--accent-blue-light)', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 4, marginBottom: 8 }}
