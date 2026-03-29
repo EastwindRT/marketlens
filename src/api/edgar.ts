@@ -1,109 +1,124 @@
 import type { Edgar13DFiling } from './types';
 
-const SEC = '/api/sec';
-
 export interface MarketFiling extends Edgar13DFiling {
   subjectCompany?: string;
 }
 
-// ── XML parsing helpers ───────────────────────────────────────────────────────
+// ── EFTS (efts.sec.gov) — market-wide filings feed ───────────────────────────
 
-const SEC_NS = 'https://www.sec.gov/';
+interface EftsSource {
+  entity_name?: string;
+  file_date?: string;
+  form_type?: string;
+  accession_no?: string;
+  display_names?: string[];
+  period_of_report?: string;
+}
 
-function getSecEl(entry: Element, tag: string): string {
+interface EftsHit { _id: string; _source: EftsSource }
+interface EftsResponse { hits?: { total?: { value: number }; hits?: EftsHit[] } }
+
+function eftsToFiling(hit: EftsHit): MarketFiling {
+  const s = hit._source;
+  const accNo = s.accession_no ?? hit._id ?? '';
+
+  // Build direct link to filing index
+  let edgarUrl = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent(s.form_type ?? 'SC+13')}&dateb=&owner=include&count=40`;
+  if (accNo) {
+    const clean = accNo.replace(/-/g, '');
+    const cik   = parseInt(clean.slice(0, 10), 10).toString();
+    edgarUrl = `https://www.sec.gov/Archives/edgar/data/${cik}/${clean}/`;
+  }
+
+  // display_names[0] typically = "Subject Company Inc. (CIK 0000NNNNNN)"
+  const rawDisplay = s.display_names?.[0] ?? '';
+  const subjectCompany = rawDisplay.replace(/\s*\(CIK\s*[\d]+\)/i, '').trim() || undefined;
+
+  return {
+    accessionNo: accNo,
+    filerName:   s.entity_name ?? 'Unknown',
+    formType:    s.form_type   ?? 'SC 13',
+    filedDate:   s.file_date   ?? '',
+    periodOfReport: s.period_of_report,
+    edgarUrl,
+    subjectCompany,
+  };
+}
+
+// ── SEC Atom feed (www.sec.gov) — per-stock subject-company search ────────────
+
+const SEC_NS  = 'https://www.sec.gov/';
+const SEC_NS2 = 'http://www.sec.gov/';
+
+function getEl(entry: Element, tag: string): string {
   return (
-    entry.getElementsByTagNameNS(SEC_NS, tag)[0]?.textContent?.trim() ??
-    entry.getElementsByTagName(tag)[0]?.textContent?.trim() ??
+    entry.getElementsByTagNameNS(SEC_NS,  tag)[0]?.textContent?.trim() ||
+    entry.getElementsByTagNameNS(SEC_NS2, tag)[0]?.textContent?.trim() ||
+    entry.getElementsByTagNameNS('*',     tag)[0]?.textContent?.trim() ||
+    entry.getElementsByTagName(tag)[0]?.textContent?.trim() ||
     ''
   );
 }
 
 function parseAtom(xml: string): MarketFiling[] {
-  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  const doc     = new DOMParser().parseFromString(xml, 'text/xml');
   const entries = Array.from(doc.querySelectorAll('entry'));
 
-  return entries.flatMap(entry => {
-    const formType   = getSecEl(entry, 'filing-type')  || getSecEl(entry, 'form-type');
-    const filedDate  = getSecEl(entry, 'filing-date');
-    const filingHref = getSecEl(entry, 'filing-href');
-    const accNo      = getSecEl(entry, 'accession-number');
-    // In EDGAR browse feeds, company-name is the SUBJECT company (whose shares were acquired)
-    const companyName = getSecEl(entry, 'company-name');
+  return entries.flatMap(e => {
+    const formType  = getEl(e, 'filing-type') || getEl(e, 'form-type');
+    const filedDate = getEl(e, 'filing-date');
+    const href      = getEl(e, 'filing-href');
+    const accNo     = getEl(e, 'accession-number');
+    const company   = getEl(e, 'company-name');
 
-    // Also try parsing filer info from the <title> e.g. "SC 13D - APPLE INC (0000320193)"
-    const titleText = entry.querySelector('title')?.textContent?.trim() ?? '';
-    // Title format: "FORM_TYPE - COMPANY NAME (CIK)" or "FORM_TYPE - COMPANY NAME"
-    const titleMatch = titleText.match(/^(?:SC\s+13\w+\/?\w*)\s+-\s+(.+?)(?:\s+\(\d+\))?$/i);
-    const titleCompany = titleMatch?.[1]?.trim();
+    // Fallback: parse title "SC 13D - COMPANY NAME (0000NNN)"
+    const title        = e.querySelector('title')?.textContent?.trim() ?? '';
+    const titleCompany = title.replace(/^SC\s+\S+\s+-\s+/i, '').replace(/\s*\(\d+\)\s*$/, '').trim();
 
-    const subjectCompany = companyName || titleCompany || undefined;
-    const edgarUrl = filingHref ||
-      (accNo ? `https://www.sec.gov/Archives/edgar/data/${parseInt(accNo.replace(/-/g, '').slice(0, 10), 10)}/${accNo.replace(/-/g, '')}/` : '#');
+    const subjectCompany = company || titleCompany || undefined;
+    const edgarUrl       = href || `https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=SC+13&dateb=&owner=include&count=40`;
 
     if (!filedDate && !subjectCompany) return [];
-
-    return [{
-      accessionNo: accNo,
-      filerName: subjectCompany ?? 'Unknown',   // in current-feed context company = subject
-      formType: formType || 'SC 13',
-      filedDate,
-      periodOfReport: undefined,
-      edgarUrl,
-      subjectCompany,
-    }];
+    return [{ accessionNo: accNo, filerName: subjectCompany ?? 'Unknown', formType: formType || 'SC 13', filedDate, edgarUrl, subjectCompany }];
   });
-}
-
-async function fetchAtom(url: string): Promise<MarketFiling[]> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`SEC ${res.status}`);
-  const text = await res.text();
-  return parseAtom(text);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export const edgar = {
-  // Market-wide: recent 13D, 13G and amendments — merged and sorted newest first
+
+  // Market-wide: recent SC 13D/13G filings via EFTS full-text search.
+  // "beneficial ownership" appears in every 13D/13G — used as the mandatory q param.
   getRecentFilings: async (days = 7): Promise<MarketFiling[]> => {
-    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const to   = new Date().toISOString().slice(0, 10);
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const forms = 'SC+13D%2CSC+13G%2CSC+13D%2FA%2CSC+13G%2FA';
+    const url = `/api/edgar/LATEST/search-index?q=%22beneficial+ownership%22&forms=${forms}&dateRange=custom&startdt=${from}&enddt=${to}`;
 
-    // Fetch 13D, 13G, and amendment variants in parallel
-    const base = `${SEC}/cgi-bin/browse-edgar?action=getcurrent&dateb=&owner=include&count=40&output=atom`;
-    const [d, g, da, ga] = await Promise.allSettled([
-      fetchAtom(`${base}&type=SC+13D`),
-      fetchAtom(`${base}&type=SC+13G`),
-      fetchAtom(`${base}&type=SC+13D%2FA`),
-      fetchAtom(`${base}&type=SC+13G%2FA`),
-    ]);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`EDGAR ${res.status}`);
 
-    const all: MarketFiling[] = [
-      ...(d.status  === 'fulfilled' ? d.value  : []),
-      ...(g.status  === 'fulfilled' ? g.value  : []),
-      ...(da.status === 'fulfilled' ? da.value : []),
-      ...(ga.status === 'fulfilled' ? ga.value : []),
-    ];
+    const data: EftsResponse = await res.json();
+    const hits = data.hits?.hits ?? [];
+    if (hits.length === 0 && (data.hits?.total?.value ?? 0) === 0) {
+      // Surface as empty (not error) — might just be a quiet filing week
+      return [];
+    }
 
-    // Deduplicate by accession number, filter by date window, sort newest first
-    const seen = new Set<string>();
-    return all
-      .filter(f => {
-        if (!f.filedDate) return false;
-        if (new Date(f.filedDate) < cutoff) return false;
-        const key = f.accessionNo || `${f.filerName}-${f.filedDate}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
+    return hits
+      .map(eftsToFiling)
+      .filter(f => f.filedDate)
       .sort((a, b) => b.filedDate.localeCompare(a.filedDate));
   },
 
-  // Per-stock: 13D/13G filings where this ticker is the subject company
+  // Per-stock: filings where this ticker is the subject company (via SEC Atom browse)
   get13DFilings: async (ticker: string): Promise<Edgar13DFiling[]> => {
-    const clean = ticker.replace('.TO', '').replace('.TSX', '');
-    const url = `${SEC}/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(clean)}&type=SC+13&dateb=&owner=include&count=20&output=atom`;
+    const clean = ticker.replace(/\.(TO|TSX)$/i, '');
+    const url   = `/api/sec/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(clean)}&type=SC+13&dateb=&owner=include&count=20&output=atom`;
     try {
-      return await fetchAtom(url);
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      return parseAtom(await res.text());
     } catch {
       return [];
     }

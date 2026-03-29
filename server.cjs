@@ -37,21 +37,24 @@ app.use(
   })
 );
 
-// Proxy: /api/sec → www.sec.gov (SEC EDGAR filings browse + Atom feeds)
-app.use(
-  '/api/sec',
-  createProxyMiddleware({
-    target: 'https://www.sec.gov',
-    changeOrigin: true,
-    pathRewrite: { '^/api/sec': '' },
-    on: {
-      proxyReq: (proxyReq) => {
-        proxyReq.setHeader('User-Agent', 'MoneyTalks/1.0 (research tool; contact: admin@moneytalks.app)');
-        proxyReq.setHeader('Accept', 'application/atom+xml, text/xml, */*');
-      },
-    },
-  })
-);
+// Proxy: /api/sec → www.sec.gov  (SEC EDGAR browse + Atom feeds)
+// Proxy: /api/edgar → efts.sec.gov (SEC EDGAR full-text search API)
+// User-Agent format required by SEC: "<Org> <contact-email>"
+const SEC_UA = 'MoneyTalks admin@moneytalks.app';
+
+app.use('/api/sec', createProxyMiddleware({
+  target: 'https://www.sec.gov',
+  changeOrigin: true,
+  pathRewrite: { '^/api/sec': '' },
+  on: { proxyReq: (pr) => { pr.setHeader('User-Agent', SEC_UA); pr.setHeader('Accept', 'text/xml,application/xml,*/*'); } },
+}));
+
+app.use('/api/edgar', createProxyMiddleware({
+  target: 'https://efts.sec.gov',
+  changeOrigin: true,
+  pathRewrite: { '^/api/edgar': '' },
+  on: { proxyReq: (pr) => { pr.setHeader('User-Agent', SEC_UA); pr.setHeader('Accept', 'application/json'); } },
+}));
 
 // Serve built React app
 const distPath = path.join(__dirname, 'dist');

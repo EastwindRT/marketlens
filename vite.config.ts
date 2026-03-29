@@ -24,14 +24,17 @@ export default defineConfig({
           'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
         },
       },
-      // Proxy SEC EDGAR browse → bypasses CORS from localhost
       '/api/sec': {
         target: 'https://www.sec.gov',
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/api\/sec/, ''),
-        headers: {
-          'User-Agent': 'MoneyTalks/1.0 (research tool)',
-        },
+        headers: { 'User-Agent': 'MoneyTalks admin@moneytalks.app' },
+      },
+      '/api/edgar': {
+        target: 'https://efts.sec.gov',
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/api\/edgar/, ''),
+        headers: { 'User-Agent': 'MoneyTalks admin@moneytalks.app' },
       },
     },
   },
