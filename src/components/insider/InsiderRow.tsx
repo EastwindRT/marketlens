@@ -26,8 +26,9 @@ export function InsiderRow({ transaction, candles = [], currency = 'USD', isCana
   const type = getInsiderType(transaction.transactionCode, transaction.change);
   const isBuy = type === 'BUY';
   const isGrant = type === 'GRANT';
-  const typeBg = isBuy ? 'rgba(5,177,105,0.1)' : isGrant ? 'rgba(45,107,255,0.12)' : 'rgba(246,70,93,0.1)';
-  const typeColor = isBuy ? 'var(--color-up)' : isGrant ? 'var(--accent-blue-light)' : 'var(--color-down)';
+  const isTaxSell = type === 'TAX_SELL';
+  const typeBg = isBuy ? 'rgba(5,177,105,0.1)' : isGrant ? 'rgba(45,107,255,0.12)' : isTaxSell ? 'rgba(247,147,26,0.12)' : 'rgba(246,70,93,0.1)';
+  const typeColor = isBuy ? 'var(--color-up)' : isGrant ? 'var(--accent-blue-light)' : isTaxSell ? '#F7931A' : 'var(--color-down)';
   const shares = Math.abs(transaction.share ?? transaction.change);
   const value = shares * transaction.transactionPrice;
   const codeLabel = getCodeLabel(transaction.rawCode, isCanadian);
@@ -163,7 +164,7 @@ export function InsiderRow({ transaction, candles = [], currency = 'USD', isCana
         </span>
 
         {/* Value */}
-        <span className="self-center text-right text-xs font-semibold" style={{ color: isBuy ? 'var(--color-up)' : 'var(--color-down)', fontFamily: "'Roboto Mono', monospace" }}>
+        <span className="self-center text-right text-xs font-semibold" style={{ color: typeColor, fontFamily: "'Roboto Mono', monospace" }}>
           {formatLargeNumber(value)}
         </span>
 

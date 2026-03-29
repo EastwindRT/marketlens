@@ -73,3 +73,51 @@ export interface FinnhubCandleResponse {
 export type TimeRange = '1D' | '1W' | '1M' | '3M' | '1Y' | 'ALL';
 export type ChartType = 'area' | 'candlestick' | 'line';
 export type InsiderFilter = 'all' | 'buy' | 'sell';
+
+export interface NewsItem {
+  id: string;
+  headline: string;
+  summary: string;
+  source: string;
+  url: string;
+  datetime: number;   // unix timestamp (seconds)
+  image?: string;
+  category: string;
+}
+
+export interface AnalystRecommendation {
+  buy: number;
+  hold: number;
+  period: string;
+  sell: number;
+  strongBuy: number;
+  strongSell: number;
+  symbol: string;
+}
+
+export interface PriceTarget {
+  lastUpdated: string;
+  targetHigh: number;
+  targetLow: number;
+  targetMean: number;
+  targetMedian: number;
+  symbol: string;
+}
+
+export interface EarningsSurprise {
+  actual: number | null;
+  estimate: number | null;
+  period: string;
+  surprise: number | null;
+  surprisePercent: number | null;
+  symbol: string;
+}
+
+export interface Edgar13DFiling {
+  accessionNo: string;
+  filerName: string;
+  formType: string;
+  filedDate: string;
+  periodOfReport?: string;
+  edgarUrl: string;
+}

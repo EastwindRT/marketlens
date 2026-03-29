@@ -145,9 +145,10 @@ export function useInsiderData(symbol: string) {
  * Determine BUY, SELL, or GRANT from transaction code.
  * Works for both Finnhub SEC codes and mapped TMX codes.
  */
-export function getInsiderType(code: string, change?: number): 'BUY' | 'SELL' | 'GRANT' {
+export function getInsiderType(code: string, change?: number): 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL' {
   if (code === 'P') return 'BUY';
-  if (code === 'S' || code === 'S-' || code === 'F') return 'SELL';
+  if (code === 'S' || code === 'S-') return 'SELL';
+  if (code === 'F') return 'TAX_SELL';
   if (code === 'A') return 'GRANT';
   // Fallback: use change direction
   return (change ?? 0) >= 0 ? 'BUY' : 'SELL';

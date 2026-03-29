@@ -37,6 +37,21 @@ app.use(
   })
 );
 
+// Proxy: /api/edgar → efts.sec.gov (SEC EDGAR 13D/13G filings)
+app.use(
+  '/api/edgar',
+  createProxyMiddleware({
+    target: 'https://efts.sec.gov',
+    changeOrigin: true,
+    pathRewrite: { '^/api/edgar': '' },
+    on: {
+      proxyReq: (proxyReq) => {
+        proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (compatible; MoneyTalks/1.0)');
+      },
+    },
+  })
+);
+
 // Serve built React app
 const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));

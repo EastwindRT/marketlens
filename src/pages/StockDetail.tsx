@@ -12,6 +12,7 @@ import type { OHLCVBar, ChartType, InsiderTransaction } from '../api/types';
 import { PriceDisplay } from '../components/ui/PriceDisplay';
 import { TimeRangePicker } from '../components/ui/TimeRangePicker';
 import { InsiderPanel } from '../components/insider/InsiderPanel';
+import { NewsSection } from '../components/news/NewsSection';
 import { TrendLinesLegend } from '../components/chart/TrendLines';
 import { PriceHeaderSkeleton } from '../components/ui/LoadingSkeleton';
 import TradeModal from '../components/trade/TradeModal';
@@ -238,7 +239,7 @@ export default function StockDetail() {
       </div>
 
       {/* ── Insider Panel ── */}
-      <div className="px-4 md:px-8 pb-10">
+      <div className="px-4 md:px-8 pb-4">
         <InsiderPanel
           transactions={insiders || []}
           candles={candles || []}
@@ -246,6 +247,16 @@ export default function StockDetail() {
           error={null}
           currency={currency}
           isCanadian={isCanadian}
+        />
+      </div>
+
+      {/* ── Market Signals (News / Analyst / 13D Filings) ── */}
+      <div className="px-4 md:px-8 pb-10">
+        <NewsSection
+          symbol={symbol}
+          isCanadian={isCanadian}
+          currentPrice={liveQuote?.price ?? quote?.c}
+          currency={currency}
         />
       </div>
 

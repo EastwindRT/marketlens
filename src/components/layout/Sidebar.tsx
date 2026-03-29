@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
-import { Minus, Star, X, Trophy, Users, TrendingUp, TrendingDown, Shield, User } from 'lucide-react';
+import { Minus, Star, X, Trophy, Users, TrendingUp, TrendingDown, Shield, User, Newspaper } from 'lucide-react';
 import { useWatchlistStore } from '../../store/watchlistStore';
 import { useLeagueStore } from '../../store/leagueStore';
 import { useStockQuote } from '../../hooks/useStockData';
@@ -305,6 +305,9 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
           <Divider />
         </>
       )}
+
+      {/* ── Market Signals — always visible ── */}
+      <NavLink to="/news" icon={<Newspaper size={14} />} label="Market Signals" onClose={onClose} />
 
       {/* ── Watchlist ── */}
       <SectionHeader

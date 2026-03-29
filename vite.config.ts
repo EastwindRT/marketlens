@@ -24,6 +24,12 @@ export default defineConfig({
           'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
         },
       },
+      // Proxy SEC EDGAR full-text search → bypasses CORS from localhost
+      '/api/edgar': {
+        target: 'https://efts.sec.gov',
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/api\/edgar/, ''),
+      },
     },
   },
 })

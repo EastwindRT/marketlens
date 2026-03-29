@@ -1,4 +1,4 @@
-import type { FinnhubCandleResponse, Quote, InsiderTransaction, CompanyProfile, SearchResult } from './types';
+import type { FinnhubCandleResponse, Quote, InsiderTransaction, CompanyProfile, SearchResult, NewsItem, AnalystRecommendation, PriceTarget, EarningsSurprise } from './types';
 
 const BASE = 'https://finnhub.io/api/v1';
 const KEY = import.meta.env.VITE_FINNHUB_API_KEY || '';
@@ -34,6 +34,29 @@ export const finnhub = {
 
   search: (query: string) =>
     request<{ result: SearchResult[] }>(`${BASE}/search?q=${query}&token=${KEY}`),
+
+  getCompanyNews: (symbol: string, from: string, to: string) =>
+    request<NewsItem[]>(
+      `${BASE}/company-news?symbol=${symbol}&from=${from}&to=${to}&token=${KEY}`
+    ),
+
+  getRecommendations: (symbol: string) =>
+    request<AnalystRecommendation[]>(
+      `${BASE}/stock/recommendation?symbol=${symbol}&token=${KEY}`
+    ),
+
+  getPriceTarget: (symbol: string) =>
+    request<PriceTarget>(
+      `${BASE}/stock/price-target?symbol=${symbol}&token=${KEY}`
+    ),
+
+  getEarnings: (symbol: string) =>
+    request<EarningsSurprise[]>(
+      `${BASE}/stock/earnings?symbol=${symbol}&token=${KEY}`
+    ),
+
+  getMarketNews: (category: 'general' | 'merger' = 'general') =>
+    request<NewsItem[]>(`${BASE}/news?category=${category}&token=${KEY}`),
 };
 
 export function formatTickerForFinnhub(ticker: string, exchange?: string): string {

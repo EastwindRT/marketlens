@@ -8,6 +8,7 @@ import Leaderboard from './pages/Leaderboard'
 import Portfolio from './pages/Portfolio'
 import PlayerPortfolio from './pages/PlayerPortfolio'
 import Admin from './pages/Admin'
+import NewsPage from './pages/News'
 import LoginModal from './components/auth/LoginModal'
 import { useLeagueStore } from './store/leagueStore'
 
@@ -39,6 +40,7 @@ export default function App() {
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="/news" element={<NewsPage />} />
         </Routes>
       </AppShell>
 
