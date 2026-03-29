@@ -11,3 +11,9 @@ services:
         sync: false
       - key: VITE_POLYGON_API_KEY
         sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: VITE_ADMIN_PIN
+        sync: false

@@ -6,6 +6,8 @@ import StockDetail from './pages/StockDetail'
 import Search from './pages/Search'
 import Leaderboard from './pages/Leaderboard'
 import Portfolio from './pages/Portfolio'
+import PlayerPortfolio from './pages/PlayerPortfolio'
+import Admin from './pages/Admin'
 import LoginModal from './components/auth/LoginModal'
 import { useLeagueStore } from './store/leagueStore'
 
@@ -29,12 +31,14 @@ export default function App() {
     <>
       <AppShell>
         <Routes>
-          <Route path="/" element={<Navigate to="/stock/AAPL" replace />} />
+          <Route path="/" element={<Navigate to="/leaderboard" replace />} />
           <Route path="/stock/:symbol" element={<StockDetail />} />
           <Route path="/search" element={<Search />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
           <Route path="/portfolio" element={<Portfolio />} />
+          <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
+          <Route path="/admin" element={<Admin />} />
         </Routes>
       </AppShell>
 

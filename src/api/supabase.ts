@@ -177,6 +177,54 @@ export async function executeSell(
   return { success: true };
 }
 
+// ── Admin operations ──────────────────────────────────────────────────────────
+
+export async function getPlayerTrades(playerId: string): Promise<Trade[]> {
+  const { data, error } = await supabase
+    .from('trades')
+    .select('*')
+    .eq('player_id', playerId)
+    .order('traded_at', { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function adminResetPlayer(playerId: string): Promise<void> {
+  // Delete trades and holdings, reset cash to starting amount
+  await supabase.from('trades').delete().eq('player_id', playerId);
+  await supabase.from('holdings').delete().eq('player_id', playerId);
+  const { error } = await supabase
+    .from('players')
+    .update({ cash: 1000 })
+    .eq('id', playerId);
+  if (error) throw error;
+}
+
+export async function adminResetAll(): Promise<void> {
+  await supabase.from('trades').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await supabase.from('holdings').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  const { error } = await supabase
+    .from('players')
+    .update({ cash: 1000 })
+    .neq('id', '00000000-0000-0000-0000-000000000000');
+  if (error) throw error;
+}
+
+export async function adminDeletePlayer(playerId: string): Promise<void> {
+  await supabase.from('trades').delete().eq('player_id', playerId);
+  await supabase.from('holdings').delete().eq('player_id', playerId);
+  const { error } = await supabase.from('players').delete().eq('id', playerId);
+  if (error) throw error;
+}
+
+export async function adminSetCash(playerId: string, amount: number): Promise<void> {
+  const { error } = await supabase
+    .from('players')
+    .update({ cash: amount })
+    .eq('id', playerId);
+  if (error) throw error;
+}
+
 // ── Recent trades (activity feed) ────────────────────────────────────────────
 
 export async function getRecentTrades(limit = 20): Promise<(Trade & { player_name: string })[]> {
