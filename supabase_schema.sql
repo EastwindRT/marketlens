@@ -58,5 +58,12 @@ alter publication supabase_realtime add table trades;
 
 -- Seed players — add more later via Supabase Table Editor
 insert into players (name, pin, avatar_color, cash) values
-  ('Renjith', 'admin', '#1652F0', 1000)
+  ('Eastwind',  '1989', '#1652F0', 1000),
+  ('Not Last',  '1111', '#05B169', 1000),
+  ('DROGON',    '2222', '#F6465D', 1000),
+  ('Tikismash', '3333', '#F0A716', 1000),
+  ('Skillz',    '4444', '#9B59B6', 1000),
+  ('thanos',    '5555', '#E67E22', 1000),
+  ('rascals',   '6666', '#1ABC9C', 1000),
+  ('friction',  '7777', '#E74C3C', 1000)
 on conflict do nothing;
