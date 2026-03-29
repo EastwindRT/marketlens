@@ -69,17 +69,24 @@ export default function Portfolio() {
   const navigate = useNavigate();
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
-  // Fresh player data (cash may have changed)
+  // Fresh player data (cash may have changed via real-time)
   const [freshPlayer, setFreshPlayer] = useState(player);
 
   useEffect(() => {
     if (!player) { navigate('/'); return; }
 
     async function load() {
-      const h = await getHoldings(player!.id);
-      setHoldings(h);
-      setLoading(false);
+      try {
+        setLoadError('');
+        const h = await getHoldings(player!.id);
+        setHoldings(h);
+      } catch {
+        setLoadError('Could not load holdings. Tap to retry.');
+      } finally {
+        setLoading(false);
+      }
     }
     load();
 
@@ -146,6 +153,13 @@ export default function Portfolio() {
           Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="h-16 rounded-2xl animate-pulse mb-2" style={{ background: 'var(--bg-surface)' }} />
           ))
+        ) : loadError ? (
+          <div
+            className="rounded-2xl p-5 text-center"
+            style={{ background: 'rgba(246,70,93,0.08)', border: '1px solid rgba(246,70,93,0.2)' }}
+          >
+            <p className="text-sm" style={{ color: 'var(--color-down)' }}>{loadError}</p>
+          </div>
         ) : holdings.length === 0 ? (
           <div
             className="rounded-2xl p-8 text-center"
@@ -172,34 +186,32 @@ export default function Portfolio() {
 }
 
 function PortfolioSummary({ player, holdings }: { player: Player; holdings: Holding[] }) {
-  // Each holding needs a live price — use sub-components
-  const [totalHoldingsValue, setTotalHoldingsValue] = useState(0);
+  // Use a price map: symbol → live price. Each SymbolPrice child updates one key.
+  // Computing total from the map is safe — no accumulation across re-renders.
+  const [priceMap, setPriceMap] = useState<Record<string, number>>({});
   const symbols = [...new Set(holdings.map(h => h.symbol))];
+
+  const holdingsValue = holdings.reduce((sum, h) => {
+    const price = priceMap[h.symbol] ?? h.avg_cost;
+    return sum + h.shares * price;
+  }, 0);
 
   return (
     <>
       {symbols.map(sym => (
-        <PriceContrib key={sym} symbol={sym} holdings={holdings} onValue={(v) =>
-          setTotalHoldingsValue(prev => prev + v)
+        <SymbolPrice key={sym} symbol={sym} onPrice={(p) =>
+          setPriceMap(prev => ({ ...prev, [sym]: p }))
         } />
       ))}
-      <SummaryCard player={player} holdingsValue={totalHoldingsValue} holdingsCount={holdings.length} />
+      <SummaryCard player={player} holdingsValue={holdingsValue} holdingsCount={holdings.length} />
     </>
   );
 }
 
-function PriceContrib({ symbol, holdings, onValue }: {
-  symbol: string;
-  holdings: Holding[];
-  onValue: (v: number) => void;
-}) {
+function SymbolPrice({ symbol, onPrice }: { symbol: string; onPrice: (p: number) => void }) {
   const { data } = useStockQuote(symbol);
   useEffect(() => {
-    if (data?.c) {
-      const myHoldings = holdings.filter(h => h.symbol === symbol);
-      const val = myHoldings.reduce((s, h) => s + h.shares * data.c, 0);
-      onValue(val);
-    }
+    if (data?.c) onPrice(data.c);
   }, [data?.c]);
   return null;
 }

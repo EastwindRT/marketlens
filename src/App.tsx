@@ -23,7 +23,7 @@ export default function App() {
       const timer = setTimeout(() => setShowLogin(true), 800)
       return () => clearTimeout(timer)
     }
-  }, [])
+  }, [player])
 
   return (
     <>

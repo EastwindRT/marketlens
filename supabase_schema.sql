@@ -56,14 +56,7 @@ alter publication supabase_realtime add table players;
 alter publication supabase_realtime add table holdings;
 alter publication supabase_realtime add table trades;
 
--- Seed 8 players — CHANGE names and PINs to your group's actual names/PINs
+-- Seed players — add more later via Supabase Table Editor
 insert into players (name, pin, avatar_color, cash) values
-  ('Renjith',  '1111', '#1652F0', 1000),
-  ('Player 2', '2222', '#05B169', 1000),
-  ('Player 3', '3333', '#F6465D', 1000),
-  ('Player 4', '4444', '#F0A716', 1000),
-  ('Player 5', '5555', '#9B59B6', 1000),
-  ('Player 6', '6666', '#E67E22', 1000),
-  ('Player 7', '7777', '#1ABC9C', 1000),
-  ('Player 8', '8888', '#E74C3C', 1000)
+  ('Renjith', 'admin', '#1652F0', 1000)
 on conflict do nothing;

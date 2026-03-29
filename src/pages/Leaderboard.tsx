@@ -152,10 +152,12 @@ export default function Leaderboard() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [recentTrades, setRecentTrades] = useState<(Trade & { player_name: string })[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [lastRefresh, setLastRefresh] = useState(new Date());
 
   const load = useCallback(async () => {
     try {
+      setError('');
       const [p, h, t] = await Promise.all([
         getAllPlayers(),
         getAllHoldings(),
@@ -167,6 +169,7 @@ export default function Leaderboard() {
       setLastRefresh(new Date());
     } catch (e) {
       console.error('Leaderboard load failed', e);
+      setError('Could not load leaderboard. Check your connection.');
     } finally {
       setLoading(false);
     }
@@ -190,7 +193,7 @@ export default function Leaderboard() {
   // We pass raw data to the renderer which uses LivePortfolioValue
   if (loading) {
     return (
-      <div className="flex flex-col gap-4 p-4 md:p-8">
+      <div className="flex flex-col gap-3 p-4 md:p-8 max-w-2xl mx-auto">
         {Array.from({ length: 8 }).map((_, i) => (
           <div key={i} className="h-16 rounded-2xl animate-pulse" style={{ background: 'var(--bg-surface)' }} />
         ))}
@@ -227,6 +230,19 @@ export default function Leaderboard() {
           Refresh
         </button>
       </div>
+
+      {/* Error state */}
+      {error && (
+        <div
+          className="rounded-2xl p-4 mb-2 flex items-center justify-between"
+          style={{ background: 'rgba(246,70,93,0.08)', border: '1px solid rgba(246,70,93,0.2)' }}
+        >
+          <span className="text-sm" style={{ color: 'var(--color-down)' }}>{error}</span>
+          <button onClick={load} className="text-xs font-medium" style={{ color: 'var(--color-down)', background: 'none', border: 'none', cursor: 'pointer' }}>
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Leaderboard — each entry gets live prices via LiveLeaderEntry */}
       <LiveLeaderboard players={players} allHoldings={holdings} meId={me?.id} />

@@ -128,8 +128,8 @@ export default function TradeModal({
         <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
           {mode === 'BUY' ? 'Available Cash' : 'Cash Balance'}
         </span>
-        <span className="font-mono font-semibold text-sm" style={{ color: 'var(--color-up)' }}>
-          {formatPrice(player.cash, 'USD')}
+        <span className="font-mono font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+          {formatPrice(player.cash)}
         </span>
       </div>
 
