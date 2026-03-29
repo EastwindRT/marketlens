@@ -210,6 +210,48 @@ export async function adminResetAll(): Promise<void> {
   if (error) throw error;
 }
 
+export async function adminUndoTrade(trade: Trade): Promise<void> {
+  // Fetch current player cash
+  const { data: player, error: playerErr } = await supabase
+    .from('players').select('cash').eq('id', trade.player_id).single();
+  if (playerErr || !player) throw playerErr ?? new Error('Player not found');
+
+  if (trade.trade_type === 'BUY') {
+    // Reverse a buy: refund cash, reduce shares
+    const newCash = player.cash + trade.total;
+    await supabase.from('players').update({ cash: newCash }).eq('id', trade.player_id);
+
+    const { data: holding } = await supabase
+      .from('holdings').select('*').eq('player_id', trade.player_id).eq('symbol', trade.symbol).single();
+    if (holding) {
+      const newShares = holding.shares - trade.shares;
+      if (newShares < 0.0001) {
+        await supabase.from('holdings').delete().eq('id', holding.id);
+      } else {
+        await supabase.from('holdings').update({ shares: newShares }).eq('id', holding.id);
+      }
+    }
+  } else {
+    // Reverse a sell: deduct cash, restore shares
+    const newCash = player.cash - trade.total;
+    await supabase.from('players').update({ cash: newCash }).eq('id', trade.player_id);
+
+    const { data: holding } = await supabase
+      .from('holdings').select('*').eq('player_id', trade.player_id).eq('symbol', trade.symbol).single();
+    if (holding) {
+      await supabase.from('holdings').update({ shares: holding.shares + trade.shares }).eq('id', holding.id);
+    } else {
+      await supabase.from('holdings').insert({
+        player_id: trade.player_id, symbol: trade.symbol, exchange: trade.exchange,
+        shares: trade.shares, avg_cost: trade.price,
+      });
+    }
+  }
+
+  // Delete the trade record
+  await supabase.from('trades').delete().eq('id', trade.id);
+}
+
 export async function adminDeletePlayer(playerId: string): Promise<void> {
   await supabase.from('trades').delete().eq('player_id', playerId);
   await supabase.from('holdings').delete().eq('player_id', playerId);

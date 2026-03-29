@@ -2,13 +2,13 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Shield, RefreshCw, Trash2, RotateCcw, Activity,
-  CheckCircle, XCircle, AlertTriangle, ChevronRight, DollarSign,
+  CheckCircle, XCircle, AlertTriangle, ChevronRight, DollarSign, History,
 } from 'lucide-react';
 import {
-  getAllPlayers, getAllHoldings, getRecentTrades, supabase,
-  adminResetPlayer, adminResetAll, adminDeletePlayer, adminSetCash,
+  getAllPlayers, getAllHoldings, getRecentTrades, getPlayerTrades, supabase,
+  adminResetPlayer, adminResetAll, adminDeletePlayer, adminSetCash, adminUndoTrade,
 } from '../api/supabase';
-import type { Player, Holding } from '../api/supabase';
+import type { Player, Holding, Trade } from '../api/supabase';
 
 // ─── Admin PIN — set VITE_ADMIN_PIN in .env, default fallback ────────────────
 const ADMIN_PIN = import.meta.env.VITE_ADMIN_PIN ?? 'eastwind2025';
@@ -146,12 +146,143 @@ function CashEditor({ player, onDone }: { player: Player; onDone: () => void }) 
   );
 }
 
+// ─── Trade history + undo drawer ─────────────────────────────────────────────
+function TradeHistoryDrawer({ player, onClose, onUndo }: {
+  player: Player;
+  onClose: () => void;
+  onUndo: () => void;
+}) {
+  const [trades, setTrades] = useState<Trade[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [undoingId, setUndoingId] = useState<string | null>(null);
+  const [confirmTrade, setConfirmTrade] = useState<Trade | null>(null);
+
+  useEffect(() => {
+    getPlayerTrades(player.id)
+      .then(setTrades)
+      .finally(() => setLoading(false));
+  }, [player.id]);
+
+  async function handleUndo(trade: Trade) {
+    setUndoingId(trade.id);
+    try {
+      await adminUndoTrade(trade);
+      setTrades(prev => prev.filter(t => t.id !== trade.id));
+      onUndo();
+    } catch {}
+    finally { setUndoingId(null); setConfirmTrade(null); }
+  }
+
+  function getTimeAgo(iso: string) {
+    const diff = Date.now() - new Date(iso).getTime();
+    const min = Math.floor(diff / 60000);
+    if (min < 1) return 'just now';
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    return `${Math.floor(hr / 24)}d ago`;
+  }
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+      display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+      zIndex: 200,
+    }} onClick={onClose}>
+      <div
+        style={{
+          width: '100%', maxWidth: 480,
+          background: 'var(--bg-elevated)',
+          borderRadius: '20px 20px 0 0',
+          border: '1px solid var(--border-default)',
+          maxHeight: '75vh', display: 'flex', flexDirection: 'column',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Handle + header */}
+        <div style={{ padding: '12px 16px 0', textAlign: 'center' }}>
+          <div style={{ width: 36, height: 4, borderRadius: 99, background: 'var(--border-default)', margin: '0 auto 16px' }} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{player.name}'s Trades</div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>{trades.length} trade{trades.length !== 1 ? 's' : ''} · tap Undo to reverse</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)', fontSize: 20, lineHeight: 1 }}>×</button>
+        </div>
+
+        {/* Trade list */}
+        <div style={{ overflowY: 'auto', flex: 1, padding: '4px 0' }}>
+          {loading ? (
+            [1,2,3].map(i => <div key={i} style={{ height: 52, margin: '6px 16px', borderRadius: 8, background: 'var(--bg-surface)' }} className="animate-pulse" />)
+          ) : trades.length === 0 ? (
+            <div style={{ padding: '32px 16px', textAlign: 'center', fontSize: 13, color: 'var(--text-tertiary)' }}>No trades yet</div>
+          ) : (
+            trades.map(trade => {
+              const isBuy = trade.trade_type === 'BUY';
+              return (
+                <div key={trade.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)',
+                }}>
+                  {/* Type badge */}
+                  <div style={{
+                    padding: '3px 8px', borderRadius: 6, flexShrink: 0,
+                    fontSize: 11, fontWeight: 700,
+                    background: isBuy ? 'rgba(5,177,105,0.12)' : 'rgba(246,70,93,0.12)',
+                    color: isBuy ? 'var(--color-up)' : 'var(--color-down)',
+                  }}>
+                    {trade.trade_type}
+                  </div>
+
+                  {/* Details */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                      {trade.symbol} · {trade.shares} shares
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 1 }}>
+                      ${trade.price.toFixed(2)} · ${trade.total.toLocaleString('en-CA', { maximumFractionDigits: 0 })} · {getTimeAgo(trade.traded_at)}
+                    </div>
+                  </div>
+
+                  {/* Undo button */}
+                  <button
+                    onClick={() => setConfirmTrade(trade)}
+                    disabled={undoingId === trade.id}
+                    style={{
+                      padding: '6px 12px', borderRadius: 8, flexShrink: 0,
+                      background: 'rgba(240,167,22,0.1)', border: '1px solid rgba(240,167,22,0.25)',
+                      color: '#F0A716', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                      opacity: undoingId === trade.id ? 0.5 : 1,
+                    }}
+                  >
+                    {undoingId === trade.id ? '…' : 'Undo'}
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {confirmTrade && (
+        <ConfirmDialog
+          message={`Undo ${confirmTrade.trade_type} of ${confirmTrade.shares} ${confirmTrade.symbol} ($${confirmTrade.total.toLocaleString('en-CA', { maximumFractionDigits: 0 })})? This reverses the cash and share changes.`}
+          onConfirm={() => handleUndo(confirmTrade)}
+          onCancel={() => setConfirmTrade(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── Player row ──────────────────────────────────────────────────────────────
 function PlayerAdminRow({
   player, holdings, onAction,
 }: { player: Player; holdings: Holding[]; onAction: () => void }) {
   const [confirm, setConfirm] = useState<'reset' | 'delete' | null>(null);
   const [editCash, setEditCash] = useState(false);
+  const [showTrades, setShowTrades] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const holdingsCount = holdings.filter(h => h.player_id === player.id).length;
@@ -195,6 +326,18 @@ function PlayerAdminRow({
 
         {/* Actions */}
         <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          <button
+            onClick={() => setShowTrades(true)}
+            title="Trade history / undo"
+            style={{
+              width: 30, height: 30, borderRadius: 8, border: '1px solid var(--border-default)',
+              background: 'var(--bg-surface)', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <History size={13} />
+          </button>
           <button
             onClick={() => setEditCash(true)}
             title="Set cash"
@@ -254,6 +397,13 @@ function PlayerAdminRow({
       )}
       {editCash && (
         <CashEditor player={player} onDone={() => { setEditCash(false); onAction(); }} />
+      )}
+      {showTrades && (
+        <TradeHistoryDrawer
+          player={player}
+          onClose={() => setShowTrades(false)}
+          onUndo={onAction}
+        />
       )}
     </>
   );
