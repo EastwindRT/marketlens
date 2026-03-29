@@ -37,16 +37,17 @@ app.use(
   })
 );
 
-// Proxy: /api/edgar → efts.sec.gov (SEC EDGAR 13D/13G filings)
+// Proxy: /api/sec → www.sec.gov (SEC EDGAR filings browse + Atom feeds)
 app.use(
-  '/api/edgar',
+  '/api/sec',
   createProxyMiddleware({
-    target: 'https://efts.sec.gov',
+    target: 'https://www.sec.gov',
     changeOrigin: true,
-    pathRewrite: { '^/api/edgar': '' },
+    pathRewrite: { '^/api/sec': '' },
     on: {
       proxyReq: (proxyReq) => {
-        proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (compatible; MoneyTalks/1.0)');
+        proxyReq.setHeader('User-Agent', 'MoneyTalks/1.0 (research tool; contact: admin@moneytalks.app)');
+        proxyReq.setHeader('Accept', 'application/atom+xml, text/xml, */*');
       },
     },
   })
