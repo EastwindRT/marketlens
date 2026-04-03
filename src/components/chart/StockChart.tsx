@@ -67,8 +67,18 @@ export function StockChart({
 
     const touch = isTouchDevice();
 
+    // Get actual container width. getBoundingClientRect() is reliable at useEffect time
+    // since the div is already laid out.
+    const containerWidth =
+      containerRef.current.getBoundingClientRect().width ||
+      containerRef.current.offsetWidth ||
+      containerRef.current.clientWidth ||
+      800;
+
     const chart = createChart(containerRef.current, {
-      autoSize: true,
+      // Intentionally 1px narrower than true width so the forceRepaint resize below
+      // is never a no-op (lightweight-charts skips resize when size is unchanged).
+      width: Math.max(1, containerWidth - 1),
       height,
       layout: {
         background: { color: '#0A0B0D' },
@@ -299,12 +309,29 @@ export function StockChart({
       }
     }
 
+    // Force a synchronous repaint immediately after chart creation.
+    // lightweight-charts normally schedules canvas sizing via requestAnimationFrame,
+    // but RAF is broken in MetaMask-injected browsers (SES lockdown). The forceRepaint=true
+    // argument bypasses RAF and repaints synchronously right now.
+    chart.resize(containerWidth, height, true);
     chart.timeScale().fitContent();
+
+    const handleWindowResize = () => {
+      if (!containerRef.current || !chartRef.current) return;
+      const w =
+        containerRef.current.getBoundingClientRect().width ||
+        containerRef.current.offsetWidth ||
+        containerRef.current.clientWidth;
+      if (w > 0) chartRef.current.resize(w, height, true);
+    };
+    window.addEventListener('resize', handleWindowResize);
+    return () => window.removeEventListener('resize', handleWindowResize);
   }, [data, chartType, showSMA20, showSMA50, showVolume, insiders, height]);
 
   useEffect(() => {
-    initChart();
+    const cleanup = initChart();
     return () => {
+      cleanup?.();
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;
