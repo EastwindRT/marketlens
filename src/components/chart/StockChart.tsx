@@ -68,7 +68,7 @@ export function StockChart({
     const touch = isTouchDevice();
 
     const chart = createChart(containerRef.current, {
-      width: containerRef.current.clientWidth || containerRef.current.offsetWidth,
+      autoSize: true,
       height,
       layout: {
         background: { color: '#0A0B0D' },
@@ -300,23 +300,11 @@ export function StockChart({
     }
 
     chart.timeScale().fitContent();
-
-    const resizeObserver = new ResizeObserver(() => {
-      if (containerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({
-          width: containerRef.current.clientWidth,
-          height,
-        });
-      }
-    });
-    if (containerRef.current) resizeObserver.observe(containerRef.current);
-    return () => resizeObserver.disconnect();
   }, [data, chartType, showSMA20, showSMA50, showVolume, insiders, height]);
 
   useEffect(() => {
-    const cleanup = initChart();
+    initChart();
     return () => {
-      cleanup?.();
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;

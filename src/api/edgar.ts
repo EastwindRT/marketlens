@@ -25,16 +25,19 @@ function parseAtomFeed(xml: string): MarketFiling[] {
   const parsed: AtomEntry[] = [];
 
   for (const entry of entries) {
-    const title   = entry.querySelector('title')?.textContent?.trim()   ?? '';
-    const summary = entry.querySelector('summary')?.textContent?.trim() ?? '';
-    const href    = entry.querySelector('link')?.getAttribute('href')   ?? '';
+    const title      = entry.querySelector('title')?.textContent?.trim() ?? '';
+    // summary type="html" — textContent contains literal HTML tags like <b>Filed:</b>
+    // Strip them before applying regexes
+    const summaryRaw = entry.querySelector('summary')?.textContent?.trim() ?? '';
+    const summary    = summaryRaw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    const href       = entry.querySelector('link')?.getAttribute('href') ?? '';
 
     // Parse title: "SCHEDULE 13D/A - Battalion Oil Corp (0001282648) (Subject)"
     const tm = title.match(/^SCHEDULE\s+(13[DG](?:\/A)?)\s+-\s+(.+?)\s+\(\d+\)\s+\((Filed by|Subject)\)$/i);
     if (!tm) continue;
 
     const dateMatch = summary.match(/Filed:\s*(\d{4}-\d{2}-\d{2})/i);
-    const accMatch  = summary.match(/AccNo:\s*(\S+)/i);
+    const accMatch  = summary.match(/AccNo:\s*([\d]+-[\d]+-[\d]+)/i);
 
     parsed.push({
       formType:    tm[1].toUpperCase(),                        // "13D/A"
