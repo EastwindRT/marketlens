@@ -377,13 +377,38 @@ export default function NewsPage() {
         {/* ── SECTION 2: Congress Trades ── */}
         <SectionHeader
           title="🏛 Congress Trades"
-          subtitle={`STOCK Act disclosures for your watchlist · last ${Math.max(days, 90)} days`}
+          subtitle="STOCK Act disclosures — House + Senate members"
         />
+
+        {/* Live data link — always visible */}
+        <a
+          href="https://www.capitoltrades.com/trades"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '10px 14px', borderRadius: 10, marginBottom: 12,
+            background: 'rgba(22,82,240,0.08)', border: '1px solid rgba(22,82,240,0.25)',
+            textDecoration: 'none', transition: 'border-color 150ms',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(22,82,240,0.5)')}
+          onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(22,82,240,0.25)')}
+        >
+          <div>
+            <p style={{ margin: '0 0 1px', fontSize: 12, fontWeight: 600, color: 'var(--accent-blue-light)' }}>
+              Live congressional trades → Capitol Trades
+            </p>
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)' }}>
+              Real-time STOCK Act disclosures · updated daily · 200+ politicians tracked
+            </p>
+          </div>
+          <ExternalLink size={13} color="var(--accent-blue-light)" style={{ flexShrink: 0 }} />
+        </a>
 
         {congressLoading && <FilingsSkeleton />}
 
         {!congressLoading && (!congressTrades || congressTrades.length === 0) && (
-          <EmptyState message="No recent congressional trades found for your watchlist." />
+          <EmptyState message="No historical trades on record for your watchlist (pre-2021 data only)." />
         )}
 
         {!congressLoading && congressTrades && congressTrades.length > 0 && (

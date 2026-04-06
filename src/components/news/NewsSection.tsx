@@ -3,9 +3,11 @@ import { ExternalLink } from 'lucide-react';
 import { useStockNews } from '../../hooks/useStockNews';
 import { useAnalystData } from '../../hooks/useAnalystData';
 import { useEdgarFilings } from '../../hooks/useEdgarFilings';
-import { formatPrice } from '../../utils/formatters';
+import { useCongressTrades } from '../../hooks/useCongressTrades';
+import { formatPrice, formatLargeNumber } from '../../utils/formatters';
 import { format, fromUnixTime } from 'date-fns';
 import type { NewsItem, AnalystRecommendation, PriceTarget, EarningsSurprise, Edgar13DFiling } from '../../api/types';
+import type { CongressTrade } from '../../api/congress';
 
 interface Props {
   symbol: string;
@@ -14,21 +16,24 @@ interface Props {
   currency?: string;
 }
 
-type Tab = 'news' | 'analyst' | 'filings';
+type Tab = 'news' | 'analyst' | 'filings' | 'congress';
 
 export function NewsSection({ symbol, isCanadian, currentPrice, currency = 'USD' }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('news');
   const { data: news, isLoading: newsLoading } = useStockNews(symbol);
   const { recs, target, earnings } = useAnalystData(symbol);
   const { data: filings, isLoading: filingsLoading } = useEdgarFilings(symbol, isCanadian);
+  const { data: congressTrades, isLoading: congressLoading } = useCongressTrades(symbol);
 
   const newsCount = news?.length ?? 0;
   const filingsCount = filings?.length ?? 0;
+  const congressCount = congressTrades?.filter(t => t.type === 'purchase' || t.type === 'sale').length ?? 0;
 
   const tabs: { id: Tab; label: string; count?: number; countColor?: string }[] = [
-    { id: 'news', label: 'News', count: newsCount, countColor: 'var(--text-tertiary)' },
-    { id: 'analyst', label: 'Analyst' },
-    { id: 'filings', label: '13D / 13G', count: filingsCount, countColor: '#F7931A' },
+    { id: 'news',     label: 'News',      count: newsCount,     countColor: 'var(--text-tertiary)' },
+    { id: 'analyst',  label: 'Analyst' },
+    { id: 'filings',  label: '13D / 13G', count: filingsCount,  countColor: '#F7931A' },
+    { id: 'congress', label: '🏛 Congress', count: congressCount, countColor: '#8B5CF6' },
   ];
 
   return (
@@ -95,6 +100,13 @@ export function NewsSection({ symbol, isCanadian, currentPrice, currency = 'USD'
           filings={filings ?? []}
           loading={filingsLoading}
           isCanadian={isCanadian}
+          symbol={symbol}
+        />
+      )}
+      {activeTab === 'congress' && (
+        <CongressTab
+          trades={congressTrades ?? []}
+          loading={congressLoading}
           symbol={symbol}
         />
       )}
@@ -456,6 +468,120 @@ function FilingsTab({
         <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
           13D = 5%+ stake (activist intent) · 13G = 5%+ stake (passive) · Source: SEC EDGAR
         </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Congress Tab ─────────────────────────────────────────────────────────────
+
+function partyStyle(party: string): { color: string; bg: string } {
+  if (party === 'D') return { color: '#3B82F6', bg: 'rgba(59,130,246,0.12)' };
+  if (party === 'R') return { color: '#F6465D', bg: 'rgba(246,70,93,0.12)' };
+  return { color: 'var(--text-tertiary)', bg: 'var(--bg-hover)' };
+}
+
+function CongressTab({
+  trades,
+  loading,
+  symbol,
+}: {
+  trades: CongressTrade[];
+  loading: boolean;
+  symbol: string;
+}) {
+  const baseTicker = symbol.replace(/\.TO$/i, '');
+
+  if (loading) return <FilingsSkeleton />;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* Live data callout — always shown */}
+      <a
+        href={`https://www.capitoltrades.com/trades?ticker=${baseTicker}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '10px 14px', borderRadius: 10,
+          background: 'rgba(22,82,240,0.08)', border: '1px solid rgba(22,82,240,0.25)',
+          textDecoration: 'none', transition: 'border-color 150ms',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(22,82,240,0.5)')}
+        onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(22,82,240,0.25)')}
+      >
+        <div>
+          <p style={{ margin: '0 0 1px', fontSize: 12, fontWeight: 600, color: 'var(--accent-blue-light)' }}>
+            Live congressional trades → Capitol Trades
+          </p>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)' }}>
+            Real-time STOCK Act disclosures · House + Senate
+          </p>
+        </div>
+        <ExternalLink size={13} color="var(--accent-blue-light)" style={{ flexShrink: 0 }} />
+      </a>
+
+      {trades.length === 0 ? (
+        <p style={{ color: 'var(--text-tertiary)', fontSize: 13, padding: '8px 0' }}>
+          No historical trades on record for {baseTicker}.
+        </p>
+      ) : (
+        <>
+          {trades.slice(0, 20).map((t, i) => {
+            const isBuy = t.type === 'purchase';
+            const ps = partyStyle(t.party);
+            const tradeColor = isBuy ? '#05B169' : t.type === 'sale' ? '#F6465D' : 'var(--text-tertiary)';
+            const tradeBg   = isBuy ? 'rgba(5,177,105,0.1)' : t.type === 'sale' ? 'rgba(246,70,93,0.1)' : 'var(--bg-hover)';
+
+            return (
+              <div
+                key={`${t.member}-${t.transactionDate}-${i}`}
+                style={{
+                  display: 'flex', gap: 10, padding: '10px 14px', borderRadius: 12,
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+                    background: ps.bg, color: ps.color, fontFamily: "'Roboto Mono', monospace",
+                    minWidth: 24, textAlign: 'center',
+                  }}>
+                    {t.party || 'SEN'}
+                  </span>
+                </div>
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{t.member}</span>
+                    {t.state && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>({t.state})</span>}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 5,
+                      background: tradeBg, color: tradeColor, textTransform: 'uppercase',
+                      fontFamily: "'Roboto Mono', monospace",
+                    }}>
+                      {t.type}
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: "'Roboto Mono', monospace" }}>{t.amount}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{t.transactionDate.slice(0, 10)}</span>
+                  </div>
+                </div>
+
+                {t.filingUrl && (
+                  <a href={t.filingUrl} target="_blank" rel="noopener noreferrer"
+                    style={{ color: 'var(--text-tertiary)', flexShrink: 0, alignSelf: 'center' }}>
+                    <ExternalLink size={13} />
+                  </a>
+                )}
+              </div>
+            );
+          })}
+          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+            Historical data only (pre-2021) · For recent trades use Capitol Trades above
+          </p>
+        </>
       )}
     </div>
   );
