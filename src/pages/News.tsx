@@ -4,6 +4,7 @@ import { ExternalLink, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { edgar } from '../api/edgar';
 import type { MarketFiling } from '../api/edgar';
+import { FilingSheet } from '../components/ui/FilingSheet';
 import { format, subDays } from 'date-fns';
 import { useWatchlistStore } from '../store/watchlistStore';
 import { useInsiderData, getInsiderType } from '../hooks/useInsiderData';
@@ -155,6 +156,7 @@ function useWatchlistInsiders(symbols: string[], days: number): {
 
 export default function NewsPage() {
   const [days, setDays] = useState(14);
+  const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
   const symbols = watchlist.map(w => w.symbol);
@@ -182,6 +184,7 @@ export default function NewsPage() {
   }, [insiderTrades, congressTrades]);
 
   return (
+    <>
     <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 40px' }}>
       <div style={{ maxWidth: 760, margin: '0 auto' }}>
 
@@ -508,13 +511,12 @@ export default function NewsPage() {
               {filings.map((f: MarketFiling, i: number) => {
                 const fc = formStyle(f.formType);
                 return (
-                  <a
+                  <button
                     key={f.accessionNo || i}
-                    href={f.edgarUrl}
-                    target="_blank" rel="noopener noreferrer"
+                    onClick={() => setSelectedFiling(f)}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 12, padding: 14,
-                      borderRadius: 12, textDecoration: 'none',
+                      borderRadius: 12, textAlign: 'left', width: '100%', cursor: 'pointer',
                       background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
                       transition: 'border-color 150ms',
                     }}
@@ -554,7 +556,7 @@ export default function NewsPage() {
                     </div>
 
                     <ExternalLink size={13} color="var(--text-tertiary)" style={{ flexShrink: 0 }} />
-                  </a>
+                  </button>
                 );
               })}
             </div>
@@ -567,6 +569,9 @@ export default function NewsPage() {
         )}
       </div>
     </div>
+
+    <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
+    </>
   );
 }
 

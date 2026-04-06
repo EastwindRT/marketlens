@@ -8,6 +8,8 @@ import { formatPrice, formatLargeNumber } from '../../utils/formatters';
 import { format, fromUnixTime } from 'date-fns';
 import type { NewsItem, AnalystRecommendation, PriceTarget, EarningsSurprise, Edgar13DFiling } from '../../api/types';
 import type { CongressTrade } from '../../api/congress';
+import { FilingSheet } from '../ui/FilingSheet';
+import type { MarketFiling } from '../../api/edgar';
 
 interface Props {
   symbol: string;
@@ -20,6 +22,7 @@ type Tab = 'news' | 'analyst' | 'filings' | 'congress';
 
 export function NewsSection({ symbol, isCanadian, currentPrice, currency = 'USD' }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('news');
+  const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
   const { data: news, isLoading: newsLoading } = useStockNews(symbol);
   const { recs, target, earnings } = useAnalystData(symbol);
   const { data: filings, isLoading: filingsLoading } = useEdgarFilings(symbol, isCanadian);
@@ -101,6 +104,7 @@ export function NewsSection({ symbol, isCanadian, currentPrice, currency = 'USD'
           loading={filingsLoading}
           isCanadian={isCanadian}
           symbol={symbol}
+          onFilingClick={setSelectedFiling}
         />
       )}
       {activeTab === 'congress' && (
@@ -110,6 +114,8 @@ export function NewsSection({ symbol, isCanadian, currentPrice, currency = 'USD'
           symbol={symbol}
         />
       )}
+
+      <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
     </div>
   );
 }
@@ -377,11 +383,13 @@ function FilingsTab({
   loading,
   isCanadian,
   symbol,
+  onFilingClick,
 }: {
   filings: Edgar13DFiling[];
   loading: boolean;
   isCanadian: boolean;
   symbol: string;
+  onFilingClick: (f: MarketFiling) => void;
 }) {
   if (isCanadian) {
     const baseTicker = symbol.replace('.TO', '');
@@ -429,15 +437,13 @@ function FilingsTab({
         filings.map((f, i) => {
           const fc = formColor(f.formType);
           return (
-            <a
+            <button
               key={f.accessionNo || i}
-              href={f.edgarUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+              onClick={() => onFilingClick(f as MarketFiling)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 12, padding: 14, borderRadius: 12,
                 background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                textDecoration: 'none', transition: 'border-color 150ms',
+                textAlign: 'left', width: '100%', cursor: 'pointer', transition: 'border-color 150ms',
               }}
               onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
               onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
@@ -460,7 +466,7 @@ function FilingsTab({
                 </p>
               </div>
               <ExternalLink size={13} color="var(--text-tertiary)" style={{ flexShrink: 0 }} />
-            </a>
+            </button>
           );
         })
       )}

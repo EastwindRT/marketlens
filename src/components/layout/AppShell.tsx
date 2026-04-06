@@ -1,4 +1,6 @@
 import { ReactNode, useState, useEffect } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { Trophy, Newspaper, Building2, Menu } from 'lucide-react';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 
@@ -66,10 +68,75 @@ export default function AppShell({ children }: AppShellProps) {
           <Sidebar onClose={() => setDrawerOpen(false)} />
         </div>
 
-        <main className="flex-1 overflow-y-auto" style={{ background: 'var(--bg-primary)' }}>
+        <main className="flex-1 overflow-y-auto" style={{ background: 'var(--bg-primary)', paddingBottom: 60 }}>
           {children}
         </main>
       </div>
+
+      {/* ── Mobile bottom nav ── */}
+      <MobileBottomNav onMenuClick={() => setDrawerOpen(true)} />
+    </div>
+  );
+}
+
+function MobileBottomNav({ onMenuClick }: { onMenuClick: () => void }) {
+  const location = useLocation();
+
+  const navItems = [
+    { to: '/leaderboard', icon: <Trophy size={20} />,   label: 'League'   },
+    { to: '/news',        icon: <Newspaper size={20} />, label: 'Signals'  },
+    { to: '/congress',    icon: <Building2 size={20} />, label: 'Congress' },
+  ];
+
+  return (
+    <div
+      className="flex lg:hidden"
+      style={{
+        position: 'fixed', bottom: 0, left: 0, right: 0,
+        height: 60, zIndex: 30,
+        background: 'var(--bg-surface)',
+        borderTop: '1px solid var(--border-subtle)',
+        display: 'flex', alignItems: 'stretch',
+      }}
+    >
+      {navItems.map(item => {
+        const isActive = location.pathname === item.to || location.pathname.startsWith(item.to + '/');
+        return (
+          <Link
+            key={item.to}
+            to={item.to}
+            style={{
+              flex: 1, display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center', gap: 3,
+              textDecoration: 'none',
+              color: isActive ? 'var(--accent-blue-light)' : 'var(--text-tertiary)',
+              transition: 'color 150ms',
+            }}
+          >
+            <span style={{ opacity: isActive ? 1 : 0.7 }}>{item.icon}</span>
+            <span style={{ fontSize: 10, fontWeight: isActive ? 700 : 500, fontFamily: "'Inter', sans-serif" }}>
+              {item.label}
+            </span>
+            {isActive && (
+              <div style={{ position: 'absolute', bottom: 0, width: 24, height: 2, borderRadius: 1, background: 'var(--accent-blue-light)' }} />
+            )}
+          </Link>
+        );
+      })}
+
+      {/* Menu / watchlist button */}
+      <button
+        onClick={onMenuClick}
+        style={{
+          flex: 1, display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 3,
+          background: 'transparent', border: 'none', cursor: 'pointer',
+          color: 'var(--text-tertiary)',
+        }}
+      >
+        <Menu size={20} style={{ opacity: 0.7 }} />
+        <span style={{ fontSize: 10, fontWeight: 500, fontFamily: "'Inter', sans-serif" }}>Watchlist</span>
+      </button>
     </div>
   );
 }
