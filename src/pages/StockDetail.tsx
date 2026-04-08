@@ -241,6 +241,7 @@ export default function StockDetail() {
       {/* ── Insider Panel ── */}
       <div className="px-4 md:px-8 pb-4">
         <InsiderPanel
+          symbol={symbol}
           transactions={insiders || []}
           candles={candles || []}
           loading={insidersLoading}

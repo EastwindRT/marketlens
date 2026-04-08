@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { ChevronDown, ChevronUp, Sparkles, TrendingUp, TrendingDown, Minus, AlertTriangle, RotateCcw } from 'lucide-react';
 import type { InsiderTransaction, OHLCVBar } from '../../api/types';
 import type { InsiderFilter } from '../../api/types';
 import { InsiderRow, INSIDER_GRID, INSIDER_GRID_MOBILE } from './InsiderRow';
@@ -7,6 +7,7 @@ import { InsiderRowSkeleton } from '../ui/LoadingSkeleton';
 import { getInsiderType, SEC_CODE_LABELS, SEDI_CODE_LABELS } from '../../hooks/useInsiderData';
 
 interface InsiderPanelProps {
+  symbol?: string;
   transactions: InsiderTransaction[];
   candles?: OHLCVBar[];
   loading?: boolean;
@@ -16,7 +17,291 @@ interface InsiderPanelProps {
   onRowClick?: (transaction: InsiderTransaction) => void;
 }
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface InsiderAnalysis {
+  signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'MIXED';
+  conviction: 'HIGH' | 'MEDIUM' | 'LOW';
+  sentimentSummary: string;
+  pattern: string;
+  topInsiders: string[];
+  netBuyValue: string;
+  buyCount: number;
+  sellCount: number;
+  thesis: string;
+  catalysts: string[];
+  risks: string[];
+  keyTrade: string;
+}
+
+// ─── AI Analysis Card ─────────────────────────────────────────────────────────
+
+function InsiderAICard({
+  symbol,
+  transactions,
+  onClose,
+}: {
+  symbol: string;
+  transactions: InsiderTransaction[];
+  onClose: () => void;
+}) {
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<InsiderAnalysis | null>(null);
+
+  async function runAnalysis() {
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await fetch('/api/analyze-insiders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, trades: transactions }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `Server error ${res.status}`);
+      setAnalysis(json.analysis as InsiderAnalysis);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Analysis failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Auto-run on mount
+  useEffect(() => { runAnalysis(); }, []);
+
+  const signalColor = (s?: string) =>
+    s === 'BULLISH' ? '#05B169' :
+    s === 'BEARISH' ? '#F6465D' :
+    s === 'MIXED'   ? '#F7931A' : '#8A8F98';
+
+  const signalBg = (s?: string) =>
+    s === 'BULLISH' ? 'rgba(5,177,105,0.1)' :
+    s === 'BEARISH' ? 'rgba(246,70,93,0.1)' :
+    s === 'MIXED'   ? 'rgba(247,147,26,0.1)' : 'rgba(138,143,152,0.1)';
+
+  const convictionColor = (c?: string) =>
+    c === 'HIGH' ? '#05B169' : c === 'MEDIUM' ? '#F7931A' : '#8A8F98';
+
+  const SignalIcon = ({ s }: { s?: string }) =>
+    s === 'BULLISH' ? <TrendingUp size={14} color={signalColor(s)} /> :
+    s === 'BEARISH' ? <TrendingDown size={14} color={signalColor(s)} /> :
+    <Minus size={14} color={signalColor(s)} />;
+
+  return (
+    <div style={{
+      margin: '0 0 0 0',
+      borderTop: '1px solid var(--border-subtle)',
+      background: 'var(--bg-elevated)',
+      padding: '20px 24px',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Sparkles size={14} color="var(--accent-blue-light)" />
+          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+            Quant Insider Analysis
+          </span>
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
+            · Llama 3.3 70B
+          </span>
+        </div>
+        <button
+          onClick={onClose}
+          style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 4, fontSize: 18, lineHeight: 1 }}
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Loading */}
+      {loading && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {[90, 65, 80, 50].map((w, i) => (
+            <div key={i} className="animate-pulse" style={{
+              height: 12, borderRadius: 6, background: 'var(--bg-hover)', width: `${w}%`,
+            }} />
+          ))}
+          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+            Analysing {transactions.length} insider transactions…
+          </p>
+        </div>
+      )}
+
+      {/* Error */}
+      {!loading && error && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <AlertTriangle size={14} color="#F6465D" />
+            <span style={{ fontSize: 13, color: '#F6465D' }}>{error}</span>
+          </div>
+          <button
+            onClick={runAnalysis}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 14px', borderRadius: 8, cursor: 'pointer',
+              background: 'var(--bg-hover)', border: '1px solid var(--border-default)',
+              color: 'var(--text-primary)', fontSize: 12, fontWeight: 600,
+            }}
+          >
+            <RotateCcw size={12} /> Retry
+          </button>
+        </div>
+      )}
+
+      {/* Analysis Result */}
+      {!loading && !error && analysis && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* Signal row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '8px 16px', borderRadius: 10,
+              background: signalBg(analysis.signal),
+              border: `1px solid ${signalColor(analysis.signal)}33`,
+            }}>
+              <SignalIcon s={analysis.signal} />
+              <span style={{ fontSize: 15, fontWeight: 800, color: signalColor(analysis.signal), letterSpacing: '0.02em' }}>
+                {analysis.signal}
+              </span>
+            </div>
+            <div style={{
+              padding: '6px 12px', borderRadius: 8,
+              background: 'var(--bg-hover)', border: '1px solid var(--border-default)',
+            }}>
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginRight: 6 }}>Conviction</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: convictionColor(analysis.conviction) }}>
+                {analysis.conviction}
+              </span>
+            </div>
+            <div style={{
+              padding: '6px 12px', borderRadius: 8,
+              background: 'var(--bg-hover)', border: '1px solid var(--border-default)',
+            }}>
+              <span style={{ fontSize: 11, color: '#05B169', marginRight: 4 }}>▲ {analysis.buyCount ?? 0}</span>
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '0 4px' }}>·</span>
+              <span style={{ fontSize: 11, color: '#F6465D', marginLeft: 4 }}>▼ {analysis.sellCount ?? 0}</span>
+            </div>
+          </div>
+
+          {/* Sentiment summary */}
+          {analysis.sentimentSummary && (
+            <p style={{
+              fontSize: 14, fontWeight: 600, color: 'var(--text-primary)',
+              lineHeight: 1.5, margin: 0,
+              padding: '12px 14px', borderRadius: 10,
+              background: 'var(--bg-hover)', borderLeft: `3px solid ${signalColor(analysis.signal)}`,
+            }}>
+              {analysis.sentimentSummary}
+            </p>
+          )}
+
+          {/* Pattern badge */}
+          {analysis.pattern && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', paddingTop: 2, flexShrink: 0 }}>
+                Pattern
+              </span>
+              <span style={{
+                fontSize: 12, color: 'var(--text-secondary)',
+                padding: '3px 10px', borderRadius: 6,
+                background: 'rgba(45,107,255,0.08)', border: '1px solid rgba(45,107,255,0.2)',
+              }}>
+                {analysis.pattern}
+              </span>
+            </div>
+          )}
+
+          {/* Net flow */}
+          {analysis.netBuyValue && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', flexShrink: 0 }}>
+                Net Flow
+              </span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: signalColor(analysis.signal), fontFamily: "'Roboto Mono', monospace" }}>
+                {analysis.netBuyValue}
+              </span>
+            </div>
+          )}
+
+          {/* Key insiders */}
+          {analysis.topInsiders && analysis.topInsiders.length > 0 && (
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 8px' }}>
+                Key Insiders
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {analysis.topInsiders.slice(0, 4).map((ins, i) => (
+                  <p key={i} style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)', paddingLeft: 8, borderLeft: '2px solid var(--border-default)' }}>
+                    {ins}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Thesis */}
+          {analysis.thesis && (
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 6px' }}>
+                Thesis
+              </p>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                {analysis.thesis}
+              </p>
+            </div>
+          )}
+
+          {/* Key Trade */}
+          {analysis.keyTrade && (
+            <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(45,107,255,0.06)', border: '1px solid rgba(45,107,255,0.15)' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent-blue-light)', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 5 }}>
+                Key Trade
+              </span>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                {analysis.keyTrade}
+              </p>
+            </div>
+          )}
+
+          {/* Catalysts + Risks */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            {analysis.catalysts && analysis.catalysts.length > 0 && (
+              <div>
+                <p style={{ fontSize: 10, fontWeight: 700, color: '#05B169', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 6px' }}>
+                  Catalysts
+                </p>
+                <ul style={{ margin: 0, paddingLeft: 14, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {analysis.catalysts.map((c, i) => (
+                    <li key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{c}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {analysis.risks && analysis.risks.length > 0 && (
+              <div>
+                <p style={{ fontSize: 10, fontWeight: 700, color: '#F6465D', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 6px' }}>
+                  Risks
+                </p>
+                <ul style={{ margin: 0, paddingLeft: 14, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {analysis.risks.map((r, i) => (
+                    <li key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{r}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function InsiderPanel({
+  symbol,
   transactions,
   candles = [],
   loading,
@@ -25,8 +310,9 @@ export function InsiderPanel({
   isCanadian = false,
   onRowClick,
 }: InsiderPanelProps) {
-  const [filter, setFilter]   = useState<InsiderFilter>('all');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [filter, setFilter]     = useState<InsiderFilter>('all');
+  const [sortDir, setSortDir]   = useState<'asc' | 'desc'>('desc');
+  const [showAI, setShowAI]     = useState(false);
 
   const filtered = transactions
     .filter(t => {
@@ -74,25 +360,46 @@ export function InsiderPanel({
             )}
           </div>
 
-          {/* Filter pills */}
-          <div className="flex items-center rounded-xl p-1"
-            style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
-            {(['all', 'buy', 'sell'] as InsiderFilter[]).map(f => (
-              <button key={f} onClick={() => setFilter(f)}
-                className="px-3 py-1 text-xs font-semibold rounded-lg capitalize"
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* AI button */}
+            {symbol && transactions.length > 0 && (
+              <button
+                onClick={() => setShowAI(v => !v)}
                 style={{
-                  background: filter === f ? 'var(--bg-hover)' : 'transparent',
-                  color: filter === f
-                    ? (f === 'buy' ? 'var(--color-up)' : f === 'sell' ? 'var(--color-down)' : 'var(--text-primary)')
-                    : 'var(--text-tertiary)',
-                  border: filter === f ? '1px solid var(--border-default)' : '1px solid transparent',
-                  cursor: 'pointer',
-                  transition: 'all 150ms ease-out',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '6px 12px', borderRadius: 8, cursor: 'pointer',
+                  background: showAI ? 'rgba(22,82,240,0.15)' : 'var(--bg-elevated)',
+                  border: showAI ? '1px solid rgba(45,107,255,0.4)' : '1px solid var(--border-default)',
+                  color: showAI ? 'var(--accent-blue-light)' : 'var(--text-secondary)',
+                  fontSize: 12, fontWeight: 600,
+                  transition: 'all 150ms',
                 }}
               >
-                {f === 'all' ? 'All' : f === 'buy' ? 'Buys' : 'Sells'}
+                <Sparkles size={12} />
+                Ask AI
               </button>
-            ))}
+            )}
+
+            {/* Filter pills */}
+            <div className="flex items-center rounded-xl p-1"
+              style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
+              {(['all', 'buy', 'sell'] as InsiderFilter[]).map(f => (
+                <button key={f} onClick={() => setFilter(f)}
+                  className="px-3 py-1 text-xs font-semibold rounded-lg capitalize"
+                  style={{
+                    background: filter === f ? 'var(--bg-hover)' : 'transparent',
+                    color: filter === f
+                      ? (f === 'buy' ? 'var(--color-up)' : f === 'sell' ? 'var(--color-down)' : 'var(--text-primary)')
+                      : 'var(--text-tertiary)',
+                    border: filter === f ? '1px solid var(--border-default)' : '1px solid transparent',
+                    cursor: 'pointer',
+                    transition: 'all 150ms ease-out',
+                  }}
+                >
+                  {f === 'all' ? 'All' : f === 'buy' ? 'Buys' : 'Sells'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -181,6 +488,15 @@ export function InsiderPanel({
           />
         ))}
       </div>
+
+      {/* ── AI Analysis Card ── */}
+      {showAI && symbol && (
+        <InsiderAICard
+          symbol={symbol}
+          transactions={transactions}
+          onClose={() => setShowAI(false)}
+        />
+      )}
 
       {/* ── Code Legend ── */}
       {!loading && transactions.length > 0 && (

@@ -330,6 +330,98 @@ app.post('/api/analyze-filing', async (req, res) => {
   }
 });
 
+// ── Insider AI Analysis ──────────────────────────────────────────────────────
+
+const INSIDER_QUANT_PROMPT = `You are a senior quant analyst at a top-tier Wall Street hedge fund (think Citadel, Renaissance Technologies, or Point72). You specialise in reading insider transaction filings (SEC Form 4, SEDI) to extract high-conviction trading signals before the market reacts.
+
+Your job: analyse the insider trading data below and produce a precise, actionable intelligence briefing in the style of a prop-desk morning note.
+
+Evaluate:
+- Net flow direction and magnitude (buy vs sell dollar value)
+- Who is trading: C-suite vs directors vs beneficial owners (weight CEO/CFO buys most heavily)
+- Timing patterns: cluster buys, trades near earnings blackout windows, 10b5-1 plan sales vs discretionary
+- Size relative to position (large % of holdings = high conviction)
+- Divergence signals: insiders buying while selling their options/grants simultaneously
+
+Return ONLY valid JSON — no markdown, no prose outside the object:
+{
+  "signal": "BULLISH" | "BEARISH" | "NEUTRAL" | "MIXED",
+  "conviction": "HIGH" | "MEDIUM" | "LOW",
+  "sentimentSummary": "one sharp sentence — quant desk headline e.g. 'CEO accumulating aggressively ahead of Q3 catalyst window'",
+  "pattern": "detected regime e.g. 'Cluster buy — multiple insiders same 30d window' | 'Routine 10b5-1 disposal — low signal' | 'Executive accumulation trend' | 'Distribution — sustained selling pressure' | 'Isolated buy — limited read-through'",
+  "topInsiders": ["Name · Title · BUY $X.XM · YYYY-MM-DD", "..."],
+  "netBuyValue": "$XM (positive = net buying, negative = net selling)",
+  "buyCount": number,
+  "sellCount": number,
+  "thesis": "2-3 sentences — what does this insider flow imply for the stock? What are insiders seeing that the street may be missing?",
+  "catalysts": ["catalyst that insiders may be positioning for"],
+  "risks": ["key risk to the bullish/bearish read"],
+  "keyTrade": "The single most significant trade and why it matters"
+}`;
+
+function buildInsiderSummary(symbol, trades) {
+  if (!trades || trades.length === 0) return 'No insider transactions available.';
+
+  const buys  = trades.filter(t => (t.transactionCode === 'P') || (t.change > 0 && t.transactionCode !== 'A' && t.transactionCode !== 'F'));
+  const sells = trades.filter(t => (t.transactionCode === 'S' || t.transactionCode === 'S-') || (t.change < 0 && t.transactionCode !== 'F'));
+  const taxSells = trades.filter(t => t.transactionCode === 'F');
+
+  const sumValue = (arr) => arr.reduce((s, t) => s + (Math.abs(t.change) * (t.transactionPrice || 0)), 0);
+  const buyValue  = sumValue(buys);
+  const sellValue = sumValue(sells);
+  const netFlow   = buyValue - sellValue;
+
+  const fmt = (n) => n >= 1e9 ? `$${(n/1e9).toFixed(2)}B` : n >= 1e6 ? `$${(n/1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n/1e3).toFixed(1)}K` : `$${n.toFixed(0)}`;
+
+  const lines = [
+    `SYMBOL: ${symbol}`,
+    `PERIOD: ${trades[trades.length-1]?.transactionDate?.slice(0,10) || 'n/a'} to ${trades[0]?.transactionDate?.slice(0,10) || 'n/a'}`,
+    `TOTAL TRANSACTIONS: ${trades.length} (${buys.length} buys · ${sells.length} open-market sells · ${taxSells.length} tax-withholding)`,
+    `NET INSIDER FLOW: ${fmt(Math.abs(netFlow))} ${netFlow >= 0 ? 'NET BUY' : 'NET SELL'}`,
+    `BUY VALUE: ${fmt(buyValue)} | SELL VALUE: ${fmt(sellValue)}`,
+    '',
+    'INDIVIDUAL TRANSACTIONS (sorted newest first):',
+  ];
+
+  const topTrades = trades.slice(0, 30); // cap at 30 for token budget
+  for (const t of topTrades) {
+    const val = Math.abs(t.change) * (t.transactionPrice || 0);
+    const type = t.transactionCode === 'P' ? 'BUY'
+      : (t.transactionCode === 'S' || t.transactionCode === 'S-') ? 'SELL'
+      : t.transactionCode === 'F' ? 'TAX-SELL'
+      : t.transactionCode === 'A' ? 'GRANT'
+      : t.transactionCode;
+    lines.push(`  ${t.transactionDate?.slice(0,10) || ''} | ${type.padEnd(8)} | ${(t.name || 'Unknown').padEnd(30)} | ${(t.title || '').padEnd(25)} | ${Math.abs(t.change).toLocaleString().padStart(10)} shares @ $${(t.transactionPrice||0).toFixed(2)} = ${fmt(val)}`);
+  }
+
+  return lines.join('\n');
+}
+
+app.post('/api/analyze-insiders', async (req, res) => {
+  const { symbol, trades } = req.body ?? {};
+
+  if (!symbol || typeof symbol !== 'string')
+    return res.status(400).json({ error: 'Missing symbol' });
+  if (!Array.isArray(trades))
+    return res.status(400).json({ error: 'Missing trades array' });
+
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey)
+    return res.status(503).json({ error: 'AI analysis not configured — ask your admin to set GROQ_API_KEY.' });
+
+  try {
+    const summary = buildInsiderSummary(symbol, trades);
+    const prompt  = `${INSIDER_QUANT_PROMPT}\n\n---\nINSIDER TRANSACTION DATA:\n${summary}`;
+    const rawJson = await callAI('groq', apiKey, prompt);
+    const cleaned = rawJson.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim();
+    const analysis = JSON.parse(cleaned);
+    res.json({ analysis });
+  } catch (err) {
+    console.error('[analyze-insiders]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Serve built React app
 const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));
