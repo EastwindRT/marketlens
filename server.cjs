@@ -343,12 +343,18 @@ Evaluate:
 - Size relative to position (large % of holdings = high conviction)
 - Divergence signals: insiders buying while selling their options/grants simultaneously
 
+THE MOST IMPORTANT FIELD is "hypothesis" — it must be one razor-sharp sentence that captures the single best reason WHY insiders are buying or selling. Think like a PM pitching a trade idea in 15 seconds: be specific, name the likely catalyst or concern, and make it sound like something you'd hear on a hedge fund morning call. Examples of good hypothesis lines:
+- "CFO loading up at 52-week lows suggests the company is tracking ahead of guidance it hasn't yet published."
+- "Three directors buying within 10 days of each other signals management believes the recent selloff is overdone ahead of a re-rating event."
+- "Sustained $47M in executive sales into strength — insiders see limited near-term upside at these multiples."
+
 Return ONLY valid JSON — no markdown, no prose outside the object:
 {
+  "hypothesis": "one razor-sharp sentence — the single best reason WHY insiders are buying or selling right now",
   "signal": "BULLISH" | "BEARISH" | "NEUTRAL" | "MIXED",
   "conviction": "HIGH" | "MEDIUM" | "LOW",
-  "sentimentSummary": "one sharp sentence — quant desk headline e.g. 'CEO accumulating aggressively ahead of Q3 catalyst window'",
-  "pattern": "detected regime e.g. 'Cluster buy — multiple insiders same 30d window' | 'Routine 10b5-1 disposal — low signal' | 'Executive accumulation trend' | 'Distribution — sustained selling pressure' | 'Isolated buy — limited read-through'",
+  "sentimentSummary": "one sharp sentence — quant desk headline",
+  "pattern": "detected regime e.g. 'Cluster buy — multiple insiders same 30d window' | 'Routine 10b5-1 disposal — low signal' | 'Executive accumulation trend' | 'Distribution — sustained selling pressure'",
   "topInsiders": ["Name · Title · BUY $X.XM · YYYY-MM-DD", "..."],
   "netBuyValue": "$XM (positive = net buying, negative = net selling)",
   "buyCount": number,

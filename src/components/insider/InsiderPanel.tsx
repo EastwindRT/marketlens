@@ -20,6 +20,7 @@ interface InsiderPanelProps {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface InsiderAnalysis {
+  hypothesis: string;
   signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'MIXED';
   conviction: 'HIGH' | 'MEDIUM' | 'LOW';
   sentimentSummary: string;
@@ -153,6 +154,31 @@ function InsiderAICard({
       {/* Analysis Result */}
       {!loading && !error && analysis && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* ── Hypothesis — hero block ── */}
+          {analysis.hypothesis && (
+            <div style={{
+              padding: '14px 16px',
+              borderRadius: 12,
+              background: `linear-gradient(135deg, ${signalBg(analysis.signal)}, rgba(22,82,240,0.06))`,
+              border: `1px solid ${signalColor(analysis.signal)}44`,
+            }}>
+              <p style={{ margin: '0 0 6px', fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                Why Insiders Are {analysis.signal === 'BEARISH' ? 'Selling' : 'Buying'}
+              </p>
+              <p style={{
+                margin: 0,
+                fontSize: 15,
+                fontWeight: 700,
+                color: 'var(--text-primary)',
+                lineHeight: 1.5,
+                fontFamily: "'Inter', sans-serif",
+                letterSpacing: '-0.01em',
+              }}>
+                "{analysis.hypothesis}"
+              </p>
+            </div>
+          )}
 
           {/* Signal row */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
