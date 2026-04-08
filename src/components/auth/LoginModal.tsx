@@ -1,44 +1,29 @@
-import React, { useState, useEffect } from 'react';
-import { TrendingUp, Lock } from 'lucide-react';
-import { getAllPlayers, loginPlayer } from '../../api/supabase';
-import { useLeagueStore } from '../../store/leagueStore';
-import type { Player } from '../../api/supabase';
+import React, { useState } from 'react';
+import { TrendingUp, AlertCircle } from 'lucide-react';
+import { signInWithGoogle } from '../../api/supabase';
 
 interface LoginModalProps {
   onClose?: () => void;
+  authError?: string | null;
 }
 
-export default function LoginModal({ onClose }: LoginModalProps) {
-  const [players, setPlayers] = useState<Player[]>([]);
-  const [selected, setSelected] = useState<string>('');
-  const [pin, setPin] = useState('');
-  const [error, setError] = useState('');
+export default function LoginModal({ onClose, authError }: LoginModalProps) {
   const [loading, setLoading] = useState(false);
-  const [fetching, setFetching] = useState(true);
-  const setPlayer = useLeagueStore((s) => s.setPlayer);
+  const [localError, setLocalError] = useState('');
 
-  useEffect(() => {
-    getAllPlayers()
-      .then(setPlayers)
-      .catch(() => setError('Could not connect to database. Check your Supabase keys.'))
-      .finally(() => setFetching(false));
-  }, []);
-
-  async function handleLogin() {
-    if (!selected) { setError('Pick your name'); return; }
-    if (!pin) { setError('Enter your PIN'); return; }
+  async function handleGoogleSignIn() {
     setLoading(true);
-    setError('');
-    const player = await loginPlayer(selected, pin);
-    setLoading(false);
-    if (!player) {
-      setError('Wrong PIN. Try again.');
-      setPin('');
-      return;
+    setLocalError('');
+    try {
+      await signInWithGoogle();
+      // Page will redirect to Google — no return from here
+    } catch {
+      setLocalError('Could not start Google sign-in. Check your connection.');
+      setLoading(false);
     }
-    setPlayer(player);
-    onClose?.();
   }
+
+  const displayError = authError || localError;
 
   return (
     <div
@@ -57,94 +42,71 @@ export default function LoginModal({ onClose }: LoginModalProps) {
           >
             <TrendingUp size={24} color="white" strokeWidth={2.5} />
           </div>
-          <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+          <h1
+            className="text-xl font-bold"
+            style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}
+          >
             MoneyTalks
           </h1>
           <p className="text-sm text-center" style={{ color: 'var(--text-secondary)' }}>
-            Pick your name and enter your PIN to join the league
+            Sign in with your Google account to join the league
           </p>
         </div>
 
-        {/* Name picker */}
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-            WHO ARE YOU?
-          </label>
-          {fetching ? (
-            <div className="h-11 rounded-xl animate-pulse" style={{ background: 'var(--bg-elevated)' }} />
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              {players.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => { setSelected(p.name); setError(''); }}
-                  className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition-all"
-                  style={{
-                    background: selected === p.name ? 'var(--accent-blue)' : 'var(--bg-elevated)',
-                    color: selected === p.name ? '#fff' : 'var(--text-primary)',
-                    border: selected === p.name ? '1px solid var(--accent-blue)' : '1px solid var(--border-default)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <span
-                    className="w-5 h-5 rounded-full flex-shrink-0"
-                    style={{ background: p.avatar_color }}
-                  />
-                  <span className="truncate">{p.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* PIN */}
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-            PIN
-          </label>
+        {/* Error card */}
+        {displayError && (
           <div
-            className="flex items-center gap-3 px-4 rounded-xl"
+            className="flex items-start gap-3 p-3 rounded-xl"
             style={{
-              background: 'var(--bg-elevated)',
-              border: `1px solid ${error ? 'var(--color-down)' : 'var(--border-default)'}`,
-              height: 48,
+              background: 'rgba(246,70,93,0.1)',
+              border: '1px solid rgba(246,70,93,0.3)',
             }}
           >
-            <Lock size={16} style={{ color: 'var(--text-tertiary)' }} />
-            <input
-              type="password"
-              inputMode="numeric"
-              maxLength={6}
-              value={pin}
-              onChange={(e) => { setPin(e.target.value.replace(/\D/g, '')); setError(''); }}
-              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-              placeholder="4-digit PIN"
-              className="flex-1 bg-transparent outline-none text-sm"
-              style={{ color: 'var(--text-primary)' }}
-            />
+            <AlertCircle size={15} color="#F6465D" style={{ flexShrink: 0, marginTop: 1 }} />
+            <p style={{ margin: 0, fontSize: 13, color: '#F6465D', lineHeight: 1.45 }}>
+              {displayError}
+            </p>
           </div>
-        </div>
-
-        {/* Error */}
-        {error && (
-          <p className="text-sm text-center" style={{ color: 'var(--color-down)' }}>{error}</p>
         )}
 
-        {/* Submit */}
+        {/* Google Sign In button */}
         <button
-          onClick={handleLogin}
+          onClick={handleGoogleSignIn}
           disabled={loading}
-          className="w-full py-3 rounded-xl text-sm font-semibold transition-opacity"
+          className="w-full py-3 rounded-xl text-sm font-semibold flex items-center justify-center gap-3 transition-opacity"
           style={{
-            background: 'var(--accent-blue)',
-            color: '#fff',
-            opacity: loading ? 0.6 : 1,
+            background: '#fff',
+            color: '#1f1f1f',
+            border: '1px solid #dadce0',
             cursor: loading ? 'not-allowed' : 'pointer',
-            border: 'none',
+            opacity: loading ? 0.7 : 1,
           }}
         >
-          {loading ? 'Signing in…' : 'Enter League'}
+          {/* Google 'G' logo */}
+          <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+            <path
+              fill="#4285F4"
+              d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.17z"
+            />
+            <path
+              fill="#34A853"
+              d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"
+            />
+            <path
+              fill="#FBBC05"
+              d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18z"
+            />
+            <path
+              fill="#EA4335"
+              d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.3z"
+            />
+          </svg>
+          {loading ? 'Redirecting to Google…' : 'Sign in with Google'}
         </button>
+
+        <p className="text-center text-xs" style={{ color: 'var(--text-tertiary)' }}>
+          Your Google account must be linked to a player by an admin
+        </p>
       </div>
     </div>
   );

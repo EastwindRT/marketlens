@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Player } from '../api/supabase';
+import { signOutGoogle } from '../api/supabase';
 
 interface LeagueStore {
   player: Player | null;
@@ -14,7 +15,10 @@ export const useLeagueStore = create<LeagueStore>()(
     (set) => ({
       player: null,
       setPlayer: (player) => set({ player }),
-      logout: () => set({ player: null }),
+      logout: () => {
+        signOutGoogle(); // sign out from Supabase Auth (fires SIGNED_OUT → clears player)
+        set({ player: null });
+      },
       updateCash: (cash) =>
         set((state) => state.player ? { player: { ...state.player, cash } } : {}),
     }),

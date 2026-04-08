@@ -11,6 +11,7 @@ export interface Player {
   id: string;
   name: string;
   pin: string;
+  google_email?: string;
   avatar_color: string;
   cash: number;
   created_at: string;
@@ -36,6 +37,29 @@ export interface Trade {
   price: number;
   total: number;
   traded_at: string;
+}
+
+// ── Google OAuth auth ─────────────────────────────────────────────────────────
+
+export async function signInWithGoogle(): Promise<void> {
+  await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.origin },
+  });
+}
+
+export async function getPlayerByGoogleEmail(email: string): Promise<Player | null> {
+  const { data, error } = await supabase
+    .from('players')
+    .select('*')
+    .eq('google_email', email.toLowerCase())
+    .single();
+  if (error) return null;
+  return data;
+}
+
+export async function signOutGoogle(): Promise<void> {
+  await supabase.auth.signOut();
 }
 
 // ── Player queries ────────────────────────────────────────────────────────────
