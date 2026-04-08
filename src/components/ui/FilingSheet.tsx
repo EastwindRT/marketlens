@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ExternalLink, X, Sparkles, RotateCcw } from 'lucide-react';
 import type { MarketFiling } from '../../api/edgar';
-import { useAiSettingsStore, type AiProvider } from '../../store/aiSettingsStore';
+import { useAiSettingsStore, type AiProvider, PROVIDER_META } from '../../store/aiSettingsStore';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -53,6 +53,13 @@ function KeySetupPanel({
 }) {
   const [draft, setDraft] = useState(apiKey);
   const [visible, setVisible] = useState(false);
+  const meta = PROVIDER_META[provider];
+
+  // Reset draft when provider changes
+  const handleProviderChange = (p: AiProvider) => {
+    setDraft('');
+    onProviderChange(p);
+  };
 
   return (
     <div style={{
@@ -60,27 +67,64 @@ function KeySetupPanel({
       background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
     }}>
       <p style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
-        Connect AI Provider
+        Choose AI Provider
       </p>
 
-      {/* Provider toggle */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        {(['anthropic', 'openai'] as AiProvider[]).map((p) => (
-          <button
-            key={p}
-            onClick={() => onProviderChange(p)}
-            style={{
-              flex: 1, padding: '7px 0', borderRadius: 8, fontSize: 12, fontWeight: 600,
-              cursor: 'pointer', border: '1px solid',
-              background: provider === p ? 'var(--accent-blue)' : 'var(--bg-surface)',
-              color: provider === p ? '#fff' : 'var(--text-secondary)',
-              borderColor: provider === p ? 'var(--accent-blue)' : 'var(--border-default)',
-            }}
-          >
-            {p === 'anthropic' ? 'Anthropic (Claude)' : 'OpenAI (GPT-4o)'}
-          </button>
-        ))}
+      {/* Provider pills */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+        {(['groq', 'anthropic', 'openai'] as AiProvider[]).map((p) => {
+          const m = PROVIDER_META[p];
+          const active = provider === p;
+          return (
+            <button
+              key={p}
+              onClick={() => handleProviderChange(p)}
+              style={{
+                flex: 1, padding: '8px 4px', borderRadius: 8, fontSize: 11, fontWeight: 600,
+                cursor: 'pointer', border: `1px solid ${active ? 'var(--accent-blue)' : 'var(--border-default)'}`,
+                background: active ? 'var(--accent-blue)' : 'var(--bg-surface)',
+                color: active ? '#fff' : 'var(--text-secondary)',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+                transition: 'all 150ms',
+              }}
+            >
+              <span>{m.label}</span>
+              {m.badge && (
+                <span style={{
+                  fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+                  background: active ? 'rgba(255,255,255,0.25)' : m.badgeColor,
+                  color: '#fff', letterSpacing: '0.05em',
+                }}>
+                  {m.badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
+
+      {/* Groq callout — shown only when Groq selected */}
+      {provider === 'groq' && (
+        <div style={{
+          padding: '10px 12px', borderRadius: 8, marginBottom: 10,
+          background: 'rgba(5,177,105,0.08)', border: '1px solid rgba(5,177,105,0.25)',
+        }}>
+          <p style={{ margin: '0 0 3px', fontSize: 12, fontWeight: 600, color: '#05B169' }}>
+            ✦ 100% Free — No credit card required
+          </p>
+          <p style={{ margin: '0 0 6px', fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+            Groq runs Llama 3.3 70B at incredible speed. Free tier gives 30 requests/min — more than enough.
+          </p>
+          <a
+            href="https://console.groq.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 11, color: '#05B169', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          >
+            Get your free key at console.groq.com <ExternalLink size={10} />
+          </a>
+        </div>
+      )}
 
       {/* Key input */}
       <div style={{ position: 'relative', marginBottom: 10 }}>
@@ -88,7 +132,7 @@ function KeySetupPanel({
           type={visible ? 'text' : 'password'}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={provider === 'anthropic' ? 'sk-ant-api03-…' : 'sk-…'}
+          placeholder={meta.placeholder}
           style={{
             width: '100%', padding: '9px 44px 9px 10px', borderRadius: 8, boxSizing: 'border-box',
             background: 'var(--bg-surface)', border: '1px solid var(--border-default)',
@@ -115,14 +159,14 @@ function KeySetupPanel({
       </div>
 
       <p style={{ margin: '0 0 10px', fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.4 }}>
-        Your key is stored locally in your browser and sent only to this app's server. Never shared externally.
+        Stored in your browser only. Sent to this app's server for the analysis call. Never shared.
       </p>
 
       <button
         disabled={!draft.trim()}
         onClick={() => { onApiKeyChange(draft.trim()); onSave(); }}
         style={{
-          width: '100%', padding: '9px 0', borderRadius: 8, fontSize: 13, fontWeight: 600,
+          width: '100%', padding: '10px 0', borderRadius: 8, fontSize: 13, fontWeight: 600,
           cursor: draft.trim() ? 'pointer' : 'not-allowed', border: 'none',
           background: draft.trim() ? 'var(--accent-blue)' : 'var(--bg-hover)',
           color: draft.trim() ? '#fff' : 'var(--text-tertiary)',
@@ -497,7 +541,15 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
               Analyze with AI
               {apiKey && (
                 <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>
-                  · {provider === 'anthropic' ? 'Claude' : 'GPT-4o mini'}
+                  · {PROVIDER_META[provider].label}
+                </span>
+              )}
+              {!apiKey && provider === 'groq' && (
+                <span style={{
+                  fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 4, marginLeft: 4,
+                  background: '#05B169', color: '#fff', letterSpacing: '0.05em',
+                }}>
+                  FREE
                 </span>
               )}
             </button>
@@ -526,7 +578,7 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
           {/* Change provider link */}
           {apiKey && !loading && !showKeySetup && (
             <p style={{ margin: '0 0 14px', fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center' }}>
-              Using {provider === 'anthropic' ? 'Anthropic Claude Haiku' : 'OpenAI GPT-4o mini'} ·{' '}
+              Using {PROVIDER_META[provider].label} · {PROVIDER_META[provider].model} ·{' '}
               <button
                 onClick={() => setShowKeySetup(true)}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-blue-light)', fontSize: 11, padding: 0 }}

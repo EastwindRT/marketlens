@@ -254,6 +254,51 @@ async function callAI(provider, apiKey, filingText) {
     });
   }
 
+  // Groq — OpenAI-compatible API, just different hostname + model
+  if (provider === 'groq') {
+    const body = JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 1024,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: QUANT_PROMPT },
+        { role: 'user', content: `FILING TEXT:\n${filingText}` },
+      ],
+    });
+
+    return new Promise((resolve, reject) => {
+      const req = https.request(
+        {
+          hostname: 'api.groq.com',
+          path: '/openai/v1/chat/completions',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Length': Buffer.byteLength(body),
+          },
+        },
+        (res) => {
+          let data = '';
+          res.on('data', (c) => (data += c));
+          res.on('end', () => {
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.error) return reject(new Error(parsed.error.message ?? JSON.stringify(parsed.error)));
+              resolve(parsed.choices?.[0]?.message?.content ?? '');
+            } catch {
+              reject(new Error('Invalid Groq response'));
+            }
+          });
+        }
+      );
+      req.on('error', reject);
+      req.setTimeout(30000, () => { req.destroy(); reject(new Error('Groq API timeout')); });
+      req.write(body);
+      req.end();
+    });
+  }
+
   throw new Error(`Unknown provider: ${provider}`);
 }
 
@@ -263,8 +308,8 @@ app.post('/api/analyze-filing', async (req, res) => {
 
   if (!edgarUrl || typeof edgarUrl !== 'string')
     return res.status(400).json({ error: 'Missing edgarUrl' });
-  if (!['anthropic', 'openai'].includes(provider))
-    return res.status(400).json({ error: 'provider must be "anthropic" or "openai"' });
+  if (!['groq', 'anthropic', 'openai'].includes(provider))
+    return res.status(400).json({ error: 'provider must be "groq", "anthropic", or "openai"' });
   if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10)
     return res.status(401).json({ error: 'Missing or invalid x-ai-key header' });
   // SSRF guard — only allow SEC EDGAR URLs
