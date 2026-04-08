@@ -38,9 +38,8 @@ let houseFetchPromise: Promise<void> | null = null;
 const SENATE_URL =
   'https://raw.githubusercontent.com/timothycarambat/senate-stock-watcher-data/master/aggregate/all_ticker_transactions.json';
 
-// House Stock Watcher — S3 bucket updated continuously with 2024-2025 data
-const HOUSE_URL =
-  'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json';
+// House Stock Watcher — proxied via Express to avoid S3 CORS/403 block
+const HOUSE_URL = '/api/house-trades/data/all_transactions.json';
 
 async function ensureSenateData(): Promise<void> {
   if (senateCache) return;

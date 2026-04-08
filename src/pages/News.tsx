@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ExternalLink, Zap } from 'lucide-react';
+import { ExternalLink, Zap, Sparkles, TrendingUp, TrendingDown, Minus, RotateCcw, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { edgar } from '../api/edgar';
 import type { MarketFiling } from '../api/edgar';
@@ -118,11 +118,11 @@ interface FlatTrade extends InsiderTransaction {
   tradeType: 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL';
 }
 
-// Popular tickers always included in the insider feed for market breadth
+// Popular tickers for the insider feed — kept small to avoid Finnhub rate limits
 const POPULAR_TICKERS = [
-  'AAPL', 'MSFT', 'NVDA', 'META', 'GOOGL', 'AMZN', 'TSLA',
-  'JPM', 'BAC', 'GS', 'V', 'MA', 'UNH', 'LLY',
-  'SHOP.TO', 'TD.TO', 'RY.TO', 'ENB.TO',
+  'AAPL', 'NVDA', 'META', 'GOOGL', 'AMZN',
+  'JPM', 'UNH', 'LLY',
+  'SHOP.TO', 'TD.TO',
 ];
 
 function useWatchlistInsiders(symbols: string[], _days: number): {
@@ -170,6 +170,8 @@ function useWatchlistInsiders(symbols: string[], _days: number): {
 export default function NewsPage() {
   const [days, setDays] = useState(14);
   const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
+  const [showInsiderAI, setShowInsiderAI]   = useState(false);
+  const [showCongressAI, setShowCongressAI] = useState(false);
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
   const symbols = watchlist.map(w => w.symbol);
@@ -326,9 +328,36 @@ export default function NewsPage() {
         )}
 
         {/* ── SECTION 1: Watchlist Insider Trades ── */}
-        <SectionHeader title="Insider Activity" subtitle="Form 4 / SEDI trades — watchlist + popular stocks · last 90 days" />
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+          <SectionHeader title="Insider Activity" subtitle="Form 4 / SEDI trades — watchlist + popular stocks · last 90 days" noMargin />
+          {!insidersLoading && insiderTrades.length > 0 && (
+            <button
+              onClick={() => setShowInsiderAI(v => !v)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                padding: '6px 12px', borderRadius: 8, cursor: 'pointer',
+                background: showInsiderAI ? 'rgba(22,82,240,0.15)' : 'var(--bg-elevated)',
+                border: showInsiderAI ? '1px solid rgba(45,107,255,0.4)' : '1px solid var(--border-default)',
+                color: showInsiderAI ? 'var(--accent-blue-light)' : 'var(--text-secondary)',
+                fontSize: 12, fontWeight: 600, transition: 'all 150ms',
+              }}
+            >
+              <Sparkles size={12} /> Ask AI
+            </button>
+          )}
+        </div>
 
         {insidersLoading && <FilingsSkeleton />}
+
+        {showInsiderAI && !insidersLoading && insiderTrades.length > 0 && (
+          <FeedAICard
+            key="insider-ai"
+            endpoint="/api/analyze-insiders"
+            payload={{ symbol: 'MARKET', trades: insiderTrades }}
+            label="Quant Insider Analysis"
+            onClose={() => setShowInsiderAI(false)}
+          />
+        )}
 
         {!insidersLoading && insiderTrades.length === 0 && (
           <EmptyState message={`No insider trades in the last ${days} days for your watchlist.`} />
@@ -394,10 +423,28 @@ export default function NewsPage() {
         )}
 
         {/* ── SECTION 2: Congress Trades ── */}
-        <SectionHeader
-          title="🏛 Congress Trades"
-          subtitle="Latest House member disclosures — updated continuously"
-        />
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+          <SectionHeader
+            title="🏛 Congress Trades"
+            subtitle="Latest House member disclosures — updated continuously"
+            noMargin
+          />
+          {!congressLoading && congressTrades && congressTrades.length > 0 && (
+            <button
+              onClick={() => setShowCongressAI(v => !v)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                padding: '6px 12px', borderRadius: 8, cursor: 'pointer',
+                background: showCongressAI ? 'rgba(22,82,240,0.15)' : 'var(--bg-elevated)',
+                border: showCongressAI ? '1px solid rgba(45,107,255,0.4)' : '1px solid var(--border-default)',
+                color: showCongressAI ? 'var(--accent-blue-light)' : 'var(--text-secondary)',
+                fontSize: 12, fontWeight: 600, transition: 'all 150ms',
+              }}
+            >
+              <Sparkles size={12} /> Ask AI
+            </button>
+          )}
+        </div>
 
         {/* Live data link — always visible */}
         <a
@@ -425,6 +472,16 @@ export default function NewsPage() {
         </a>
 
         {congressLoading && <FilingsSkeleton />}
+
+        {showCongressAI && !congressLoading && congressTrades && congressTrades.length > 0 && (
+          <FeedAICard
+            key="congress-ai"
+            endpoint="/api/analyze-congress"
+            payload={{ trades: congressTrades }}
+            label="Political Risk Desk Analysis"
+            onClose={() => setShowCongressAI(false)}
+          />
+        )}
 
         {!congressLoading && (!congressTrades || congressTrades.length === 0) && (
           <EmptyState message="No recent House trades found — data may still be loading." />
@@ -591,9 +648,212 @@ export default function NewsPage() {
   );
 }
 
-function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
+// ── Feed AI Card ──────────────────────────────────────────────────────────────
+
+interface FeedAnalysis {
+  hypothesis: string;
+  signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'MIXED';
+  conviction: 'HIGH' | 'MEDIUM' | 'LOW';
+  sentimentSummary: string;
+  pattern: string;
+  topInsiders?: string[];
+  topMembers?: string[];
+  netBuyValue?: string;
+  buyCount: number;
+  sellCount: number;
+  thesis: string;
+  catalysts: string[];
+  risks: string[];
+  keyTrade: string;
+}
+
+function FeedAICard({
+  endpoint,
+  payload,
+  label,
+  onClose,
+}: {
+  endpoint: string;
+  payload: object;
+  label: string;
+  onClose: () => void;
+}) {
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<FeedAnalysis | null>(null);
+  const ran = useRef(false);
+
+  async function run() {
+    setError(null); setLoading(true);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `Server error ${res.status}`);
+      setAnalysis(json.analysis as FeedAnalysis);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Analysis failed');
+    } finally { setLoading(false); }
+  }
+
+  useEffect(() => { if (!ran.current) { ran.current = true; run(); } }, []);
+
+  const sigColor = (s?: string) =>
+    s === 'BULLISH' ? '#05B169' : s === 'BEARISH' ? '#F6465D' : s === 'MIXED' ? '#F7931A' : '#8A8F98';
+  const sigBg = (s?: string) =>
+    s === 'BULLISH' ? 'rgba(5,177,105,0.1)' : s === 'BEARISH' ? 'rgba(246,70,93,0.1)' : s === 'MIXED' ? 'rgba(247,147,26,0.1)' : 'rgba(138,143,152,0.1)';
+  const convColor = (c?: string) =>
+    c === 'HIGH' ? '#05B169' : c === 'MEDIUM' ? '#F7931A' : '#8A8F98';
+
   return (
-    <div style={{ marginBottom: 12 }}>
+    <div style={{
+      marginBottom: 20, borderRadius: 14,
+      background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
+      overflow: 'hidden',
+    }}>
+      {/* Header bar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)',
+        background: 'var(--bg-surface)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Sparkles size={13} color="var(--accent-blue-light)" />
+          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            {label}
+          </span>
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>· Llama 3.3 70B</span>
+        </div>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 4 }}>×</button>
+      </div>
+
+      <div style={{ padding: '16px 18px' }}>
+        {/* Loading */}
+        {loading && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {[88, 65, 78, 50].map((w, i) => (
+              <div key={i} className="animate-pulse" style={{ height: 12, borderRadius: 6, background: 'var(--bg-hover)', width: `${w}%` }} />
+            ))}
+            <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>Analysing data…</p>
+          </div>
+        )}
+
+        {/* Error */}
+        {!loading && error && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <AlertTriangle size={14} color="#F6465D" />
+            <span style={{ fontSize: 13, color: '#F6465D', flex: 1 }}>{error}</span>
+            <button onClick={run} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 7, cursor: 'pointer', background: 'var(--bg-hover)', border: '1px solid var(--border-default)', color: 'var(--text-primary)', fontSize: 12, fontWeight: 600 }}>
+              <RotateCcw size={11} /> Retry
+            </button>
+          </div>
+        )}
+
+        {/* Result */}
+        {!loading && !error && analysis && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+            {/* Hypothesis hero */}
+            {analysis.hypothesis && (
+              <div style={{
+                padding: '13px 15px', borderRadius: 11,
+                background: `linear-gradient(135deg, ${sigBg(analysis.signal)}, rgba(22,82,240,0.05))`,
+                border: `1px solid ${sigColor(analysis.signal)}44`,
+              }}>
+                <p style={{ margin: '0 0 5px', fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                  Why They're {analysis.signal === 'BEARISH' ? 'Selling' : 'Buying'}
+                </p>
+                <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.5, letterSpacing: '-0.01em' }}>
+                  "{analysis.hypothesis}"
+                </p>
+              </div>
+            )}
+
+            {/* Signal row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 14px', borderRadius: 9, background: sigBg(analysis.signal), border: `1px solid ${sigColor(analysis.signal)}33` }}>
+                {analysis.signal === 'BULLISH' ? <TrendingUp size={13} color={sigColor(analysis.signal)} /> : analysis.signal === 'BEARISH' ? <TrendingDown size={13} color={sigColor(analysis.signal)} /> : <Minus size={13} color={sigColor(analysis.signal)} />}
+                <span style={{ fontSize: 14, fontWeight: 800, color: sigColor(analysis.signal) }}>{analysis.signal}</span>
+              </div>
+              <div style={{ padding: '6px 11px', borderRadius: 8, background: 'var(--bg-hover)', border: '1px solid var(--border-default)' }}>
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginRight: 5 }}>Conviction</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: convColor(analysis.conviction) }}>{analysis.conviction}</span>
+              </div>
+              <div style={{ padding: '6px 11px', borderRadius: 8, background: 'var(--bg-hover)', border: '1px solid var(--border-default)' }}>
+                <span style={{ fontSize: 11, color: '#05B169', marginRight: 4 }}>▲ {analysis.buyCount ?? 0}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '0 3px' }}>·</span>
+                <span style={{ fontSize: 11, color: '#F6465D', marginLeft: 4 }}>▼ {analysis.sellCount ?? 0}</span>
+              </div>
+            </div>
+
+            {/* Pattern */}
+            {analysis.pattern && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', paddingTop: 3, flexShrink: 0 }}>Pattern</span>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '3px 10px', borderRadius: 6, background: 'rgba(45,107,255,0.08)', border: '1px solid rgba(45,107,255,0.2)' }}>{analysis.pattern}</span>
+              </div>
+            )}
+
+            {/* Key actors */}
+            {((analysis.topInsiders && analysis.topInsiders.length > 0) || (analysis.topMembers && analysis.topMembers.length > 0)) && (
+              <div>
+                <p style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 6px' }}>Key Players</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {(analysis.topInsiders || analysis.topMembers || []).slice(0, 4).map((x, i) => (
+                    <p key={i} style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)', paddingLeft: 8, borderLeft: '2px solid var(--border-default)' }}>{x}</p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Thesis */}
+            {analysis.thesis && (
+              <div>
+                <p style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 5px' }}>Thesis</p>
+                <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{analysis.thesis}</p>
+              </div>
+            )}
+
+            {/* Key Trade */}
+            {analysis.keyTrade && (
+              <div style={{ padding: '10px 13px', borderRadius: 9, background: 'rgba(45,107,255,0.06)', border: '1px solid rgba(45,107,255,0.15)' }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent-blue-light)', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 4 }}>Key Trade</span>
+                <p style={{ margin: 0, fontSize: 12, color: 'var(--text-primary)', lineHeight: 1.5 }}>{analysis.keyTrade}</p>
+              </div>
+            )}
+
+            {/* Catalysts + Risks */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {analysis.catalysts?.length > 0 && (
+                <div>
+                  <p style={{ fontSize: 10, fontWeight: 700, color: '#05B169', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 5px' }}>Catalysts</p>
+                  <ul style={{ margin: 0, paddingLeft: 14, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {analysis.catalysts.map((c, i) => <li key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{c}</li>)}
+                  </ul>
+                </div>
+              )}
+              {analysis.risks?.length > 0 && (
+                <div>
+                  <p style={{ fontSize: 10, fontWeight: 700, color: '#F6465D', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 5px' }}>Risks</p>
+                  <ul style={{ margin: 0, paddingLeft: 14, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {analysis.risks.map((r, i) => <li key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{r}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SectionHeader({ title, subtitle, noMargin }: { title: string; subtitle: string; noMargin?: boolean }) {
+  return (
+    <div style={{ marginBottom: noMargin ? 0 : 12 }}>
       <h2 style={{
         margin: '0 0 2px', fontSize: 15, fontWeight: 700,
         color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.01em',

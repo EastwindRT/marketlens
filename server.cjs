@@ -428,6 +428,85 @@ app.post('/api/analyze-insiders', async (req, res) => {
   }
 });
 
+// ── Congress AI Analysis ─────────────────────────────────────────────────────
+
+const CONGRESS_QUANT_PROMPT = `You are a senior political risk analyst and quant strategist at a top hedge fund. You read STOCK Act congressional trading disclosures to extract market signals — politicians often trade ahead of regulatory changes, defence contracts, healthcare legislation, and infrastructure bills.
+
+Analyse the congressional trade data below and produce an intelligence briefing in the style of a DC-based political risk desk note.
+
+Evaluate:
+- Net direction: are members buying or selling?
+- Which sectors/tickers are clustered — signals a legislative or regulatory catalyst
+- Party dynamics: bipartisan buying = higher conviction signal
+- Committee memberships: Armed Services buying defence = higher signal than random
+- Timing: trades near committee votes, earnings, or government contract announcements
+
+THE MOST IMPORTANT FIELD is "hypothesis" — one razor-sharp sentence on WHY congress members are buying or selling RIGHT NOW. Be specific about the likely legislative or macro catalyst. Examples:
+- "Bipartisan accumulation in defence names ahead of the supplemental appropriations vote signals committee members expect a large contracts announcement."
+- "Five members liquidating retail positions into strength as consumer spending legislation faces headwinds in the Senate."
+
+Return ONLY valid JSON — no markdown, no prose outside the object:
+{
+  "hypothesis": "one razor-sharp sentence — the single best reason WHY congress is buying or selling",
+  "signal": "BULLISH" | "BEARISH" | "NEUTRAL" | "MIXED",
+  "conviction": "HIGH" | "MEDIUM" | "LOW",
+  "sentimentSummary": "one sharp sentence — political risk desk headline",
+  "pattern": "detected regime e.g. 'Bipartisan cluster buy' | 'Committee-informed selling' | 'Broad liquidation ahead of volatility' | 'Sector rotation into defence/health'",
+  "topMembers": ["Name (Party-State) · BUY/SELL TICKER $X–$Y · YYYY-MM-DD", "..."],
+  "buyCount": number,
+  "sellCount": number,
+  "thesis": "2-3 sentences — what legislative or macro event are members positioning for?",
+  "catalysts": ["specific legislative or policy catalyst"],
+  "risks": ["key risk to this read"],
+  "keyTrade": "The single most significant trade and why it matters"
+}`;
+
+function buildCongressSummary(trades) {
+  if (!trades || trades.length === 0) return 'No congressional transactions available.';
+
+  const buys  = trades.filter(t => t.type === 'purchase');
+  const sells = trades.filter(t => t.type === 'sale');
+  const tickers = [...new Set(trades.map(t => t.ticker))];
+
+  const lines = [
+    `TOTAL DISCLOSURES: ${trades.length} (${buys.length} purchases · ${sells.length} sales)`,
+    `UNIQUE TICKERS: ${tickers.join(', ')}`,
+    `DATE RANGE: ${trades[trades.length-1]?.transactionDate?.slice(0,10) || 'n/a'} to ${trades[0]?.transactionDate?.slice(0,10) || 'n/a'}`,
+    '',
+    'INDIVIDUAL TRADES (newest first):',
+  ];
+
+  for (const t of trades.slice(0, 40)) {
+    const type = (t.type || '').toUpperCase();
+    lines.push(`  ${t.transactionDate?.slice(0,10) || ''} | ${type.padEnd(8)} | ${(t.member || '').padEnd(28)} | ${(t.party || '?').padEnd(2)} ${(t.state || '').padEnd(3)} | ${(t.ticker || '').padEnd(8)} | ${t.amount || ''}`);
+  }
+
+  return lines.join('\n');
+}
+
+app.post('/api/analyze-congress', async (req, res) => {
+  const { trades } = req.body ?? {};
+
+  if (!Array.isArray(trades))
+    return res.status(400).json({ error: 'Missing trades array' });
+
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey)
+    return res.status(503).json({ error: 'AI analysis not configured — ask your admin to set GROQ_API_KEY.' });
+
+  try {
+    const summary = buildCongressSummary(trades);
+    const prompt  = `${CONGRESS_QUANT_PROMPT}\n\n---\nCONGRESSIONAL TRADE DATA:\n${summary}`;
+    const rawJson = await callAI('groq', apiKey, prompt);
+    const cleaned = rawJson.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim();
+    const analysis = JSON.parse(cleaned);
+    res.json({ analysis });
+  } catch (err) {
+    console.error('[analyze-congress]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Serve built React app
 const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));
