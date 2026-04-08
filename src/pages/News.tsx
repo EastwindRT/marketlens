@@ -8,7 +8,7 @@ import { FilingSheet } from '../components/ui/FilingSheet';
 import { format, subDays } from 'date-fns';
 import { useWatchlistStore } from '../store/watchlistStore';
 import { useInsiderData, getInsiderType } from '../hooks/useInsiderData';
-import { useCongressTradesForWatchlist } from '../hooks/useCongressTrades';
+import { useCongressTradesForWatchlist, useLatestCongressTrades } from '../hooks/useCongressTrades';
 import type { InsiderTransaction } from '../api/types';
 import type { CongressTrade } from '../api/congress';
 import { formatPrice, formatLargeNumber } from '../utils/formatters';
@@ -118,18 +118,31 @@ interface FlatTrade extends InsiderTransaction {
   tradeType: 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL';
 }
 
-function useWatchlistInsiders(symbols: string[], days: number): {
+// Popular tickers always included in the insider feed for market breadth
+const POPULAR_TICKERS = [
+  'AAPL', 'MSFT', 'NVDA', 'META', 'GOOGL', 'AMZN', 'TSLA',
+  'JPM', 'BAC', 'GS', 'V', 'MA', 'UNH', 'LLY',
+  'SHOP.TO', 'TD.TO', 'RY.TO', 'ENB.TO',
+];
+
+function useWatchlistInsiders(symbols: string[], _days: number): {
   trades: FlatTrade[];
   loading: boolean;
 } {
+  // Merge watchlist with popular tickers, dedupe
+  const allSymbols = [...new Set([...symbols, ...POPULAR_TICKERS])];
+
+  // Always use 90-day lookback for insiders — trades are infrequent
+  const INSIDER_LOOKBACK_DAYS = 90;
+
   // Fetch each ticker — React Query dedupes & caches
-  const results = symbols.map(sym => {
+  const results = allSymbols.map(sym => {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     return { symbol: sym, q: useInsiderData(sym) };
   });
 
   const loading = results.some(r => r.q.isLoading);
-  const cutoff  = subDays(new Date(), days);
+  const cutoff  = subDays(new Date(), INSIDER_LOOKBACK_DAYS);
 
   const trades: FlatTrade[] = results.flatMap(({ symbol, q }) => {
     if (!q.data) return [];
@@ -147,9 +160,9 @@ function useWatchlistInsiders(symbols: string[], days: number): {
       }));
   });
 
-  // Sort by date desc
+  // Sort by date desc, cap at 100 rows
   trades.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
-  return { trades, loading };
+  return { trades: trades.slice(0, 100), loading };
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -170,18 +183,21 @@ export default function NewsPage() {
 
   const { trades: insiderTrades, loading: insidersLoading } = useWatchlistInsiders(symbols, days);
 
-  const { data: congressTrades, isLoading: congressLoading } = useCongressTradesForWatchlist(
+  // Latest house trades (2024-2025 data) — not filtered by watchlist
+  const { data: congressTrades, isLoading: congressLoading } = useLatestCongressTrades(60);
+  // Keep watchlist congress for confluence signal detection
+  const { data: watchlistCongressTrades } = useCongressTradesForWatchlist(
     symbols.map(s => s.replace(/\.TO$/i, '')),
-    Math.max(days, 90)  // congress data is slower, always look back at least 90d
+    Math.max(days, 90)
   );
 
   const fromDate = format(subDays(new Date(), days), 'MMM d');
   const toDate   = format(new Date(), 'MMM d');
 
   const correlations = useMemo(() => {
-    if (!congressTrades || insiderTrades.length === 0) return [];
-    return findCorrelations(insiderTrades, congressTrades);
-  }, [insiderTrades, congressTrades]);
+    if (!watchlistCongressTrades || insiderTrades.length === 0) return [];
+    return findCorrelations(insiderTrades, watchlistCongressTrades);
+  }, [insiderTrades, watchlistCongressTrades]);
 
   return (
     <>
@@ -310,7 +326,7 @@ export default function NewsPage() {
         )}
 
         {/* ── SECTION 1: Watchlist Insider Trades ── */}
-        <SectionHeader title="Watchlist Insider Activity" subtitle="Form 4 / SEDI trades for your watched stocks" />
+        <SectionHeader title="Insider Activity" subtitle="Form 4 / SEDI trades — watchlist + popular stocks · last 90 days" />
 
         {insidersLoading && <FilingsSkeleton />}
 
@@ -380,7 +396,7 @@ export default function NewsPage() {
         {/* ── SECTION 2: Congress Trades ── */}
         <SectionHeader
           title="🏛 Congress Trades"
-          subtitle="STOCK Act disclosures — House + Senate members"
+          subtitle="Latest House member disclosures — updated continuously"
         />
 
         {/* Live data link — always visible */}
@@ -411,7 +427,7 @@ export default function NewsPage() {
         {congressLoading && <FilingsSkeleton />}
 
         {!congressLoading && (!congressTrades || congressTrades.length === 0) && (
-          <EmptyState message="No historical trades on record for your watchlist (pre-2021 data only)." />
+          <EmptyState message="No recent House trades found — data may still be loading." />
         )}
 
         {!congressLoading && congressTrades && congressTrades.length > 0 && (
@@ -465,7 +481,7 @@ export default function NewsPage() {
                       </span>
                       <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: "'Roboto Mono', monospace" }}>{t.amount}</span>
                       <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{t.transactionDate.slice(0,10)}</span>
-                      <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{t.chamber === 'house' ? 'House' : 'Senate'}</span>
+                      <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>House</span>
                     </div>
                   </div>
 

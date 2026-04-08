@@ -22,3 +22,16 @@ export function useCongressTradesForWatchlist(tickers: string[], days = 90) {
     enabled: tickers.length > 0,
   });
 }
+
+/**
+ * Latest N trades across all house members — not filtered by ticker.
+ * Backed by House Stock Watcher (has 2024-2025 data).
+ */
+export function useLatestCongressTrades(limit = 50) {
+  return useQuery({
+    queryKey: ['congress-latest', limit],
+    queryFn:  () => congress.getLatestTrades(limit),
+    staleTime: 6 * 60 * 60 * 1000,
+    retry: 1,
+  });
+}

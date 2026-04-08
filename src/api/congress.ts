@@ -1,7 +1,7 @@
-// Congress trading data via Senate Stock Watcher (GitHub-hosted aggregate)
-// Senate: https://github.com/timothycarambat/senate-stock-watcher-data
-// House: No reliable public data source — returns empty for now
-// Direct fetch from GitHub raw (no proxy needed — CORS open on raw.githubusercontent.com)
+// Congress trading data via two public sources:
+// Senate: Senate Stock Watcher (GitHub) — historical pre-2022
+// House:  House Stock Watcher (S3)      — actively maintained, includes 2024-2025
+// Both sources use CORS-open endpoints (no proxy needed)
 
 export interface CongressTrade {
   chamber: 'house' | 'senate';
@@ -19,8 +19,7 @@ export interface CongressTrade {
   filingUrl: string;
 }
 
-// ── Module-level cache ────────────────────────────────────────────────────────
-// Fetch the senate aggregate once per session (~3MB), then filter client-side.
+// ── Module-level caches ───────────────────────────────────────────────────────
 
 interface SenateEntry {
   ticker: string;
@@ -28,11 +27,20 @@ interface SenateEntry {
   transactions: any[];
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type HouseEntry = any;
+
 let senateCache: SenateEntry[] | null = null;
 let senateFetchPromise: Promise<void> | null = null;
+let houseCache: HouseEntry[] | null = null;
+let houseFetchPromise: Promise<void> | null = null;
 
 const SENATE_URL =
   'https://raw.githubusercontent.com/timothycarambat/senate-stock-watcher-data/master/aggregate/all_ticker_transactions.json';
+
+// House Stock Watcher — S3 bucket updated continuously with 2024-2025 data
+const HOUSE_URL =
+  'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json';
 
 async function ensureSenateData(): Promise<void> {
   if (senateCache) return;
@@ -46,11 +54,30 @@ async function ensureSenateData(): Promise<void> {
         senateCache = Array.isArray(data) ? data : [];
       })
       .catch(() => {
-        senateCache = [];  // on error cache empty so we don't retry forever
+        senateCache = [];
         senateFetchPromise = null;
       });
   }
   await senateFetchPromise;
+}
+
+async function ensureHouseData(): Promise<void> {
+  if (houseCache) return;
+  if (!houseFetchPromise) {
+    houseFetchPromise = fetch(HOUSE_URL)
+      .then(r => {
+        if (!r.ok) throw new Error(`House data ${r.status}`);
+        return r.json();
+      })
+      .then((data: HouseEntry[]) => {
+        houseCache = Array.isArray(data) ? data : [];
+      })
+      .catch(() => {
+        houseCache = [];
+        houseFetchPromise = null;
+      });
+  }
+  await houseFetchPromise;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -121,9 +148,72 @@ async function fetchSenate(ticker: string): Promise<CongressTrade[]> {
   return trades;
 }
 
-// House data: no reliable public source currently available
-async function fetchHouse(_ticker: string): Promise<CongressTrade[]> {
-  return [];
+// ── House helpers ─────────────────────────────────────────────────────────────
+
+function normalizeHouseType(t: string): CongressTrade['type'] {
+  const lower = (t ?? '').toLowerCase();
+  if (lower.includes('purchase') || lower === 'buy') return 'purchase';
+  if (lower.includes('sale') || lower.includes('sell')) return 'sale';
+  if (lower.includes('exchange')) return 'exchange';
+  return 'other';
+}
+
+function mapHouseEntry(r: HouseEntry): CongressTrade | null {
+  const type = normalizeHouseType(r.type ?? '');
+  if (type === 'other') return null;
+  const ticker = (r.ticker ?? '').replace(/^--$/, '').trim().toUpperCase();
+  if (!ticker || ticker.length > 8) return null;
+  const txDate = normalizeDate(r.transaction_date);
+  if (!txDate) return null;
+
+  // Parse representative name — may include district like "Jane Smith (CA-11)"
+  const repRaw: string = r.representative ?? '';
+  const nameMatch = repRaw.match(/^(.*?)\s*\(/);
+  const member = nameMatch ? nameMatch[1].trim() : repRaw.trim();
+  if (!member) return null;
+
+  return {
+    chamber:          'house',
+    member,
+    party:            r.party ?? '',
+    state:            r.state ?? (r.district ? r.district.split('-')[0] : ''),
+    district:         r.district ?? '',
+    ticker,
+    assetDescription: r.asset_description ?? '',
+    type,
+    amount:           r.amount ?? '',
+    amountMin:        parseAmountMin(r.amount ?? ''),
+    transactionDate:  txDate,
+    disclosureDate:   normalizeDate(r.disclosure_date ?? r.disclosure_year ?? ''),
+    filingUrl:        r.link ?? '',
+  };
+}
+
+async function fetchHouse(ticker: string): Promise<CongressTrade[]> {
+  await ensureHouseData();
+  if (!houseCache) return [];
+  const clean = ticker.replace(/\.(TO|TSX)$/i, '').toUpperCase();
+  const results: CongressTrade[] = [];
+  for (const r of houseCache) {
+    const t = (r.ticker ?? '').toUpperCase();
+    if (t !== clean) continue;
+    const mapped = mapHouseEntry(r);
+    if (mapped) results.push(mapped);
+  }
+  return results;
+}
+
+/** Latest N trades across ALL house members — for the market-wide feed */
+async function fetchHouseLatest(limit = 50): Promise<CongressTrade[]> {
+  await ensureHouseData();
+  if (!houseCache) return [];
+  const results: CongressTrade[] = [];
+  for (const r of houseCache) {
+    const mapped = mapHouseEntry(r);
+    if (mapped) results.push(mapped);
+  }
+  results.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
+  return results.slice(0, limit);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -156,5 +246,13 @@ export const congress = {
       .flat()
       .filter(t => t.transactionDate && new Date(t.transactionDate) >= cutoff)
       .sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
+  },
+
+  /**
+   * Latest N trades across ALL house members regardless of ticker.
+   * Uses House Stock Watcher (updated with 2024-2025 data).
+   */
+  getLatestTrades: async (limit = 50): Promise<CongressTrade[]> => {
+    return fetchHouseLatest(limit);
   },
 };
