@@ -36,6 +36,16 @@ export default defineConfig({
         rewrite: (path: string) => path.replace(/^\/api\/edgar/, ''),
         headers: { 'User-Agent': 'MoneyTalks admin@moneytalks.app' },
       },
+      '/api/house-trades': {
+        target: 'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com',
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/api\/house-trades/, ''),
+      },
+      '/api/senate-trades': {
+        target: 'https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com',
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/api\/senate-trades/, ''),
+      },
     },
   },
 })

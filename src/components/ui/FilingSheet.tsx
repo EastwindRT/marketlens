@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ExternalLink, X, Sparkles, RotateCcw } from 'lucide-react';
 import type { MarketFiling } from '../../api/edgar';
-import { useAiSettingsStore, type AiProvider, PROVIDER_META } from '../../store/aiSettingsStore';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -38,145 +37,6 @@ const FORM_INFO: Record<string, { label: string; color: string; bg: string; bord
   '13G':   { label: '13G',   color: '#2D6BFF', bg: 'rgba(45,107,255,0.12)', border: 'rgba(45,107,255,0.3)',  description: 'Passive investor — 5%+ ownership stake, no intent to control' },
   '13G/A': { label: '13G/A', color: '#2D6BFF', bg: 'rgba(45,107,255,0.12)', border: 'rgba(45,107,255,0.3)',  description: 'Amendment to passive 13G — position size has changed' },
 };
-
-// ── Key setup panel ────────────────────────────────────────────────────────
-
-function KeySetupPanel({
-  provider, apiKey,
-  onProviderChange, onApiKeyChange, onSave,
-}: {
-  provider: AiProvider;
-  apiKey: string;
-  onProviderChange: (p: AiProvider) => void;
-  onApiKeyChange: (k: string) => void;
-  onSave: () => void;
-}) {
-  const [draft, setDraft] = useState(apiKey);
-  const [visible, setVisible] = useState(false);
-  const meta = PROVIDER_META[provider];
-
-  // Reset draft when provider changes
-  const handleProviderChange = (p: AiProvider) => {
-    setDraft('');
-    onProviderChange(p);
-  };
-
-  return (
-    <div style={{
-      padding: 14, borderRadius: 12, marginBottom: 12,
-      background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
-    }}>
-      <p style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
-        Choose AI Provider
-      </p>
-
-      {/* Provider pills */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-        {(['groq', 'anthropic', 'openai'] as AiProvider[]).map((p) => {
-          const m = PROVIDER_META[p];
-          const active = provider === p;
-          return (
-            <button
-              key={p}
-              onClick={() => handleProviderChange(p)}
-              style={{
-                flex: 1, padding: '8px 4px', borderRadius: 8, fontSize: 11, fontWeight: 600,
-                cursor: 'pointer', border: `1px solid ${active ? 'var(--accent-blue)' : 'var(--border-default)'}`,
-                background: active ? 'var(--accent-blue)' : 'var(--bg-surface)',
-                color: active ? '#fff' : 'var(--text-secondary)',
-                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
-                transition: 'all 150ms',
-              }}
-            >
-              <span>{m.label}</span>
-              {m.badge && (
-                <span style={{
-                  fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
-                  background: active ? 'rgba(255,255,255,0.25)' : m.badgeColor,
-                  color: '#fff', letterSpacing: '0.05em',
-                }}>
-                  {m.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Groq callout — shown only when Groq selected */}
-      {provider === 'groq' && (
-        <div style={{
-          padding: '10px 12px', borderRadius: 8, marginBottom: 10,
-          background: 'rgba(5,177,105,0.08)', border: '1px solid rgba(5,177,105,0.25)',
-        }}>
-          <p style={{ margin: '0 0 3px', fontSize: 12, fontWeight: 600, color: '#05B169' }}>
-            ✦ 100% Free — No credit card required
-          </p>
-          <p style={{ margin: '0 0 6px', fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-            Groq runs Llama 3.3 70B at incredible speed. Free tier gives 30 requests/min — more than enough.
-          </p>
-          <a
-            href="https://console.groq.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ fontSize: 11, color: '#05B169', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-          >
-            Get your free key at console.groq.com <ExternalLink size={10} />
-          </a>
-        </div>
-      )}
-
-      {/* Key input */}
-      <div style={{ position: 'relative', marginBottom: 10 }}>
-        <input
-          type={visible ? 'text' : 'password'}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={meta.placeholder}
-          style={{
-            width: '100%', padding: '9px 44px 9px 10px', borderRadius: 8, boxSizing: 'border-box',
-            background: 'var(--bg-surface)', border: '1px solid var(--border-default)',
-            color: 'var(--text-primary)', fontSize: 12,
-            fontFamily: "'Roboto Mono', monospace", outline: 'none',
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && draft.trim()) {
-              onApiKeyChange(draft.trim());
-              onSave();
-            }
-          }}
-        />
-        <button
-          onClick={() => setVisible((v) => !v)}
-          style={{
-            position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
-            background: 'none', border: 'none', cursor: 'pointer',
-            color: 'var(--text-tertiary)', fontSize: 11, padding: 2,
-          }}
-        >
-          {visible ? 'hide' : 'show'}
-        </button>
-      </div>
-
-      <p style={{ margin: '0 0 10px', fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.4 }}>
-        Stored in your browser only. Sent to this app's server for the analysis call. Never shared.
-      </p>
-
-      <button
-        disabled={!draft.trim()}
-        onClick={() => { onApiKeyChange(draft.trim()); onSave(); }}
-        style={{
-          width: '100%', padding: '10px 0', borderRadius: 8, fontSize: 13, fontWeight: 600,
-          cursor: draft.trim() ? 'pointer' : 'not-allowed', border: 'none',
-          background: draft.trim() ? 'var(--accent-blue)' : 'var(--bg-hover)',
-          color: draft.trim() ? '#fff' : 'var(--text-tertiary)',
-        }}
-      >
-        Save &amp; Analyze
-      </button>
-    </div>
-  );
-}
 
 // ── Analysis result card ───────────────────────────────────────────────────
 
@@ -225,9 +85,9 @@ function AnalysisCard({ analysis, onReset }: { analysis: FilingAnalysis; onReset
       {/* Ownership stats */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
         {[
-          { label: 'Stake',   value: analysis.ownership.currentStake },
-          { label: 'Shares',  value: analysis.ownership.shareCount },
-          { label: 'Change',  value: analysis.ownership.changeFromPrior },
+          { label: 'Stake',  value: analysis.ownership.currentStake },
+          { label: 'Shares', value: analysis.ownership.shareCount },
+          { label: 'Change', value: analysis.ownership.changeFromPrior },
         ].map(({ label, value }) => (
           <div key={label} style={{
             padding: '10px 10px 8px', borderRadius: 10,
@@ -274,9 +134,9 @@ function AnalysisCard({ analysis, onReset }: { analysis: FilingAnalysis; onReset
         <div style={{
           padding: '11px 12px', borderRadius: 10, marginBottom: 10,
           background: 'var(--bg-elevated)',
-          borderLeft: `3px solid ${sig.color}`,
           border: `1px solid var(--border-subtle)`,
           borderLeftColor: sig.color,
+          borderLeftWidth: 3,
         }}>
           <p style={{ margin: '0 0 4px', fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             Key Quote
@@ -328,17 +188,14 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
     return () => window.removeEventListener('keydown', handler);
   }, [filing, onClose]);
 
-  const { provider, apiKey, setProvider, setApiKey } = useAiSettingsStore();
-  const [showKeySetup, setShowKeySetup] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<FilingAnalysis | null>(null);
 
-  // Reset analysis state when a new filing is opened
+  // Reset when a new filing is opened
   useEffect(() => {
     setAnalysis(null);
     setError(null);
-    setShowKeySetup(false);
     setLoading(false);
   }, [filing?.accessionNo]);
 
@@ -354,11 +211,8 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
     try {
       const res = await fetch('/api/analyze-filing', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-ai-key': apiKey,
-        },
-        body: JSON.stringify({ edgarUrl: filing.edgarUrl, provider }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ edgarUrl: filing.edgarUrl }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? `Server error ${res.status}`);
@@ -367,14 +221,6 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
-    }
-  }
-
-  function handleAnalyzeClick() {
-    if (!apiKey) {
-      setShowKeySetup(true);
-    } else {
-      runAnalysis();
     }
   }
 
@@ -484,21 +330,10 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
           </div>
         )}
 
-        {/* ── AI Analysis ──────────────────────────────────────────────────── */}
+        {/* ── AI Analysis ─────────────────────────────────────────────── */}
         <div style={{ marginBottom: 16 }}>
 
-          {/* Key setup — shown when no key stored */}
-          {showKeySetup && !apiKey && (
-            <KeySetupPanel
-              provider={provider}
-              apiKey={apiKey}
-              onProviderChange={setProvider}
-              onApiKeyChange={setApiKey}
-              onSave={() => { setShowKeySetup(false); runAnalysis(); }}
-            />
-          )}
-
-          {/* Analysis result */}
+          {/* Result card */}
           {analysis && (
             <AnalysisCard analysis={analysis} onReset={() => setAnalysis(null)} />
           )}
@@ -512,22 +347,22 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
               <p style={{ margin: '0 0 3px', fontSize: 11, fontWeight: 700, color: '#F6465D', textTransform: 'uppercase' }}>Analysis Failed</p>
               <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--text-secondary)' }}>{error}</p>
               <button
-                onClick={() => { setError(null); setShowKeySetup(true); }}
+                onClick={() => { setError(null); runAnalysis(); }}
                 style={{
                   fontSize: 11, color: '#F6465D', background: 'none',
                   border: '1px solid rgba(246,70,93,0.4)', borderRadius: 6,
                   padding: '4px 10px', cursor: 'pointer',
                 }}
               >
-                Update API Key
+                Retry
               </button>
             </div>
           )}
 
-          {/* Analyze button — hidden while loading or when result shown */}
+          {/* Analyze button */}
           {!analysis && !loading && (
             <button
-              onClick={handleAnalyzeClick}
+              onClick={runAnalysis}
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
                 width: '100%', padding: '12px 16px', borderRadius: 12, marginBottom: 10,
@@ -539,23 +374,11 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
             >
               <Sparkles size={14} color="var(--accent-blue-light)" />
               Analyze with AI
-              {apiKey && (
-                <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>
-                  · {PROVIDER_META[provider].label}
-                </span>
-              )}
-              {!apiKey && provider === 'groq' && (
-                <span style={{
-                  fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 4, marginLeft: 4,
-                  background: '#05B169', color: '#fff', letterSpacing: '0.05em',
-                }}>
-                  FREE
-                </span>
-              )}
+              <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>· Llama 3.3 70B</span>
             </button>
           )}
 
-          {/* Loading spinner */}
+          {/* Loading */}
           {loading && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px',
@@ -573,19 +396,6 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
                 <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)' }}>Fetching EDGAR document · running quant analysis</p>
               </div>
             </div>
-          )}
-
-          {/* Change provider link */}
-          {apiKey && !loading && !showKeySetup && (
-            <p style={{ margin: '0 0 14px', fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center' }}>
-              Using {PROVIDER_META[provider].label} · {PROVIDER_META[provider].model} ·{' '}
-              <button
-                onClick={() => setShowKeySetup(true)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-blue-light)', fontSize: 11, padding: 0 }}
-              >
-                change
-              </button>
-            </p>
           )}
         </div>
 

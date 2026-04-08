@@ -303,22 +303,23 @@ async function callAI(provider, apiKey, filingText) {
 }
 
 app.post('/api/analyze-filing', async (req, res) => {
-  const { edgarUrl, provider = 'anthropic' } = req.body ?? {};
-  const apiKey = req.headers['x-ai-key'];
+  const { edgarUrl } = req.body ?? {};
 
   if (!edgarUrl || typeof edgarUrl !== 'string')
     return res.status(400).json({ error: 'Missing edgarUrl' });
-  if (!['groq', 'anthropic', 'openai'].includes(provider))
-    return res.status(400).json({ error: 'provider must be "groq", "anthropic", or "openai"' });
-  if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10)
-    return res.status(401).json({ error: 'Missing or invalid x-ai-key header' });
+
   // SSRF guard — only allow SEC EDGAR URLs
   if (!edgarUrl.startsWith('https://www.sec.gov/'))
     return res.status(400).json({ error: 'edgarUrl must point to www.sec.gov' });
 
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    return res.status(503).json({ error: 'AI analysis not configured — ask your admin to set GROQ_API_KEY.' });
+  }
+
   try {
     const filingText = await fetchEdgarFilingText(edgarUrl);
-    const rawJson = await callAI(provider, apiKey.trim(), filingText);
+    const rawJson = await callAI('groq', apiKey, filingText);
     // Strip markdown fences if model wrapped despite instructions
     const cleaned = rawJson.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim();
     const analysis = JSON.parse(cleaned);
