@@ -56,21 +56,143 @@ app.use('/api/edgar', createProxyMiddleware({
   on: { proxyReq: (pr) => { pr.setHeader('User-Agent', SEC_UA); pr.setHeader('Accept', 'application/json'); } },
 }));
 
-// Proxy: Congress trading data (House + Senate Stock Watcher S3 buckets)
-app.use('/api/house-trades', createProxyMiddleware({
-  target: 'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com',
-  changeOrigin: true,
-  pathRewrite: { '^/api/house-trades': '' },
-}));
-
-app.use('/api/senate-trades', createProxyMiddleware({
-  target: 'https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com',
-  changeOrigin: true,
-  pathRewrite: { '^/api/senate-trades': '' },
-}));
-
 // ── AI Filing Analysis ────────────────────────────────────────────────────
 const https = require('https');
+
+// ── Server-side data fetchers (avoid CORS / 403 from client) ─────────────
+
+function httpsGet(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { 'User-Agent': 'MoneyTalks/1.0', ...headers } }, (res) => {
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        return httpsGet(res.headers.location, headers).then(resolve).catch(reject);
+      }
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => {
+        if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+        resolve(body);
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(20000, () => { req.destroy(); reject(new Error('Timeout')); });
+  });
+}
+
+// In-memory cache
+let houseCache = null;
+let houseLastFetch = 0;
+const HOUSE_CACHE_TTL = 60 * 60 * 1000; // 1h
+
+const HOUSE_RAW_URL = 'https://raw.githubusercontent.com/house-stock-watcher/house-stock-watcher-data/master/all_transactions.json';
+
+app.get('/api/latest-congress', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (!houseCache || now - houseLastFetch > HOUSE_CACHE_TTL) {
+      const raw = await httpsGet(HOUSE_RAW_URL);
+      const data = JSON.parse(raw);
+      houseCache = Array.isArray(data) ? data : [];
+      houseLastFetch = now;
+    }
+
+    const limit = Math.min(parseInt(req.query.limit || '60', 10), 200);
+
+    // Normalise and sort
+    const trades = [];
+    for (const r of houseCache) {
+      const type = (r.type || '').toLowerCase();
+      if (!type.includes('purchase') && !type.includes('sale') && !type.includes('sell')) continue;
+      const ticker = (r.ticker || '').trim().toUpperCase();
+      if (!ticker || ticker === '--' || ticker.length > 8) continue;
+      const txDate = r.transaction_date ? normaliseDate(r.transaction_date) : '';
+      if (!txDate) continue;
+      const repRaw = r.representative || '';
+      const nameMatch = repRaw.match(/^(.*?)\s*\(/);
+      const member = nameMatch ? nameMatch[1].trim() : repRaw.trim();
+      if (!member) continue;
+      trades.push({
+        member,
+        party: r.party || '',
+        state: r.state || (r.district ? r.district.split('-')[0] : ''),
+        ticker,
+        assetDescription: r.asset_description || '',
+        type: type.includes('purchase') ? 'purchase' : 'sale',
+        amount: r.amount || '',
+        transactionDate: txDate,
+        disclosureDate: r.disclosure_year ? String(r.disclosure_year) : '',
+        filingUrl: r.link || '',
+        chamber: 'house',
+      });
+    }
+
+    trades.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
+    res.json({ trades: trades.slice(0, limit) });
+  } catch (err) {
+    console.error('[latest-congress]', err.message);
+    res.status(502).json({ error: err.message, trades: [] });
+  }
+});
+
+function normaliseDate(d) {
+  if (!d) return '';
+  const s = String(d);
+  // MM/DD/YYYY
+  if (s.includes('/')) {
+    const [m, dd, yyyy] = s.split('/');
+    if (yyyy && yyyy.length === 4) return `${yyyy}-${m.padStart(2,'0')}-${dd.padStart(2,'0')}`;
+  }
+  return s.slice(0, 10);
+}
+
+// Latest insider filings via SEC EDGAR Form 4 atom feed (all companies, no Finnhub needed)
+let insiderFeedCache = null;
+let insiderFeedLastFetch = 0;
+const INSIDER_FEED_TTL = 30 * 60 * 1000; // 30min
+
+app.get('/api/latest-insiders', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (!insiderFeedCache || now - insiderFeedLastFetch > INSIDER_FEED_TTL) {
+      const url = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&dateb=&owner=include&count=80&output=atom';
+      const xml = await httpsGet(url, { 'User-Agent': 'MoneyTalks admin@moneytalks.app', 'Accept': 'text/xml' });
+
+      // Parse atom XML entries
+      const entries = [];
+      const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+      let m;
+      while ((m = entryRe.exec(xml)) !== null) {
+        const block = m[1];
+        const getTag = (tag) => { const r = new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`); const x = r.exec(block); return x ? x[1].trim() : ''; };
+        const getCat = (label) => { const r = new RegExp(`<category[^>]*label="${label}"[^>]*term="([^"]*)"[^>]*/>`,'i'); const x = r.exec(block); return x ? x[1].trim() : ''; };
+
+        const filedDate = getTag('updated').slice(0, 10);
+        const companyName = getCat('COMPANY NAME');
+        const formType = getCat('FORM TYPE');
+
+        // Extract accession from link href
+        const linkMatch = /<link[^>]*href="([^"]*)"/.exec(block);
+        const filingUrl = linkMatch ? linkMatch[1] : '';
+
+        // Title like: "4 - COMPANY INC (0001234567) (Reporting)"
+        const title = getTag('title');
+        const cikMatch = title.match(/\((\d{10})\)/);
+        const cik = cikMatch ? cikMatch[1] : '';
+
+        if (!companyName || !filedDate) continue;
+        entries.push({ companyName, formType, filedDate, filingUrl, cik });
+      }
+
+      insiderFeedCache = entries;
+      insiderFeedLastFetch = now;
+    }
+
+    res.json({ filings: insiderFeedCache });
+  } catch (err) {
+    console.error('[latest-insiders]', err.message);
+    res.status(502).json({ error: err.message, filings: [] });
+  }
+});
 
 app.use(express.json());
 

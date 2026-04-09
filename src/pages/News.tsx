@@ -118,51 +118,27 @@ interface FlatTrade extends InsiderTransaction {
   tradeType: 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL';
 }
 
-// Popular tickers for the insider feed — kept small to avoid Finnhub rate limits
-const POPULAR_TICKERS = [
-  'AAPL', 'NVDA', 'META', 'GOOGL', 'AMZN',
-  'JPM', 'UNH', 'LLY',
-  'SHOP.TO', 'TD.TO',
-];
+// Latest insider filings from SEC EDGAR Form 4 feed (all companies)
+interface EdgarInsiderFiling {
+  companyName: string;
+  formType: string;
+  filedDate: string;
+  filingUrl: string;
+  cik: string;
+}
 
-function useWatchlistInsiders(symbols: string[], _days: number): {
-  trades: FlatTrade[];
-  loading: boolean;
-} {
-  // Merge watchlist with popular tickers, dedupe
-  const allSymbols = [...new Set([...symbols, ...POPULAR_TICKERS])];
-
-  // Always use 90-day lookback for insiders — trades are infrequent
-  const INSIDER_LOOKBACK_DAYS = 90;
-
-  // Fetch each ticker — React Query dedupes & caches
-  const results = allSymbols.map(sym => {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    return { symbol: sym, q: useInsiderData(sym) };
+function useLatestInsiderFilings() {
+  return useQuery({
+    queryKey: ['latest-insider-filings'],
+    queryFn: async (): Promise<EdgarInsiderFiling[]> => {
+      const res = await fetch('/api/latest-insiders');
+      if (!res.ok) throw new Error(`Insider feed ${res.status}`);
+      const json = await res.json();
+      return json.filings ?? [];
+    },
+    staleTime: 30 * 60 * 1000,
+    retry: 1,
   });
-
-  const loading = results.some(r => r.q.isLoading);
-  const cutoff  = subDays(new Date(), INSIDER_LOOKBACK_DAYS);
-
-  const trades: FlatTrade[] = results.flatMap(({ symbol, q }) => {
-    if (!q.data) return [];
-    return q.data
-      .filter(t => {
-        if (!t.transactionDate || !t.transactionPrice) return false;
-        const type = getInsiderType(t.transactionCode, t.change);
-        if (type === 'GRANT') return false; // skip grants in the feed
-        return new Date(t.transactionDate) >= cutoff;
-      })
-      .map(t => ({
-        ...t,
-        symbol,
-        tradeType: getInsiderType(t.transactionCode, t.change),
-      }));
-  });
-
-  // Sort by date desc, cap at 100 rows
-  trades.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
-  return { trades: trades.slice(0, 100), loading };
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -183,11 +159,12 @@ export default function NewsPage() {
     retry: 1,
   });
 
-  const { trades: insiderTrades, loading: insidersLoading } = useWatchlistInsiders(symbols, days);
+  // Latest Form 4 filings from ALL companies via SEC EDGAR
+  const { data: insiderFilings, isLoading: insidersLoading } = useLatestInsiderFilings();
 
-  // Latest house trades (2024-2025 data) — not filtered by watchlist
+  // Latest house trades via server-side fetch (no CORS/403)
   const { data: congressTrades, isLoading: congressLoading } = useLatestCongressTrades(60);
-  // Keep watchlist congress for confluence signal detection
+  // Watchlist congress only for confluence signals
   const { data: watchlistCongressTrades } = useCongressTradesForWatchlist(
     symbols.map(s => s.replace(/\.TO$/i, '')),
     Math.max(days, 90)
@@ -196,10 +173,27 @@ export default function NewsPage() {
   const fromDate = format(subDays(new Date(), days), 'MMM d');
   const toDate   = format(new Date(), 'MMM d');
 
+  // Confluence signals still use watchlist insider data (ticker-specific)
+  const watchlistSymbols = [...new Set([...symbols, 'AAPL', 'NVDA', 'MSFT'])];
+  const watchlistInsiderResults = watchlistSymbols.map(sym => ({
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    symbol: sym, q: useInsiderData(sym),
+  }));
+  const watchlistInsiderTrades: FlatTrade[] = useMemo(() => {
+    const cutoff = subDays(new Date(), 90);
+    return watchlistInsiderResults.flatMap(({ symbol, q }) => {
+      if (!q.data) return [];
+      return q.data
+        .filter(t => t.transactionDate && t.transactionPrice && new Date(t.transactionDate) >= cutoff && getInsiderType(t.transactionCode, t.change) !== 'GRANT')
+        .map(t => ({ ...t, symbol, tradeType: getInsiderType(t.transactionCode, t.change) }));
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchlistInsiderResults.map(r => r.q.data).join(',')]);
+
   const correlations = useMemo(() => {
-    if (!watchlistCongressTrades || insiderTrades.length === 0) return [];
-    return findCorrelations(insiderTrades, watchlistCongressTrades);
-  }, [insiderTrades, watchlistCongressTrades]);
+    if (!watchlistCongressTrades || watchlistInsiderTrades.length === 0) return [];
+    return findCorrelations(watchlistInsiderTrades, watchlistCongressTrades);
+  }, [watchlistInsiderTrades, watchlistCongressTrades]);
 
   return (
     <>
@@ -329,8 +323,8 @@ export default function NewsPage() {
 
         {/* ── SECTION 1: Watchlist Insider Trades ── */}
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
-          <SectionHeader title="Insider Activity" subtitle="Form 4 / SEDI trades — watchlist + popular stocks · last 90 days" noMargin />
-          {!insidersLoading && insiderTrades.length > 0 && (
+          <SectionHeader title="Insider Activity" subtitle="Latest Form 4 filings — all US companies · SEC EDGAR" noMargin />
+          {!insidersLoading && (insiderFilings?.length ?? 0) > 0 && (
             <button
               onClick={() => setShowInsiderAI(v => !v)}
               style={{
@@ -349,77 +343,22 @@ export default function NewsPage() {
 
         {insidersLoading && <FilingsSkeleton />}
 
-        {showInsiderAI && !insidersLoading && insiderTrades.length > 0 && (
+        {showInsiderAI && !insidersLoading && (insiderFilings?.length ?? 0) > 0 && (
           <FeedAICard
             key="insider-ai"
             endpoint="/api/analyze-insiders"
-            payload={{ symbol: 'MARKET', trades: insiderTrades }}
+            payload={{ symbol: 'MARKET', trades: insiderFilings?.slice(0, 40).map(f => ({ name: f.companyName, transactionDate: f.filedDate, transactionCode: 'P', change: 1, transactionPrice: 0 })) ?? [] }}
             label="Quant Insider Analysis"
             onClose={() => setShowInsiderAI(false)}
           />
         )}
 
-        {!insidersLoading && insiderTrades.length === 0 && (
-          <EmptyState message={`No insider trades in the last ${days} days for your watchlist.`} />
+        {!insidersLoading && (!insiderFilings || insiderFilings.length === 0) && (
+          <EmptyState message="Could not load insider feed — EDGAR may be temporarily unavailable." />
         )}
 
-        {!insidersLoading && insiderTrades.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 32 }}>
-            {insiderTrades.map((t, i) => {
-              const ts = typeStyle(t.tradeType);
-              const isCA = isTSXTicker(t.symbol);
-              const currency = isCA ? 'CAD' : 'USD';
-              const value = t.transactionPrice * Math.abs(t.change);
-              const baseTicker = t.symbol.replace(/\.TO$/i, '');
-              return (
-                <button
-                  key={`${t.symbol}-${t.transactionDate}-${t.name}-${i}`}
-                  onClick={() => navigate(`/stock/${t.symbol}`)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
-                    borderRadius: 12, textDecoration: 'none', textAlign: 'left', width: '100%',
-                    background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                    transition: 'border-color 150ms', cursor: 'pointer',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
-                  onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                >
-                  {/* Ticker */}
-                  <span style={{
-                    fontSize: 11, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-                    flexShrink: 0, background: 'var(--bg-hover)',
-                    color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace",
-                    minWidth: 52, textAlign: 'center',
-                  }}>
-                    {baseTicker}
-                  </span>
-
-                  {/* Type badge */}
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6, flexShrink: 0,
-                    background: ts.bg, color: ts.color, border: `1px solid ${ts.border}`,
-                    fontFamily: "'Roboto Mono', monospace",
-                  }}>
-                    {t.tradeType === 'TAX_SELL' ? 'F-SELL' : t.tradeType}
-                  </span>
-
-                  {/* Name + details */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{
-                      margin: '0 0 1px', fontSize: 13, fontWeight: 600,
-                      color: 'var(--text-primary)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
-                      {t.name}
-                    </p>
-                    <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
-                      {Math.abs(t.change).toLocaleString()} shares · {formatPrice(t.transactionPrice, currency as any)} · {formatLargeNumber(value)} · {t.transactionDate.slice(0, 10)}
-                    </p>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+        {!insidersLoading && insiderFilings && insiderFilings.length > 0 && (
+          <InsiderFilingsFeed filings={insiderFilings} />
         )}
 
         {/* ── SECTION 2: Congress Trades ── */}
@@ -488,71 +427,7 @@ export default function NewsPage() {
         )}
 
         {!congressLoading && congressTrades && congressTrades.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 32 }}>
-            {congressTrades.map((t: CongressTrade, i: number) => {
-              const isBuy = t.type === 'purchase';
-              const tradeColor = isBuy ? '#05B169' : t.type === 'sale' ? '#F6465D' : 'var(--text-secondary)';
-              const tradeBg   = isBuy ? 'rgba(5,177,105,0.1)' : t.type === 'sale' ? 'rgba(246,70,93,0.1)' : 'var(--bg-hover)';
-              const partyColor = t.party === 'D' ? '#3B82F6' : t.party === 'R' ? '#F6465D' : 'var(--text-tertiary)';
-              const partyBg   = t.party === 'D' ? 'rgba(59,130,246,0.12)' : t.party === 'R' ? 'rgba(246,70,93,0.1)' : 'var(--bg-hover)';
-
-              return (
-                <button
-                  key={`${t.member}-${t.transactionDate}-${t.ticker}-${i}`}
-                  onClick={() => navigate(`/stock/${t.ticker}`)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
-                    borderRadius: 12, textAlign: 'left', width: '100%',
-                    background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                    transition: 'border-color 150ms', cursor: 'pointer',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
-                  onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                >
-                  {/* Ticker */}
-                  <span style={{
-                    fontSize: 11, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-                    background: 'var(--bg-hover)', color: 'var(--text-primary)',
-                    fontFamily: "'Roboto Mono', monospace", minWidth: 52, textAlign: 'center', flexShrink: 0,
-                  }}>
-                    {t.ticker}
-                  </span>
-
-                  {/* Party */}
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
-                    background: partyBg, color: partyColor, fontFamily: "'Roboto Mono', monospace",
-                    minWidth: 22, textAlign: 'center', flexShrink: 0,
-                  }}>
-                    {t.party || '?'}
-                  </span>
-
-                  {/* Member + details */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ margin: '0 0 1px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {t.member}{t.state ? ` (${t.state})` : ''}
-                    </p>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: tradeBg, color: tradeColor, textTransform: 'uppercase', fontFamily: "'Roboto Mono', monospace" }}>
-                        {t.type}
-                      </span>
-                      <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: "'Roboto Mono', monospace" }}>{t.amount}</span>
-                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{t.transactionDate.slice(0,10)}</span>
-                      <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>House</span>
-                    </div>
-                  </div>
-
-                  {t.filingUrl && (
-                    <a href={t.filingUrl} target="_blank" rel="noopener noreferrer"
-                      onClick={e => e.stopPropagation()}
-                      style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>
-                      <ExternalLink size={13} />
-                    </a>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          <CongressFeed trades={congressTrades} onNavigate={(ticker) => navigate(`/stock/${ticker}`)} />
         )}
 
         {/* ── SECTION 3: 13D / 13G Major Filings ── */}
@@ -847,6 +722,176 @@ function FeedAICard({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Insider EDGAR Feed with per-row Ask AI ────────────────────────────────────
+
+function InsiderFilingsFeed({ filings }: { filings: EdgarInsiderFiling[] }) {
+  const [activeAI, setActiveAI] = useState<number | null>(null);
+  const navigate = useNavigate();
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 32 }}>
+      {filings.slice(0, 60).map((f, i) => (
+        <div key={`${f.cik}-${f.filedDate}-${i}`}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+            borderRadius: activeAI === i ? '12px 12px 0 0' : 12,
+            background: 'var(--bg-elevated)',
+            border: `1px solid ${activeAI === i ? 'var(--accent-blue)' : 'var(--border-subtle)'}`,
+            borderBottom: activeAI === i ? 'none' : undefined,
+            transition: 'border-color 150ms',
+          }}>
+            {/* Form type badge */}
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6, flexShrink: 0,
+              background: 'rgba(45,107,255,0.1)', color: 'var(--accent-blue-light)',
+              border: '1px solid rgba(45,107,255,0.25)', fontFamily: "'Roboto Mono', monospace",
+            }}>
+              {f.formType || '4'}
+            </span>
+
+            {/* Company name */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {f.companyName}
+              </p>
+              <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
+                Filed {f.filedDate}
+              </p>
+            </div>
+
+            {/* Ask AI */}
+            <button
+              onClick={(e) => { e.stopPropagation(); setActiveAI(activeAI === i ? null : i); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
+                padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                background: activeAI === i ? 'rgba(22,82,240,0.15)' : 'var(--bg-hover)',
+                border: activeAI === i ? '1px solid rgba(45,107,255,0.4)' : '1px solid var(--border-default)',
+                color: activeAI === i ? 'var(--accent-blue-light)' : 'var(--text-tertiary)',
+                fontSize: 11, fontWeight: 600, transition: 'all 150ms',
+              }}
+            >
+              <Sparkles size={10} /> AI
+            </button>
+
+            {/* View on EDGAR */}
+            {f.filingUrl && (
+              <a href={f.filingUrl} target="_blank" rel="noopener noreferrer"
+                onClick={e => e.stopPropagation()}
+                style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>
+                <ExternalLink size={13} />
+              </a>
+            )}
+          </div>
+
+          {/* Per-row AI card */}
+          {activeAI === i && (
+            <div style={{ borderRadius: '0 0 12px 12px', border: '1px solid var(--accent-blue)', borderTop: 'none', overflow: 'hidden' }}>
+              <FeedAICard
+                key={`insider-row-ai-${i}`}
+                endpoint="/api/analyze-insiders"
+                payload={{ symbol: f.companyName, trades: [{ name: f.companyName, transactionDate: f.filedDate, transactionCode: 'P', change: 1, transactionPrice: 0, title: 'Insider', share: 1 }] }}
+                label={`AI Analysis — ${f.companyName}`}
+                onClose={() => setActiveAI(null)}
+              />
+            </div>
+          )}
+        </div>
+      ))}
+      <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+        Latest Form 4 filings across all US companies · Source: SEC EDGAR
+      </p>
+    </div>
+  );
+}
+
+// ── Congress Feed with per-row Ask AI ─────────────────────────────────────────
+
+function CongressFeed({ trades, onNavigate }: { trades: CongressTrade[]; onNavigate: (ticker: string) => void }) {
+  const [activeAI, setActiveAI] = useState<number | null>(null);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 32 }}>
+      {trades.map((t, i) => {
+        const isBuy     = t.type === 'purchase';
+        const tradeColor = isBuy ? '#05B169' : '#F6465D';
+        const tradeBg   = isBuy ? 'rgba(5,177,105,0.1)' : 'rgba(246,70,93,0.1)';
+        const partyColor = t.party === 'D' ? '#3B82F6' : t.party === 'R' ? '#F6465D' : 'var(--text-tertiary)';
+        const partyBg   = t.party === 'D' ? 'rgba(59,130,246,0.12)' : t.party === 'R' ? 'rgba(246,70,93,0.1)' : 'var(--bg-hover)';
+
+        return (
+          <div key={`${t.member}-${t.transactionDate}-${t.ticker}-${i}`}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+              borderRadius: activeAI === i ? '12px 12px 0 0' : 12,
+              background: 'var(--bg-elevated)',
+              border: `1px solid ${activeAI === i ? 'var(--accent-blue)' : 'var(--border-subtle)'}`,
+              borderBottom: activeAI === i ? 'none' : undefined,
+              cursor: 'pointer', transition: 'border-color 150ms',
+            }}
+              onClick={() => onNavigate(t.ticker)}
+            >
+              <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 7px', borderRadius: 6, background: 'var(--bg-hover)', color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace", minWidth: 52, textAlign: 'center', flexShrink: 0 }}>
+                {t.ticker}
+              </span>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: partyBg, color: partyColor, fontFamily: "'Roboto Mono', monospace", minWidth: 22, textAlign: 'center', flexShrink: 0 }}>
+                {t.party || '?'}
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ margin: '0 0 1px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {t.member}{t.state ? ` (${t.state})` : ''}
+                </p>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: tradeBg, color: tradeColor, textTransform: 'uppercase', fontFamily: "'Roboto Mono', monospace" }}>{t.type}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: "'Roboto Mono', monospace" }}>{t.amount}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{t.transactionDate.slice(0,10)}</span>
+                </div>
+              </div>
+
+              {/* Ask AI */}
+              <button
+                onClick={(e) => { e.stopPropagation(); setActiveAI(activeAI === i ? null : i); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
+                  padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                  background: activeAI === i ? 'rgba(22,82,240,0.15)' : 'var(--bg-hover)',
+                  border: activeAI === i ? '1px solid rgba(45,107,255,0.4)' : '1px solid var(--border-default)',
+                  color: activeAI === i ? 'var(--accent-blue-light)' : 'var(--text-tertiary)',
+                  fontSize: 11, fontWeight: 600, transition: 'all 150ms',
+                }}
+              >
+                <Sparkles size={10} /> AI
+              </button>
+
+              {t.filingUrl && (
+                <a href={t.filingUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>
+                  <ExternalLink size={13} />
+                </a>
+              )}
+            </div>
+
+            {/* Per-row AI card */}
+            {activeAI === i && (
+              <div style={{ borderRadius: '0 0 12px 12px', border: '1px solid var(--accent-blue)', borderTop: 'none', overflow: 'hidden' }}>
+                <FeedAICard
+                  key={`congress-row-ai-${i}`}
+                  endpoint="/api/analyze-congress"
+                  payload={{ trades: [t] }}
+                  label={`AI — ${t.member} · ${t.ticker}`}
+                  onClose={() => setActiveAI(null)}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+        House STOCK Act disclosures · Source: House Stock Watcher
+      </p>
     </div>
   );
 }

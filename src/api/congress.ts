@@ -38,8 +38,8 @@ let houseFetchPromise: Promise<void> | null = null;
 const SENATE_URL =
   'https://raw.githubusercontent.com/timothycarambat/senate-stock-watcher-data/master/aggregate/all_ticker_transactions.json';
 
-// House Stock Watcher — proxied via Express to avoid S3 CORS/403 block
-const HOUSE_URL = '/api/house-trades/data/all_transactions.json';
+// House data now fetched server-side via /api/latest-congress
+// (avoids S3 CORS/403 — GitHub raw fetch happens in Node)
 
 async function ensureSenateData(): Promise<void> {
   if (senateCache) return;
@@ -60,23 +60,11 @@ async function ensureSenateData(): Promise<void> {
   await senateFetchPromise;
 }
 
+// House data is now fetched server-side via /api/latest-congress
+// ensureHouseData kept for fetchHouse (ticker-specific) fallback only
 async function ensureHouseData(): Promise<void> {
-  if (houseCache) return;
-  if (!houseFetchPromise) {
-    houseFetchPromise = fetch(HOUSE_URL)
-      .then(r => {
-        if (!r.ok) throw new Error(`House data ${r.status}`);
-        return r.json();
-      })
-      .then((data: HouseEntry[]) => {
-        houseCache = Array.isArray(data) ? data : [];
-      })
-      .catch(() => {
-        houseCache = [];
-        houseFetchPromise = null;
-      });
-  }
-  await houseFetchPromise;
+  // No-op — server-side fetch handles house data
+  houseCache = houseCache ?? [];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -248,10 +236,13 @@ export const congress = {
   },
 
   /**
-   * Latest N trades across ALL house members regardless of ticker.
-   * Uses House Stock Watcher (updated with 2024-2025 data).
+   * Latest N trades across ALL house members — fetched server-side.
+   * Server handles GitHub raw fetch (no CORS/403 issue).
    */
-  getLatestTrades: async (limit = 50): Promise<CongressTrade[]> => {
-    return fetchHouseLatest(limit);
+  getLatestTrades: async (limit = 60): Promise<CongressTrade[]> => {
+    const res = await fetch(`/api/latest-congress?limit=${limit}`);
+    if (!res.ok) throw new Error(`Congress data ${res.status}`);
+    const json = await res.json();
+    return (json.trades ?? []) as CongressTrade[];
   },
 };
