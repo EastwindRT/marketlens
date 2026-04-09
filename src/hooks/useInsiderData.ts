@@ -12,8 +12,8 @@ const TO_DATE   = format(new Date(), 'yyyy-MM-dd');
 
 const hasApiKey = () => !!import.meta.env.VITE_FINNHUB_API_KEY;
 
-// SEC Form 4 codes — purchases, sales, grants, and tax-withholding sells
-const SEC_RELEVANT = ['P', 'S', 'S-', 'A', 'F'];
+// SEC Form 4 codes — open-market purchases and sales only (no grants, awards, or tax withholds)
+const SEC_RELEVANT = ['P', 'S', 'S-'];
 
 /** Full label for each SEC Form 4 transaction code */
 export const SEC_CODE_LABELS: Record<string, string> = {
@@ -126,7 +126,7 @@ export function useInsiderData(symbol: string) {
         const response = await finnhub.getInsiderTransactions(symbol, FROM_DATE, TO_DATE);
         const allData: any[] = response.data || [];
         return allData
-          .filter(t => SEC_RELEVANT.includes(t.transactionCode))
+          .filter(t => SEC_RELEVANT.includes(t.transactionCode) && t.transactionPrice > 0 && Math.abs(t.change ?? t.share ?? 0) > 0)
           .map(t => ({
             ...t,
             rawCode:    t.transactionCode,
