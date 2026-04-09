@@ -84,14 +84,17 @@ let houseCache = null;
 let houseLastFetch = 0;
 const HOUSE_CACHE_TTL = 60 * 60 * 1000; // 1h
 
-const HOUSE_RAW_URL = 'https://raw.githubusercontent.com/house-stock-watcher/house-stock-watcher-data/master/all_transactions.json';
+// housestockwatcher.com public API — returns paginated JSON, page_size up to 500
+const HOUSE_API_URL = 'https://housestockwatcher.com/api?page_size=500';
 
 app.get('/api/latest-congress', async (req, res) => {
   try {
     const now = Date.now();
     if (!houseCache || now - houseLastFetch > HOUSE_CACHE_TTL) {
-      const raw = await httpsGet(HOUSE_RAW_URL);
-      const data = JSON.parse(raw);
+      const raw = await httpsGet(HOUSE_API_URL);
+      const json = JSON.parse(raw);
+      // API returns { data: [...] } or plain array
+      const data = Array.isArray(json) ? json : (json.data ?? []);
       houseCache = Array.isArray(data) ? data : [];
       houseLastFetch = now;
     }
@@ -167,8 +170,9 @@ app.get('/api/latest-insiders', async (req, res) => {
         const getCat = (label) => { const r = new RegExp(`<category[^>]*label="${label}"[^>]*term="([^"]*)"[^>]*/>`,'i'); const x = r.exec(block); return x ? x[1].trim() : ''; };
 
         const filedDate = getTag('updated').slice(0, 10);
-        const companyName = getCat('COMPANY NAME');
-        const formType = getCat('FORM TYPE');
+        // EDGAR atom uses lowercase labels: "company name", "form type"
+        const companyName = getCat('company name');
+        const formType    = getCat('form type') || '4';
 
         // Extract accession from link href
         const linkMatch = /<link[^>]*href="([^"]*)"/.exec(block);
@@ -179,8 +183,11 @@ app.get('/api/latest-insiders', async (req, res) => {
         const cikMatch = title.match(/\((\d{10})\)/);
         const cik = cikMatch ? cikMatch[1] : '';
 
-        if (!companyName || !filedDate) continue;
-        entries.push({ companyName, formType, filedDate, filingUrl, cik });
+        // Fall back to parsing company name from title if category missing
+        const resolvedName = companyName || (title.replace(/^\d+\/?\w*\s*-\s*/, '').split('(')[0].trim());
+
+        if (!resolvedName || !filedDate) continue;
+        entries.push({ companyName: resolvedName, formType, filedDate, filingUrl, cik });
       }
 
       insiderFeedCache = entries;
