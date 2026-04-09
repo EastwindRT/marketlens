@@ -63,7 +63,7 @@ const https = require('https');
 
 function httpsGet(url, headers = {}) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': 'MoneyTalks/1.0', ...headers } }, (res) => {
+    const req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', ...headers } }, (res) => {
       if (res.statusCode === 301 || res.statusCode === 302) {
         return httpsGet(res.headers.location, headers).then(resolve).catch(reject);
       }
@@ -84,48 +84,56 @@ let houseCache = null;
 let houseLastFetch = 0;
 const HOUSE_CACHE_TTL = 60 * 60 * 1000; // 1h
 
-// housestockwatcher.com public API — returns paginated JSON, page_size up to 500
-const HOUSE_API_URL = 'https://housestockwatcher.com/api?page_size=500';
+// Quiver Quant free API — real-time congress trades
+// Requires a 2-step session: first fetch homepage for cookies, then fetch data
+const CONGRESS_API_URL = 'https://api.quiverquant.com/beta/live/congresstrading';
+
+async function fetchCongressData() {
+  return httpsGet(CONGRESS_API_URL, {
+    'Authorization': 'Bearer public',
+    'Accept': 'application/json, text/plain, */*',
+  });
+}
 
 app.get('/api/latest-congress', async (req, res) => {
   try {
     const now = Date.now();
     if (!houseCache || now - houseLastFetch > HOUSE_CACHE_TTL) {
-      const raw = await httpsGet(HOUSE_API_URL);
-      const json = JSON.parse(raw);
-      // API returns { data: [...] } or plain array
-      const data = Array.isArray(json) ? json : (json.data ?? []);
+      const raw = await fetchCongressData();
+      const data = JSON.parse(raw);
       houseCache = Array.isArray(data) ? data : [];
       houseLastFetch = now;
     }
 
     const limit = Math.min(parseInt(req.query.limit || '60', 10), 200);
 
-    // Normalise and sort
+    // Normalise Quiver Quant format and sort
+    // Fields: Representative, House, ReportDate, TransactionDate, Ticker, Transaction, Range, Amount, Party
     const trades = [];
     for (const r of houseCache) {
-      const type = (r.type || '').toLowerCase();
-      if (!type.includes('purchase') && !type.includes('sale') && !type.includes('sell')) continue;
-      const ticker = (r.ticker || '').trim().toUpperCase();
+      const txRaw = (r.Transaction || '').toLowerCase();
+      if (!txRaw.includes('purchase') && !txRaw.includes('sale') && !txRaw.includes('sell')) continue;
+      const ticker = (r.Ticker || '').trim().toUpperCase();
       if (!ticker || ticker === '--' || ticker.length > 8) continue;
-      const txDate = r.transaction_date ? normaliseDate(r.transaction_date) : '';
+      // Already in YYYY-MM-DD format from Quiver Quant
+      const txDate = r.TransactionDate ? String(r.TransactionDate).slice(0, 10) : '';
       if (!txDate) continue;
-      const repRaw = r.representative || '';
-      const nameMatch = repRaw.match(/^(.*?)\s*\(/);
-      const member = nameMatch ? nameMatch[1].trim() : repRaw.trim();
+      const member = (r.Representative || '').trim();
       if (!member) continue;
+      const chamber = (r.House || '').toLowerCase().includes('senate') ? 'senate' : 'house';
       trades.push({
         member,
-        party: r.party || '',
-        state: r.state || (r.district ? r.district.split('-')[0] : ''),
+        party: r.Party || '',
+        state: '',
         ticker,
-        assetDescription: r.asset_description || '',
-        type: type.includes('purchase') ? 'purchase' : 'sale',
-        amount: r.amount || '',
+        assetDescription: r.Description || '',
+        type: txRaw.includes('purchase') ? 'purchase' : 'sale',
+        amount: r.Range || (r.Amount ? `$${r.Amount}` : ''),
+        amountMin: parseFloat(r.Amount || '0') || 0,
         transactionDate: txDate,
-        disclosureDate: r.disclosure_year ? String(r.disclosure_year) : '',
-        filingUrl: r.link || '',
-        chamber: 'house',
+        disclosureDate: r.ReportDate ? String(r.ReportDate).slice(0, 10) : '',
+        filingUrl: '',
+        chamber,
       });
     }
 
@@ -161,33 +169,46 @@ app.get('/api/latest-insiders', async (req, res) => {
       const xml = await httpsGet(url, { 'User-Agent': 'MoneyTalks admin@moneytalks.app', 'Accept': 'text/xml' });
 
       // Parse atom XML entries
-      const entries = [];
+      // EDGAR Form 4 feed has alternating entries: (Reporting) = person, (Issuer) = company
+      // We pair them by accession number (same accession, consecutive entries)
+      const rawEntries = [];
       const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
       let m;
       while ((m = entryRe.exec(xml)) !== null) {
         const block = m[1];
         const getTag = (tag) => { const r = new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`); const x = r.exec(block); return x ? x[1].trim() : ''; };
-        const getCat = (label) => { const r = new RegExp(`<category[^>]*label="${label}"[^>]*term="([^"]*)"[^>]*/>`,'i'); const x = r.exec(block); return x ? x[1].trim() : ''; };
-
+        const title = getTag('title');
         const filedDate = getTag('updated').slice(0, 10);
-        // EDGAR atom uses lowercase labels: "company name", "form type"
-        const companyName = getCat('company name');
-        const formType    = getCat('form type') || '4';
-
-        // Extract accession from link href
         const linkMatch = /<link[^>]*href="([^"]*)"/.exec(block);
         const filingUrl = linkMatch ? linkMatch[1] : '';
+        // Accession number from filename: "0001193125-26-148615-index.htm"
+        // Same accession appears for both Reporting and Issuer entries
+        const accMatch = filingUrl.match(/\/(\d{10}-\d{2}-\d+)-index\.htm/);
+        const accession = accMatch ? accMatch[1] : filingUrl;
+        rawEntries.push({ title, filedDate, filingUrl, accession });
+      }
 
-        // Title like: "4 - COMPANY INC (0001234567) (Reporting)"
-        const title = getTag('title');
-        const cikMatch = title.match(/\((\d{10})\)/);
-        const cik = cikMatch ? cikMatch[1] : '';
+      // Build deduplicated filings: one entry per accession, prefer (Issuer) for company name
+      const byAccession = new Map();
+      for (const e of rawEntries) {
+        const isIssuer = e.title.includes('(Issuer)');
+        const isReporting = e.title.includes('(Reporting)');
+        // Extract name: "4 - NAME (CIK) (Role)" → NAME
+        const nameMatch = e.title.match(/^[\d\/A-Z]+\s*-\s*(.*?)\s*\(\d+\)/);
+        const name = nameMatch ? nameMatch[1].trim() : e.title;
 
-        // Fall back to parsing company name from title if category missing
-        const resolvedName = companyName || (title.replace(/^\d+\/?\w*\s*-\s*/, '').split('(')[0].trim());
+        if (!byAccession.has(e.accession)) {
+          byAccession.set(e.accession, { companyName: '', insiderName: '', filedDate: e.filedDate, filingUrl: e.filingUrl });
+        }
+        const rec = byAccession.get(e.accession);
+        if (isIssuer) rec.companyName = name;
+        else if (isReporting) rec.insiderName = name;
+      }
 
-        if (!resolvedName || !filedDate) continue;
-        entries.push({ companyName: resolvedName, formType, filedDate, filingUrl, cik });
+      const entries = [];
+      for (const [, rec] of byAccession) {
+        if (!rec.companyName || !rec.filedDate) continue;
+        entries.push({ companyName: rec.companyName, insiderName: rec.insiderName, formType: '4', filedDate: rec.filedDate, filingUrl: rec.filingUrl });
       }
 
       insiderFeedCache = entries;

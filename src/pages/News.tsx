@@ -121,10 +121,11 @@ interface FlatTrade extends InsiderTransaction {
 // Latest insider filings from SEC EDGAR Form 4 feed (all companies)
 interface EdgarInsiderFiling {
   companyName: string;
+  insiderName?: string;
   formType: string;
   filedDate: string;
   filingUrl: string;
-  cik: string;
+  cik?: string;
 }
 
 function useLatestInsiderFilings() {
@@ -735,7 +736,7 @@ function InsiderFilingsFeed({ filings }: { filings: EdgarInsiderFiling[] }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 32 }}>
       {filings.slice(0, 60).map((f, i) => (
-        <div key={`${f.cik}-${f.filedDate}-${i}`}>
+        <div key={`${f.companyName}-${f.filedDate}-${i}`}>
           <div style={{
             display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
             borderRadius: activeAI === i ? '12px 12px 0 0' : 12,
@@ -759,7 +760,7 @@ function InsiderFilingsFeed({ filings }: { filings: EdgarInsiderFiling[] }) {
                 {f.companyName}
               </p>
               <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
-                Filed {f.filedDate}
+                {f.insiderName ? `${f.insiderName} · ` : ''}Filed {f.filedDate}
               </p>
             </div>
 
