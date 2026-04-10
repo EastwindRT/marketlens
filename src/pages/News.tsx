@@ -118,36 +118,11 @@ interface FlatTrade extends InsiderTransaction {
   tradeType: 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL';
 }
 
-// Latest insider filings from SEC EDGAR Form 4 feed (all companies)
-interface EdgarInsiderFiling {
-  companyName: string;
-  insiderName?: string;
-  formType: string;
-  filedDate: string;
-  filingUrl: string;
-  cik?: string;
-}
-
-function useLatestInsiderFilings() {
-  return useQuery({
-    queryKey: ['latest-insider-filings'],
-    queryFn: async (): Promise<EdgarInsiderFiling[]> => {
-      const res = await fetch('/api/latest-insiders');
-      if (!res.ok) throw new Error(`Insider feed ${res.status}`);
-      const json = await res.json();
-      return json.filings ?? [];
-    },
-    staleTime: 30 * 60 * 1000,
-    retry: 1,
-  });
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function NewsPage() {
   const [days, setDays] = useState(14);
   const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
-  const [showInsiderAI, setShowInsiderAI]   = useState(false);
   const [showCongressAI, setShowCongressAI] = useState(false);
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
@@ -159,9 +134,6 @@ export default function NewsPage() {
     staleTime: 60 * 60 * 1000,
     retry: 1,
   });
-
-  // Latest Form 4 filings from ALL companies via SEC EDGAR
-  const { data: insiderFilings, isLoading: insidersLoading } = useLatestInsiderFilings();
 
   // Latest house trades via server-side fetch (no CORS/403)
   const { data: congressTrades, isLoading: congressLoading } = useLatestCongressTrades(60);
@@ -320,46 +292,6 @@ export default function NewsPage() {
               })}
             </div>
           </>
-        )}
-
-        {/* ── SECTION 1: Watchlist Insider Trades ── */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
-          <SectionHeader title="Insider Activity" subtitle="Latest Form 4 filings — all US companies · SEC EDGAR" noMargin />
-          {!insidersLoading && (insiderFilings?.length ?? 0) > 0 && (
-            <button
-              onClick={() => setShowInsiderAI(v => !v)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-                padding: '6px 12px', borderRadius: 8, cursor: 'pointer',
-                background: showInsiderAI ? 'rgba(22,82,240,0.15)' : 'var(--bg-elevated)',
-                border: showInsiderAI ? '1px solid rgba(45,107,255,0.4)' : '1px solid var(--border-default)',
-                color: showInsiderAI ? 'var(--accent-blue-light)' : 'var(--text-secondary)',
-                fontSize: 12, fontWeight: 600, transition: 'all 150ms',
-              }}
-            >
-              <Sparkles size={12} /> Ask AI
-            </button>
-          )}
-        </div>
-
-        {insidersLoading && <FilingsSkeleton />}
-
-        {showInsiderAI && !insidersLoading && (insiderFilings?.length ?? 0) > 0 && (
-          <FeedAICard
-            key="insider-ai"
-            endpoint="/api/analyze-insiders"
-            payload={{ symbol: 'MARKET', trades: insiderFilings?.slice(0, 40).map(f => ({ name: f.companyName, transactionDate: f.filedDate, transactionCode: 'P', change: 1, transactionPrice: 0 })) ?? [] }}
-            label="Quant Insider Analysis"
-            onClose={() => setShowInsiderAI(false)}
-          />
-        )}
-
-        {!insidersLoading && (!insiderFilings || insiderFilings.length === 0) && (
-          <EmptyState message="Could not load insider feed — EDGAR may be temporarily unavailable." />
-        )}
-
-        {!insidersLoading && insiderFilings && insiderFilings.length > 0 && (
-          <InsiderFilingsFeed filings={insiderFilings} />
         )}
 
         {/* ── SECTION 2: Congress Trades ── */}
@@ -736,89 +668,6 @@ export function FeedAICard({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-// ── Insider EDGAR Feed with per-row Ask AI ────────────────────────────────────
-
-function InsiderFilingsFeed({ filings }: { filings: EdgarInsiderFiling[] }) {
-  const [activeAI, setActiveAI] = useState<number | null>(null);
-  const navigate = useNavigate();
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 32 }}>
-      {filings.slice(0, 60).map((f, i) => (
-        <div key={`${f.companyName}-${f.filedDate}-${i}`}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
-            borderRadius: activeAI === i ? '12px 12px 0 0' : 12,
-            background: 'var(--bg-elevated)',
-            border: `1px solid ${activeAI === i ? 'var(--accent-blue)' : 'var(--border-subtle)'}`,
-            borderBottom: activeAI === i ? 'none' : undefined,
-            transition: 'border-color 150ms',
-          }}>
-            {/* Form type badge */}
-            <span style={{
-              fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6, flexShrink: 0,
-              background: 'rgba(45,107,255,0.1)', color: 'var(--accent-blue-light)',
-              border: '1px solid rgba(45,107,255,0.25)', fontFamily: "'Roboto Mono', monospace",
-            }}>
-              {f.formType || '4'}
-            </span>
-
-            {/* Company name */}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {f.companyName}
-              </p>
-              <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
-                {f.insiderName ? `${f.insiderName} · ` : ''}Filed {f.filedDate}
-              </p>
-            </div>
-
-            {/* Ask AI */}
-            <button
-              onClick={(e) => { e.stopPropagation(); setActiveAI(activeAI === i ? null : i); }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
-                padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
-                background: activeAI === i ? 'rgba(22,82,240,0.15)' : 'var(--bg-hover)',
-                border: activeAI === i ? '1px solid rgba(45,107,255,0.4)' : '1px solid var(--border-default)',
-                color: activeAI === i ? 'var(--accent-blue-light)' : 'var(--text-tertiary)',
-                fontSize: 11, fontWeight: 600, transition: 'all 150ms',
-              }}
-            >
-              <Sparkles size={10} /> AI
-            </button>
-
-            {/* View on EDGAR */}
-            {f.filingUrl && (
-              <a href={f.filingUrl} target="_blank" rel="noopener noreferrer"
-                onClick={e => e.stopPropagation()}
-                style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>
-                <ExternalLink size={13} />
-              </a>
-            )}
-          </div>
-
-          {/* Per-row AI card */}
-          {activeAI === i && (
-            <div style={{ borderRadius: '0 0 12px 12px', border: '1px solid var(--accent-blue)', borderTop: 'none', overflow: 'hidden' }}>
-              <FeedAICard
-                key={`insider-row-ai-${i}`}
-                endpoint="/api/analyze-insiders"
-                payload={{ symbol: f.companyName, trades: [{ name: f.companyName, transactionDate: f.filedDate, transactionCode: 'P', change: 1, transactionPrice: 0, title: 'Insider', share: 1 }] }}
-                label={`AI Analysis — ${f.companyName}`}
-                onClose={() => setActiveAI(null)}
-              />
-            </div>
-          )}
-        </div>
-      ))}
-      <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
-        Latest Form 4 filings across all US companies · Source: SEC EDGAR
-      </p>
     </div>
   );
 }
