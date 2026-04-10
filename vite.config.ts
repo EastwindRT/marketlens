@@ -46,6 +46,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/api\/senate-trades/, ''),
       },
+      // Express server API endpoints (congress, AI analysis, stock Q&A)
+      '/api/latest-congress': { target: 'http://localhost:3001', changeOrigin: true },
+      '/api/analyze-congress': { target: 'http://localhost:3001', changeOrigin: true },
+      '/api/analyze-filing': { target: 'http://localhost:3001', changeOrigin: true },
+      '/api/ask-stock': { target: 'http://localhost:3001', changeOrigin: true },
     },
   },
 })

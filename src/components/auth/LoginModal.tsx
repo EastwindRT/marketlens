@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { TrendingUp, AlertCircle } from 'lucide-react';
+import { TrendingUp, AlertCircle, X } from 'lucide-react';
 import { signInWithGoogle } from '../../api/supabase';
 
 interface LoginModalProps {
@@ -29,11 +29,25 @@ export default function LoginModal({ onClose, authError }: LoginModalProps) {
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(6px)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose?.() }}
     >
       <div
         className="w-full max-w-sm rounded-2xl p-6 flex flex-col gap-5"
-        style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
+        style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)', position: 'relative' }}
       >
+        {onClose && (
+          <button
+            onClick={onClose}
+            style={{
+              position: 'absolute', top: 12, right: 12,
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: 'var(--text-tertiary)', padding: 4, borderRadius: 6,
+              display: 'flex', alignItems: 'center',
+            }}
+          >
+            <X size={16} />
+          </button>
+        )}
         {/* Logo */}
         <div className="flex flex-col items-center gap-2 pt-2">
           <div
