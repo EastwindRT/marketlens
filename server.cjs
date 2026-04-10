@@ -95,6 +95,8 @@ async function fetchCongressData() {
   });
 }
 
+app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
 app.get('/api/latest-congress', async (req, res) => {
   try {
     const now = Date.now();
