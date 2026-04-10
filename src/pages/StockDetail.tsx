@@ -1,6 +1,6 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Check, RefreshCw, ArrowUpDown } from 'lucide-react';
+import { Plus, Check, RefreshCw, ArrowUpDown, Send, Bot } from 'lucide-react';
 import { useStockCandles, useStockQuote, useStockProfile } from '../hooks/useStockData';
 import { useInsiderData } from '../hooks/useInsiderData';
 import { useRealTimeQuote } from '../hooks/useRealTimeQuote';
@@ -251,6 +251,21 @@ export default function StockDetail() {
         />
       </div>
 
+      {/* ── Ask AI Chat ── */}
+      <div className="px-4 md:px-8 pb-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+        <StockAIChat
+          symbol={symbol}
+          context={{
+            price: quote?.c ? `${currency === 'CAD' ? 'CA$' : 'US$'}${quote.c}` : undefined,
+            change: quote?.dp != null ? `${quote.dp >= 0 ? '+' : ''}${quote.dp.toFixed(2)}%` : undefined,
+            marketCap,
+            volume: volumeDisplay,
+            exchange: isCanadian ? (quote?._exchange || 'TSX') : (profile?.exchange || 'NASDAQ'),
+            insiders: insiders || [],
+          }}
+        />
+      </div>
+
       {/* ── Market Signals (News / Analyst / 13D Filings) ── */}
       <div className="px-4 md:px-8 pb-10">
         <NewsSection
@@ -317,6 +332,141 @@ function ChartWithResponsiveHeight({
         currency={currency}
         height={height}
       />
+    </div>
+  );
+}
+
+interface ChatMessage { role: 'user' | 'ai'; text: string; }
+
+function StockAIChat({ symbol, context }: {
+  symbol: string;
+  context: {
+    price?: string; change?: string; marketCap?: string;
+    volume?: string; exchange?: string; insiders?: InsiderTransaction[];
+  };
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [isOpen, setIsOpen] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to bottom on new message
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const send = useCallback(async (q?: string) => {
+    const question = (q ?? input).trim();
+    if (!question || loading) return;
+    setInput('');
+    setIsOpen(true);
+    setMessages(prev => [...prev, { role: 'user', text: question }]);
+    setLoading(true);
+    try {
+      const res = await fetch('/api/ask-stock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, symbol, context }),
+      });
+      const data = await res.json();
+      setMessages(prev => [...prev, { role: 'ai', text: data.answer || data.error || 'No response.' }]);
+    } catch {
+      setMessages(prev => [...prev, { role: 'ai', text: 'Request failed — check your connection.' }]);
+    } finally {
+      setLoading(false);
+    }
+  }, [input, loading, symbol, context]);
+
+  const SUGGESTIONS = [
+    `Why are insiders buying ${symbol}?`,
+    `What are the key risks for ${symbol}?`,
+    `What catalysts could move ${symbol}?`,
+    `Is ${symbol} overvalued right now?`,
+  ];
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <Bot size={15} color="var(--accent-blue-light)" />
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+          Ask AI about {symbol}
+        </span>
+      </div>
+
+      {/* Suggestion chips — hide once conversation starts */}
+      {messages.length === 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+          {SUGGESTIONS.map(s => (
+            <button key={s} onClick={() => send(s)}
+              style={{
+                padding: '6px 12px', borderRadius: 8, fontSize: 12, cursor: 'pointer',
+                background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
+                color: 'var(--text-secondary)', fontFamily: "'Inter', sans-serif",
+                transition: 'border-color 150ms',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--accent-blue)')}
+              onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
+            >{s}</button>
+          ))}
+        </div>
+      )}
+
+      {/* Chat messages */}
+      {isOpen && messages.length > 0 && (
+        <div style={{
+          marginBottom: 10, maxHeight: 340, overflowY: 'auto',
+          display: 'flex', flexDirection: 'column', gap: 10,
+          padding: '12px 14px', borderRadius: 12,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+        }}>
+          {messages.map((m, i) => (
+            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexDirection: m.role === 'user' ? 'row-reverse' : 'row' }}>
+              <div style={{
+                fontSize: 12, lineHeight: 1.6, padding: '8px 12px', borderRadius: 10,
+                maxWidth: '85%', fontFamily: "'Inter', sans-serif",
+                background: m.role === 'user' ? 'var(--accent-blue)' : 'var(--bg-hover)',
+                color: m.role === 'user' ? '#fff' : 'var(--text-primary)',
+                whiteSpace: 'pre-wrap',
+              }}>{m.text}</div>
+            </div>
+          ))}
+          {loading && (
+            <div style={{ display: 'flex', gap: 4, padding: '8px 12px' }}>
+              {[0,1,2].map(i => (
+                <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--text-tertiary)', animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite` }} />
+              ))}
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+      )}
+
+      {/* Input */}
+      <form onSubmit={e => { e.preventDefault(); send(); }} style={{ display: 'flex', gap: 8 }}>
+        <input
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder={`Ask anything about ${symbol}…`}
+          disabled={loading}
+          style={{
+            flex: 1, padding: '10px 14px', borderRadius: 10,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
+            color: 'var(--text-primary)', fontSize: 13, fontFamily: "'Inter', sans-serif",
+            outline: 'none', opacity: loading ? 0.6 : 1,
+          }}
+          onFocus={e => (e.target.style.borderColor = 'var(--accent-blue)')}
+          onBlur={e => (e.target.style.borderColor = 'var(--border-default)')}
+        />
+        <button
+          type="submit" disabled={!input.trim() || loading}
+          style={{
+            width: 44, height: 44, borderRadius: 10, border: 'none', cursor: input.trim() && !loading ? 'pointer' : 'default',
+            background: input.trim() && !loading ? 'var(--accent-blue)' : 'var(--bg-elevated)',
+            color: input.trim() && !loading ? '#fff' : 'var(--text-tertiary)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            transition: 'all 150ms',
+          }}
+        ><Send size={15} /></button>
+      </form>
     </div>
   );
 }

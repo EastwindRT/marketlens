@@ -65,7 +65,7 @@ export default function App() {
     <>
       <AppShell>
         <Routes>
-          <Route path="/" element={<Navigate to="/leaderboard" replace />} />
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/stock/:symbol" element={<StockDetail />} />
           <Route path="/search" element={<Search />} />
           <Route path="/dashboard" element={<Dashboard />} />

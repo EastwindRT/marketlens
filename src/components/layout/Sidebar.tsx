@@ -295,13 +295,18 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
 
       <Divider />
 
-      {/* ── League nav ── */}
-      {SUPABASE_CONFIGURED && (
+      {/* ── League nav (hidden, admin only) ── */}
+      {SUPABASE_CONFIGURED && isAdmin && (
         <>
-          <SectionHeader icon={<Trophy size={11} />} label="League" />
-          <NavLink to="/leaderboard" icon={<Trophy size={14} />} label="Leaderboard" onClose={onClose} />
+          <NavLink to="/leaderboard" icon={<Trophy size={14} />} label="League" onClose={onClose} />
           {me && <NavLink to="/portfolio" icon={<User size={14} />} label="My Portfolio" onClose={onClose} />}
-          {isAdmin && <NavLink to="/admin" icon={<Shield size={14} />} label="Admin" onClose={onClose} />}
+          <NavLink to="/admin" icon={<Shield size={14} />} label="Admin" onClose={onClose} />
+          <Divider />
+        </>
+      )}
+      {SUPABASE_CONFIGURED && !isAdmin && me && (
+        <>
+          <NavLink to="/portfolio" icon={<User size={14} />} label="My Portfolio" onClose={onClose} />
           <Divider />
         </>
       )}

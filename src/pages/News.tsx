@@ -543,7 +543,7 @@ interface FeedAnalysis {
   keyTrade: string;
 }
 
-function FeedAICard({
+export function FeedAICard({
   endpoint,
   payload,
   label,

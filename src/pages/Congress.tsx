@@ -1,19 +1,19 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { ExternalLink, Search, Building2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useWatchlistStore } from '../store/watchlistStore';
-import { useCongressTradesForWatchlist } from '../hooks/useCongressTrades';
+import { useLatestCongressTrades } from '../hooks/useCongressTrades';
+import { FeedAICard } from './News';
 
-// Notable congress members for quick access
 const NOTABLE_MEMBERS = [
-  { name: 'Nancy Pelosi',       slug: 'nancy-pelosi',       chamber: 'House', party: 'D' },
-  { name: 'Dan Crenshaw',       slug: 'dan-crenshaw',       chamber: 'House', party: 'R' },
-  { name: 'Tommy Tuberville',   slug: 'tommy-tuberville',   chamber: 'Senate', party: 'R' },
-  { name: 'Mark Kelly',         slug: 'mark-kelly',         chamber: 'Senate', party: 'D' },
-  { name: 'Josh Gottheimer',    slug: 'josh-gottheimer',    chamber: 'House', party: 'D' },
-  { name: 'Marjorie Taylor Greene', slug: 'marjorie-taylor-greene', chamber: 'House', party: 'R' },
-  { name: 'Kevin Hern',         slug: 'kevin-hern',         chamber: 'House', party: 'R' },
-  { name: 'Brian Mast',         slug: 'brian-mast',         chamber: 'House', party: 'R' },
+  { name: 'Nancy Pelosi',           slug: 'nancy-pelosi',           chamber: 'House',  party: 'D' },
+  { name: 'Dan Crenshaw',           slug: 'dan-crenshaw',           chamber: 'House',  party: 'R' },
+  { name: 'Tommy Tuberville',       slug: 'tommy-tuberville',       chamber: 'Senate', party: 'R' },
+  { name: 'Mark Kelly',             slug: 'mark-kelly',             chamber: 'Senate', party: 'D' },
+  { name: 'Josh Gottheimer',        slug: 'josh-gottheimer',        chamber: 'House',  party: 'D' },
+  { name: 'Marjorie Taylor Greene', slug: 'marjorie-taylor-greene', chamber: 'House',  party: 'R' },
+  { name: 'Kevin Hern',             slug: 'kevin-hern',             chamber: 'House',  party: 'R' },
+  { name: 'Brian Mast',             slug: 'brian-mast',             chamber: 'House',  party: 'R' },
 ];
 
 function partyColor(party: string) {
@@ -23,166 +23,202 @@ function partyColor(party: string) {
 }
 
 export default function CongressPage() {
-  const [tickerSearch, setTickerSearch] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [tickerFilter, setTickerFilter] = useState('');
+  const [activeAI, setActiveAI] = useState<number | null>(null);
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
+  const { data: allTrades, isLoading } = useLatestCongressTrades(200);
 
-  // Get historical senate data for watchlist tickers
-  const watchlistTickers = watchlist.map(w => w.symbol.replace(/\.TO$/i, ''));
-  const { data: historicalTrades, isLoading } = useCongressTradesForWatchlist(watchlistTickers, 365 * 5);
-
-  function openCapitolTrades(ticker: string) {
-    const t = ticker.trim().toUpperCase().replace(/\.TO$/i, '');
-    if (t) window.open(`https://www.capitoltrades.com/trades/${t}`, '_blank', 'noopener');
-  }
-
-  function handleTickerSearch(e: React.FormEvent) {
-    e.preventDefault();
-    if (tickerSearch.trim()) openCapitolTrades(tickerSearch);
-  }
+  // Filter trades by ticker search or watchlist
+  const trades = (allTrades ?? []).filter(t => {
+    if (!tickerFilter) return true;
+    return t.ticker.toUpperCase().includes(tickerFilter.toUpperCase());
+  });
 
   return (
-    <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 48px' }}>
-      <div style={{ maxWidth: 720, margin: '0 auto' }}>
+    <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 80px' }}>
+      <div style={{ maxWidth: 760, margin: '0 auto' }}>
 
-        {/* ── Header ── */}
-        <div style={{ marginBottom: 24 }}>
+        {/* Header */}
+        <div style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
             <Building2 size={20} color="var(--accent-blue-light)" />
-            <h1 style={{
-              margin: 0, fontSize: 20, fontWeight: 700,
-              color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.02em',
-            }}>
+            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.02em' }}>
               Congress Trades
             </h1>
           </div>
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-            STOCK Act disclosures · House + Senate · Required within 45 days of trade
+            STOCK Act disclosures · House + Senate · Real-time via Quiver Quant
           </p>
         </div>
 
-        {/* ── Live data banner ── */}
-        <a
-          href="https://www.capitoltrades.com/trades"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '14px 16px', borderRadius: 12, marginBottom: 24,
-            background: 'rgba(22,82,240,0.1)', border: '1px solid rgba(22,82,240,0.3)',
-            textDecoration: 'none', transition: 'border-color 150ms',
-          }}
-          onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(22,82,240,0.6)')}
-          onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(22,82,240,0.3)')}
-        >
-          <div>
-            <p style={{ margin: '0 0 2px', fontSize: 13, fontWeight: 700, color: 'var(--accent-blue-light)' }}>
-              View all live congressional trades on Capitol Trades →
-            </p>
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)' }}>
-              200+ politicians tracked · updated daily · House + Senate · real-time STOCK Act data
-            </p>
-          </div>
-          <ExternalLink size={15} color="var(--accent-blue-light)" style={{ flexShrink: 0, marginLeft: 12 }} />
-        </a>
-
-        {/* ── Ticker search ── */}
-        <div style={{ marginBottom: 28 }}>
-          <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-            Search by Stock
-          </p>
-          <form onSubmit={handleTickerSearch} style={{ display: 'flex', gap: 8 }}>
-            <div style={{ position: 'relative', flex: 1 }}>
-              <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
-              <input
-                ref={inputRef}
-                value={tickerSearch}
-                onChange={e => setTickerSearch(e.target.value.toUpperCase())}
-                placeholder="AAPL, NVDA, TSLA..."
-                style={{
-                  width: '100%', padding: '10px 12px 10px 34px', borderRadius: 10,
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
-                  color: 'var(--text-primary)', fontSize: 14, fontFamily: "'Roboto Mono', monospace",
-                  outline: 'none',
-                }}
-                onFocus={e => (e.target.style.borderColor = 'var(--accent-blue)')}
-                onBlur={e => (e.target.style.borderColor = 'var(--border-default)')}
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={!tickerSearch.trim()}
+        {/* Ticker filter */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
+            <input
+              value={tickerFilter}
+              onChange={e => setTickerFilter(e.target.value.toUpperCase())}
+              placeholder="Filter by ticker (AAPL, NVDA…)"
               style={{
-                padding: '10px 18px', borderRadius: 10, fontWeight: 600, fontSize: 13,
-                background: tickerSearch.trim() ? 'var(--accent-blue)' : 'var(--bg-elevated)',
-                color: tickerSearch.trim() ? '#fff' : 'var(--text-tertiary)',
-                border: 'none', cursor: tickerSearch.trim() ? 'pointer' : 'default',
-                fontFamily: "'Inter', sans-serif", transition: 'all 150ms',
-                display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                width: '100%', padding: '10px 12px 10px 34px', borderRadius: 10, boxSizing: 'border-box',
+                background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
+                color: 'var(--text-primary)', fontSize: 14, fontFamily: "'Roboto Mono', monospace", outline: 'none',
               }}
-            >
-              View trades <ExternalLink size={13} />
-            </button>
-          </form>
+              onFocus={e => (e.target.style.borderColor = 'var(--accent-blue)')}
+              onBlur={e => (e.target.style.borderColor = 'var(--border-default)')}
+            />
+          </div>
         </div>
 
-        {/* ── Watchlist quick links ── */}
+        {/* Watchlist quick filter chips */}
         {watchlist.length > 0 && (
-          <div style={{ marginBottom: 28 }}>
-            <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-              Your Watchlist
-            </p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {watchlist.map(item => {
-                const ticker = item.symbol.replace(/\.TO$/i, '');
-                const historical = (historicalTrades ?? []).filter(t => t.ticker === ticker);
-                return (
-                  <button
-                    key={item.symbol}
-                    onClick={() => openCapitolTrades(ticker)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '8px 14px', borderRadius: 10,
-                      background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                      cursor: 'pointer', transition: 'border-color 150ms',
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
-                    onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                  >
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}>
-                      {ticker}
-                    </span>
-                    {historical.length > 0 && (
-                      <span style={{
-                        fontSize: 10, padding: '1px 6px', borderRadius: 8, fontWeight: 600,
-                        background: 'rgba(22,82,240,0.15)', color: 'var(--accent-blue-light)',
-                      }}>
-                        {historical.length} historical
-                      </span>
-                    )}
-                    <ExternalLink size={11} color="var(--text-tertiary)" />
-                  </button>
-                );
-              })}
-            </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
+            <button
+              onClick={() => setTickerFilter('')}
+              style={{
+                padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                background: !tickerFilter ? 'var(--accent-blue)' : 'var(--bg-elevated)',
+                color: !tickerFilter ? '#fff' : 'var(--text-secondary)',
+                border: `1px solid ${!tickerFilter ? 'var(--accent-blue)' : 'var(--border-subtle)'}`,
+                fontFamily: "'Roboto Mono', monospace",
+              }}
+            >ALL</button>
+            {watchlist.map(item => {
+              const t = item.symbol.replace(/\.TO$/i, '');
+              const active = tickerFilter === t;
+              return (
+                <button key={t} onClick={() => setTickerFilter(active ? '' : t)}
+                  style={{
+                    padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                    background: active ? 'var(--accent-blue)' : 'var(--bg-elevated)',
+                    color: active ? '#fff' : 'var(--text-primary)',
+                    border: `1px solid ${active ? 'var(--accent-blue)' : 'var(--border-subtle)'}`,
+                    fontFamily: "'Roboto Mono', monospace",
+                  }}
+                >{t}</button>
+              );
+            })}
           </div>
         )}
 
-        {/* ── Notable members ── */}
+        {/* Live trades feed */}
         <div style={{ marginBottom: 28 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <p style={{ margin: 0, fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+              Latest Trades {trades.length > 0 && <span style={{ fontWeight: 400, textTransform: 'none', marginLeft: 4 }}>· {trades.length} shown</span>}
+            </p>
+          </div>
+
+          {isLoading && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} style={{ height: 60, borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', opacity: 0.6 }} />
+              ))}
+            </div>
+          )}
+
+          {!isLoading && trades.length === 0 && (
+            <div style={{ padding: '32px 0', textAlign: 'center' }}>
+              <p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
+                {tickerFilter ? `No congress trades found for ${tickerFilter}` : 'No trades available'}
+              </p>
+            </div>
+          )}
+
+          {!isLoading && trades.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {trades.map((t, i) => {
+                const isBuy = t.type === 'purchase';
+                const tradeColor = isBuy ? '#05B169' : '#F6465D';
+                const tradeBg   = isBuy ? 'rgba(5,177,105,0.1)' : 'rgba(246,70,93,0.1)';
+                const pc = partyColor(t.party);
+                const isExpanded = activeAI === i;
+
+                return (
+                  <div key={`${t.member}-${t.ticker}-${t.transactionDate}-${i}`}>
+                    <div
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+                        borderRadius: isExpanded ? '10px 10px 0 0' : 10,
+                        background: 'var(--bg-elevated)',
+                        border: `1px solid ${isExpanded ? 'var(--accent-blue)' : 'var(--border-subtle)'}`,
+                        borderBottom: isExpanded ? 'none' : undefined,
+                        transition: 'border-color 150ms',
+                      }}
+                    >
+                      {/* Ticker */}
+                      <button
+                        onClick={() => navigate(`/stock/${t.ticker}`)}
+                        style={{
+                          fontSize: 12, fontWeight: 700, padding: '3px 9px', borderRadius: 7, cursor: 'pointer',
+                          background: 'var(--bg-hover)', color: 'var(--text-primary)',
+                          border: '1px solid var(--border-default)', fontFamily: "'Roboto Mono', monospace",
+                          flexShrink: 0, minWidth: 52, textAlign: 'center',
+                        }}
+                      >{t.ticker}</button>
+
+                      {/* Type badge */}
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5,
+                        background: tradeBg, color: tradeColor,
+                        textTransform: 'uppercase', fontFamily: "'Roboto Mono', monospace", flexShrink: 0,
+                      }}>{t.type}</span>
+
+                      {/* Member info */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ margin: '0 0 1px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {t.member}
+                          <span style={{
+                            marginLeft: 6, fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+                            background: pc.bg, color: pc.color, fontFamily: "'Roboto Mono', monospace",
+                          }}>{t.party || t.chamber}</span>
+                        </p>
+                        <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
+                          {t.amount} · {t.transactionDate}
+                          {t.disclosureDate && t.disclosureDate !== t.transactionDate ? ` · filed ${t.disclosureDate}` : ''}
+                        </p>
+                      </div>
+
+                      {/* Ask AI button */}
+                      <button
+                        onClick={() => setActiveAI(isExpanded ? null : i)}
+                        style={{
+                          fontSize: 10, fontWeight: 700, padding: '4px 8px', borderRadius: 6,
+                          background: isExpanded ? 'var(--accent-blue)' : 'rgba(45,107,255,0.1)',
+                          color: isExpanded ? '#fff' : 'var(--accent-blue-light)',
+                          border: `1px solid ${isExpanded ? 'var(--accent-blue)' : 'rgba(45,107,255,0.25)'}`,
+                          cursor: 'pointer', flexShrink: 0, fontFamily: "'Inter', sans-serif",
+                        }}
+                      >⚡ AI</button>
+                    </div>
+
+                    {isExpanded && (
+                      <FeedAICard
+                        endpoint="/api/analyze-congress"
+                        payload={{ trades: [t] }}
+                        label={`AI — ${t.member} · ${t.ticker}`}
+                        onClose={() => setActiveAI(null)}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Notable members */}
+        <div style={{ marginBottom: 20 }}>
           <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-            Notable Members — View Portfolio on Capitol Trades
+            Notable Members — View on Capitol Trades
           </p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 8 }}>
             {NOTABLE_MEMBERS.map(m => {
               const pc = partyColor(m.party);
               return (
-                <a
-                  key={m.slug}
-                  href={`https://www.capitoltrades.com/politicians/${m.slug}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <a key={m.slug} href={`https://www.capitoltrades.com/politicians/${m.slug}`}
+                  target="_blank" rel="noopener noreferrer"
                   style={{
                     display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
                     borderRadius: 10, textDecoration: 'none',
@@ -192,17 +228,11 @@ export default function CongressPage() {
                   onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
                   onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
                 >
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
-                    background: pc.bg, color: pc.color, fontFamily: "'Roboto Mono', monospace",
-                    minWidth: 20, textAlign: 'center', flexShrink: 0,
-                  }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: pc.bg, color: pc.color, fontFamily: "'Roboto Mono', monospace", minWidth: 20, textAlign: 'center', flexShrink: 0 }}>
                     {m.party}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ margin: '0 0 1px', fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {m.name}
-                    </p>
+                    <p style={{ margin: '0 0 1px', fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</p>
                     <p style={{ margin: 0, fontSize: 10, color: 'var(--text-tertiary)' }}>{m.chamber}</p>
                   </div>
                   <ExternalLink size={11} color="var(--text-tertiary)" style={{ flexShrink: 0 }} />
@@ -212,75 +242,9 @@ export default function CongressPage() {
           </div>
         </div>
 
-        {/* ── Historical senate data ── */}
-        {!isLoading && historicalTrades && historicalTrades.length > 0 && (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
-              <p style={{ margin: 0, fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                Historical Senate Trades
-              </p>
-              <span style={{ fontSize: 10, color: 'var(--text-tertiary)', background: 'var(--bg-elevated)', padding: '1px 6px', borderRadius: 6 }}>
-                pre-2021 · Senate only
-              </span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {historicalTrades.slice(0, 20).map((t, i) => {
-                const isBuy = t.type === 'purchase';
-                const tradeColor = isBuy ? '#05B169' : t.type === 'sale' ? '#F6465D' : 'var(--text-tertiary)';
-                const tradeBg   = isBuy ? 'rgba(5,177,105,0.1)' : t.type === 'sale' ? 'rgba(246,70,93,0.1)' : 'var(--bg-hover)';
-                return (
-                  <button
-                    key={`${t.member}-${t.ticker}-${t.transactionDate}-${i}`}
-                    onClick={() => navigate(`/stock/${t.ticker}`)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
-                      borderRadius: 10, background: 'var(--bg-elevated)',
-                      border: '1px solid var(--border-subtle)', textAlign: 'left', width: '100%',
-                      cursor: 'pointer', transition: 'border-color 150ms',
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
-                    onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                  >
-                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6, background: 'var(--bg-hover)', color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace", minWidth: 48, textAlign: 'center', flexShrink: 0 }}>
-                      {t.ticker}
-                    </span>
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5, background: tradeBg, color: tradeColor, textTransform: 'uppercase', fontFamily: "'Roboto Mono', monospace", flexShrink: 0 }}>
-                      {t.type}
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ margin: '0 0 1px', fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {t.member}
-                      </p>
-                      <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
-                        {t.amount} · {t.transactionDate.slice(0, 10)}
-                      </p>
-                    </div>
-                    {t.filingUrl && (
-                      <a href={t.filingUrl} target="_blank" rel="noopener noreferrer"
-                        onClick={e => e.stopPropagation()}
-                        style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>
-                        <ExternalLink size={13} />
-                      </a>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* ── No data message ── */}
-        {!isLoading && (!historicalTrades || historicalTrades.length === 0) && watchlist.length > 0 && (
-          <div style={{ padding: '20px 0', textAlign: 'center' }}>
-            <p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
-              No historical senate trades found for your watchlist tickers.
-            </p>
-          </div>
-        )}
-
-        <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 24, textAlign: 'center' }}>
-          Live data powered by <a href="https://www.capitoltrades.com" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue-light)' }}>Capitol Trades</a> ·
-          Historical senate data via Senate Stock Watcher (pre-2021)
+        <p style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center' }}>
+          Live data via <a href="https://www.quiverquant.com" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue-light)' }}>Quiver Quant</a> ·
+          Politician profiles via <a href="https://www.capitoltrades.com" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue-light)' }}>Capitol Trades</a>
         </p>
       </div>
     </div>

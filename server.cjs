@@ -657,6 +657,81 @@ app.post('/api/analyze-congress', async (req, res) => {
   }
 });
 
+// ── Stock Q&A Chat ────────────────────────────────────────────────────────────
+app.post('/api/ask-stock', async (req, res) => {
+  const { question, symbol, context } = req.body ?? {};
+  if (!question || !symbol) return res.status(400).json({ error: 'Missing question or symbol' });
+
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return res.status(503).json({ error: 'AI not configured' });
+
+  // Build context block from what the client sends
+  const ctx = [];
+  if (context?.price)       ctx.push(`Current price: ${context.price}`);
+  if (context?.change)      ctx.push(`Day change: ${context.change}`);
+  if (context?.marketCap)   ctx.push(`Market cap: ${context.marketCap}`);
+  if (context?.volume)      ctx.push(`Volume: ${context.volume}`);
+  if (context?.exchange)    ctx.push(`Exchange: ${context.exchange}`);
+  if (context?.insiders?.length) {
+    const buys  = context.insiders.filter(t => t.transactionCode === 'P');
+    const sells = context.insiders.filter(t => t.transactionCode === 'S' || t.transactionCode === 'S-');
+    ctx.push(`Recent insider activity: ${buys.length} buys, ${sells.length} sells in last 2 years`);
+    const top = context.insiders.slice(0, 5).map(t =>
+      `${t.name} (${t.title || 'insider'}) ${t.transactionCode === 'P' ? 'BOUGHT' : 'SOLD'} ${Math.abs(t.share).toLocaleString()} shares @ $${t.transactionPrice} on ${t.transactionDate}`
+    );
+    ctx.push('Recent insider trades:\n' + top.join('\n'));
+  }
+
+  const systemPrompt = `You are a sharp Wall Street equity analyst covering ${symbol}.
+Answer the user's specific question concisely and directly — like a senior analyst briefing a portfolio manager.
+Be specific: use numbers, dates, and facts when available. Avoid generic disclaimers.
+If you don't know something specific, say so briefly and pivot to what the data does suggest.
+Keep answers under 150 words unless a longer explanation is clearly needed.
+
+STOCK CONTEXT:
+${ctx.join('\n') || 'No live context available — rely on general knowledge about this company.'}`;
+
+  try {
+    const body = JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 512,
+      temperature: 0.4,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: question },
+      ],
+    });
+
+    const answer = await new Promise((resolve, reject) => {
+      const opts = {
+        hostname: 'api.groq.com',
+        path: '/openai/v1/chat/completions',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`, 'Content-Length': Buffer.byteLength(body) },
+      };
+      const req2 = https.request(opts, r => {
+        let d = '';
+        r.on('data', c => d += c);
+        r.on('end', () => {
+          try {
+            const j = JSON.parse(d);
+            resolve(j.choices?.[0]?.message?.content || 'No response');
+          } catch { reject(new Error('Parse error')); }
+        });
+      });
+      req2.on('error', reject);
+      req2.setTimeout(30000, () => { req2.destroy(); reject(new Error('Timeout')); });
+      req2.write(body);
+      req2.end();
+    });
+
+    res.json({ answer });
+  } catch (err) {
+    console.error('[ask-stock]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Serve built React app
 const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));
