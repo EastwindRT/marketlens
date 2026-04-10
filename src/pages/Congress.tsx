@@ -3,7 +3,6 @@ import { ExternalLink, Search, Building2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useWatchlistStore } from '../store/watchlistStore';
 import { useLatestCongressTrades } from '../hooks/useCongressTrades';
-import { FeedAICard } from './News';
 
 const NOTABLE_MEMBERS = [
   { name: 'Nancy Pelosi',           slug: 'nancy-pelosi',           chamber: 'House',  party: 'D' },
@@ -24,12 +23,10 @@ function partyColor(party: string) {
 
 export default function CongressPage() {
   const [tickerFilter, setTickerFilter] = useState('');
-  const [activeAI, setActiveAI] = useState<number | null>(null);
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
   const { data: allTrades, isLoading } = useLatestCongressTrades(200);
 
-  // Filter trades by ticker search or watchlist
   const trades = (allTrades ?? []).filter(t => {
     if (!tickerFilter) return true;
     return t.ticker.toUpperCase().includes(tickerFilter.toUpperCase());
@@ -48,7 +45,7 @@ export default function CongressPage() {
             </h1>
           </div>
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-            STOCK Act disclosures · House + Senate · Real-time via Quiver Quant
+            STOCK Act disclosures · value ranges only (qty not disclosed) · Quiver Quant
           </p>
         </div>
 
@@ -102,13 +99,11 @@ export default function CongressPage() {
           </div>
         )}
 
-        {/* Live trades feed */}
+        {/* Trades feed */}
         <div style={{ marginBottom: 28 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <p style={{ margin: 0, fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-              Latest Trades {trades.length > 0 && <span style={{ fontWeight: 400, textTransform: 'none', marginLeft: 4 }}>· {trades.length} shown</span>}
-            </p>
-          </div>
+          <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+            Latest Trades {trades.length > 0 && <span style={{ fontWeight: 400, textTransform: 'none', marginLeft: 4 }}>· {trades.length} shown</span>}
+          </p>
 
           {isLoading && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -129,77 +124,65 @@ export default function CongressPage() {
           {!isLoading && trades.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {trades.map((t, i) => {
-                const isBuy = t.type === 'purchase';
+                const isBuy      = t.type === 'purchase';
                 const tradeColor = isBuy ? '#05B169' : '#F6465D';
-                const tradeBg   = isBuy ? 'rgba(5,177,105,0.1)' : 'rgba(246,70,93,0.1)';
+                const tradeBg    = isBuy ? 'rgba(5,177,105,0.12)' : 'rgba(246,70,93,0.12)';
+                const tradeBorder = isBuy ? 'rgba(5,177,105,0.3)' : 'rgba(246,70,93,0.3)';
                 const pc = partyColor(t.party);
-                const isExpanded = activeAI === i;
 
                 return (
-                  <div key={`${t.member}-${t.ticker}-${t.transactionDate}-${i}`}>
-                    <div
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
-                        borderRadius: isExpanded ? '10px 10px 0 0' : 10,
-                        background: 'var(--bg-elevated)',
-                        border: `1px solid ${isExpanded ? 'var(--accent-blue)' : 'var(--border-subtle)'}`,
-                        borderBottom: isExpanded ? 'none' : undefined,
-                        transition: 'border-color 150ms',
-                      }}
-                    >
-                      {/* Ticker */}
-                      <button
-                        onClick={() => navigate(`/stock/${t.ticker}`)}
-                        style={{
-                          fontSize: 12, fontWeight: 700, padding: '3px 9px', borderRadius: 7, cursor: 'pointer',
-                          background: 'var(--bg-hover)', color: 'var(--text-primary)',
-                          border: '1px solid var(--border-default)', fontFamily: "'Roboto Mono', monospace",
-                          flexShrink: 0, minWidth: 52, textAlign: 'center',
-                        }}
-                      >{t.ticker}</button>
+                  <div
+                    key={`${t.member}-${t.ticker}-${t.transactionDate}-${i}`}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px',
+                      borderRadius: 12, background: 'var(--bg-elevated)',
+                      border: '1px solid var(--border-subtle)',
+                      cursor: 'pointer', transition: 'border-color 150ms',
+                    }}
+                    onClick={() => navigate(`/stock/${t.ticker}`)}
+                    onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
+                    onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
+                  >
+                    {/* BUY/SELL badge */}
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6, flexShrink: 0,
+                      background: tradeBg, color: tradeColor, border: `1px solid ${tradeBorder}`,
+                      textTransform: 'uppercase', fontFamily: "'Roboto Mono', monospace",
+                    }}>
+                      {isBuy ? 'BUY' : 'SELL'}
+                    </span>
 
-                      {/* Type badge */}
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5,
-                        background: tradeBg, color: tradeColor,
-                        textTransform: 'uppercase', fontFamily: "'Roboto Mono', monospace", flexShrink: 0,
-                      }}>{t.type}</span>
+                    {/* Ticker */}
+                    <span style={{
+                      fontSize: 12, fontWeight: 700, padding: '3px 8px', borderRadius: 6, flexShrink: 0,
+                      background: 'var(--bg-hover)', color: 'var(--text-primary)',
+                      border: '1px solid var(--border-default)', fontFamily: "'Roboto Mono', monospace",
+                    }}>
+                      {t.ticker}
+                    </span>
 
-                      {/* Member info */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ margin: '0 0 1px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {t.member}
-                          <span style={{
-                            marginLeft: 6, fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
-                            background: pc.bg, color: pc.color, fontFamily: "'Roboto Mono', monospace",
-                          }}>{t.party || t.chamber}</span>
-                        </p>
-                        <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
-                          {t.amount} · {t.transactionDate}
-                          {t.disclosureDate && t.disclosureDate !== t.transactionDate ? ` · filed ${t.disclosureDate}` : ''}
-                        </p>
-                      </div>
-
-                      {/* Ask AI button */}
-                      <button
-                        onClick={() => setActiveAI(isExpanded ? null : i)}
-                        style={{
-                          fontSize: 10, fontWeight: 700, padding: '4px 8px', borderRadius: 6,
-                          background: isExpanded ? 'var(--accent-blue)' : 'rgba(45,107,255,0.1)',
-                          color: isExpanded ? '#fff' : 'var(--accent-blue-light)',
-                          border: `1px solid ${isExpanded ? 'var(--accent-blue)' : 'rgba(45,107,255,0.25)'}`,
-                          cursor: 'pointer', flexShrink: 0, fontFamily: "'Inter', sans-serif",
-                        }}
-                      >⚡ AI</button>
+                    {/* Member + party */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ margin: '0 0 2px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {t.member}
+                        <span style={{
+                          marginLeft: 6, fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+                          background: pc.bg, color: pc.color, fontFamily: "'Roboto Mono', monospace",
+                        }}>{t.party || t.chamber}</span>
+                      </p>
+                      <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
+                        {t.transactionDate}{t.disclosureDate && t.disclosureDate !== t.transactionDate ? ` · filed ${t.disclosureDate}` : ''}
+                      </p>
                     </div>
 
-                    {isExpanded && (
-                      <FeedAICard
-                        endpoint="/api/analyze-congress"
-                        payload={{ trades: [t] }}
-                        label={`AI — ${t.member} · ${t.ticker}`}
-                        onClose={() => setActiveAI(null)}
-                      />
+                    {/* Value range — prominent on the right */}
+                    {t.amount && (
+                      <span style={{
+                        fontSize: 12, fontWeight: 700, color: tradeColor,
+                        fontFamily: "'Roboto Mono', monospace", flexShrink: 0, textAlign: 'right',
+                      }}>
+                        {t.amount}
+                      </span>
                     )}
                   </div>
                 );

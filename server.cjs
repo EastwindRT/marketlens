@@ -739,6 +739,229 @@ ${ctx.join('\n') || 'No live context — rely on your training knowledge about t
   }
 });
 
+// ── 13F Fund search + holdings ────────────────────────────────────────────────
+
+function classifySector(name) {
+  const n = (name || '').toUpperCase();
+  if (/APPLE|MICROSOFT|NVIDIA|AMD|INTEL|ALPHABET|GOOGLE|META PLATFORM|SALESFORCE|ORACLE|CISCO|QUALCOMM|BROADCOM|TAIWAN SEMI|TSMC|SAMSUNG|SEMICONDUCTOR|SOFTWARE|TECH|DIGITAL|CYBER|SNOWFLAKE|PALANTIR|WORKDAY|ADOBE|SERVICENOW/.test(n)) return 'Technology';
+  if (/AMAZON|WALMART|TARGET|COSTCO|HOME DEPOT|LOWES|STARBUCKS|MCDONALDS|NIKE|TESLA|FORD|GENERAL MOTORS| GM |CONSUMER|RETAIL|LUXURY|LVMH|HERMES/.test(n)) return 'Consumer';
+  if (/PHARMA|BIOTECH|HEALTH|MEDICAL|AMGEN|MERCK|PFIZER|MODERNA|ABBVIE|LILLY|BRISTOL|JOHNSON|UNITEDHEALTH|CVS|ANTHEM|CIGNA|HUMANA|REGENERON|BIOGEN|GILEAD|NOVO NORDISK/.test(n)) return 'Healthcare';
+  if (/BANK|FINANCIAL|GOLDMAN|MORGAN STANLEY|JPMORGAN|WELLS FARGO|CAPITAL ONE|INSURANCE|BERKSHIRE|BLACKROCK|AMERICAN EXPRESS|VISA|MASTERCARD|PAYPAL|CITIGROUP|BANK OF AMER|ASSET MGMT|HEDGE/.test(n)) return 'Financials';
+  if (/EXXON|CHEVRON|CONOCOPHILLIPS|PIONEER|HALLIBURTON|SCHLUMBERGER|BAKER HUGHES|DEVON|ENERGY INC|OIL CORP|GAS CORP/.test(n)) return 'Energy';
+  if (/BOEING|LOCKHEED|RAYTHEON|NORTHROP|GENERAL DYNAMICS|CATERPILLAR|DEERE|HONEYWELL|3M |INDUSTRIAL|AEROSPACE|DEFENSE/.test(n)) return 'Industrials';
+  if (/VERIZON|AT&T|T-MOBILE|COMCAST|CHARTER|DISNEY|NETFLIX|TELECOM|COMMUNICATIONS|MEDIA/.test(n)) return 'Communications';
+  if (/DUKE ENERGY|SOUTHERN CO|NEXTERA|DOMINION|AMERICAN ELECTRIC|UTILITY|UTILITIES|ELECTRIC POWER/.test(n)) return 'Utilities';
+  if (/PROLOGIS|SIMON PROPERTY|CROWN CASTLE|AMERICAN TOWER|EQUITY RESIDENTIAL|REAL ESTATE|REIT/.test(n)) return 'Real Estate';
+  if (/LINDE|AIR PRODUCTS|DOW INC|DUPONT|NUCOR|FREEPORT|NEWMONT|MATERIAL|CHEMICAL|MINING|STEEL|COPPER/.test(n)) return 'Materials';
+  return 'Other';
+}
+
+function parse13FXml(xml) {
+  const holdings = [];
+  const tableRe = /<infoTable>([\s\S]*?)<\/infoTable>/gi;
+  let m;
+  while ((m = tableRe.exec(xml)) !== null) {
+    const block = m[1];
+    const getTag = (tag) => {
+      const r = new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`, 'i');
+      const x = r.exec(block);
+      return x ? x[1].trim() : '';
+    };
+    const name = getTag('nameOfIssuer');
+    const cusip = getTag('cusip');
+    const valueRaw = parseInt(getTag('value') || '0', 10);
+    const value = valueRaw * 1000; // SEC reports in thousands
+    const shares = parseInt(getTag('sshPrnamt') || '0', 10);
+    const shareType = getTag('sshPrnamtType');
+    const putCall = getTag('putCall') || null;
+    if (name && value > 0) {
+      holdings.push({ name, cusip, value, shares, shareType, putCall, sector: classifySector(name) });
+    }
+  }
+  return holdings.sort((a, b) => b.value - a.value);
+}
+
+async function get13FFilings(cik) {
+  const paddedCik = cik.toString().padStart(10, '0');
+  const data = await httpsGet(`https://data.sec.gov/submissions/CIK${paddedCik}.json`, { 'User-Agent': 'TARS admin@tars.app' });
+  const json = JSON.parse(data);
+  const recent = json.filings?.recent ?? {};
+  const forms = recent.form ?? [];
+  const accessions = recent.accessionNumber ?? [];
+  const dates = recent.filingDate ?? [];
+  const periods = recent.periodOfReport ?? [];
+  const results = [];
+  for (let i = 0; i < forms.length; i++) {
+    if (forms[i] === '13F-HR') {
+      results.push({ accession: accessions[i], filingDate: dates[i], period: periods[i] });
+    }
+  }
+  return { name: json.name, results: results.slice(0, 4) };
+}
+
+async function fetchHoldings(cik, accession) {
+  const cikClean = cik.toString().replace(/^0+/, '');
+  const accClean = accession.replace(/-/g, '');
+  const indexUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/${accession}-index.json`;
+  let infoTableUrl = null;
+  try {
+    const indexData = await httpsGet(indexUrl, { 'User-Agent': 'TARS admin@tars.app' });
+    const index = JSON.parse(indexData);
+    const docs = index.directory?.item ?? [];
+    for (const doc of docs) {
+      const fname = (doc.name || '').toLowerCase();
+      const type = (doc.type || '').toUpperCase();
+      if (type === 'INFORMATION TABLE' || fname.includes('infotable') || (fname.includes('form13f') && fname.endsWith('.xml'))) {
+        infoTableUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/${doc.name}`;
+        break;
+      }
+    }
+    if (!infoTableUrl) {
+      for (const doc of docs) {
+        const fname = (doc.name || '').toLowerCase();
+        if (fname.endsWith('.xml') && !fname.includes('primary') && !fname.includes('index') && fname !== `${accession}.xml`) {
+          infoTableUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/${doc.name}`;
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[13f/index]', e.message);
+  }
+  if (!infoTableUrl) return [];
+  const xml = await httpsGet(infoTableUrl, { 'User-Agent': 'TARS admin@tars.app' });
+  return parse13FXml(xml);
+}
+
+// Search for funds by name — uses EDGAR company search atom feed
+app.get('/api/13f/search', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q || q.length < 2) return res.json({ funds: [] });
+  try {
+    const url = `https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(q)}&CIK=&type=13F-HR&dateb=&owner=include&count=20&action=getcompany&output=atom`;
+    const xml = await httpsGet(url, { 'User-Agent': 'TARS admin@tars.app' });
+    const filers = new Map();
+    const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+    let m;
+    while ((m = entryRe.exec(xml)) !== null) {
+      const block = m[1];
+      const getTag = (tag) => { const r = new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`); const x = r.exec(block); return x ? x[1].trim() : ''; };
+      const title = getTag('title');
+      const updated = getTag('updated').slice(0, 10);
+      const linkMatch = /<link[^>]*href="([^"]*)"/.exec(block);
+      const href = linkMatch ? linkMatch[1] : '';
+      const cikMatch = href.match(/CIK=0*(\d+)/) || href.match(/CIK=(\d+)/);
+      const cik = cikMatch ? cikMatch[1] : '';
+      const nameMatch = title.match(/^[\w\/\-]+\s+-\s+(.+?)\s+\(\d+\)/);
+      const name = nameMatch ? nameMatch[1].trim() : title;
+      if (cik && name && !filers.has(cik)) {
+        filers.set(cik, { cik, name, lastFiled: updated });
+      }
+    }
+    res.json({ funds: Array.from(filers.values()).slice(0, 15) });
+  } catch (err) {
+    console.error('[13f/search]', err.message);
+    res.status(502).json({ error: err.message, funds: [] });
+  }
+});
+
+// Get 13F holdings for a fund CIK — latest + previous for new-position detection
+app.get('/api/13f/holdings', async (req, res) => {
+  const cik = (req.query.cik || '').trim().replace(/^0+/, '');
+  if (!cik) return res.status(400).json({ error: 'Missing cik' });
+  try {
+    const { name, results: filings } = await get13FFilings(cik);
+    if (!filings.length) return res.json({ fund: name, current: [], previous: null, meta: {} });
+    const [latestFiling, prevFiling] = filings;
+    const [current, previous] = await Promise.all([
+      fetchHoldings(cik, latestFiling.accession),
+      prevFiling ? fetchHoldings(cik, prevFiling.accession) : Promise.resolve(null),
+    ]);
+    const prevCusips = new Set((previous ?? []).map(h => h.cusip).filter(Boolean));
+    const prevNames  = new Set((previous ?? []).map(h => h.name.toUpperCase()));
+    const totalValue = current.reduce((s, h) => s + h.value, 0);
+    const withFlags = current.map(h => ({
+      ...h,
+      isNew: !!previous && !prevCusips.has(h.cusip) && !prevNames.has(h.name.toUpperCase()),
+      pctOfPortfolio: totalValue > 0 ? (h.value / totalValue) * 100 : 0,
+    }));
+    res.json({
+      fund: name,
+      meta: { filingDate: latestFiling.filingDate, period: latestFiling.period, totalValue, positionCount: current.length },
+      current: withFlags,
+      previous: previous ? previous.map(h => ({ name: h.name, cusip: h.cusip, shares: h.shares, value: h.value })) : null,
+    });
+  } catch (err) {
+    console.error('[13f/holdings]', err.message);
+    res.status(502).json({ error: err.message, current: [] });
+  }
+});
+
+// Fund AI chat
+app.post('/api/ask-fund', async (req, res) => {
+  const { question, fund, holdings, meta } = req.body ?? {};
+  if (!question) return res.status(400).json({ error: 'Missing question' });
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return res.status(503).json({ error: 'AI not configured' });
+
+  const topH = (holdings || []).slice(0, 30).map((h, i) =>
+    `${i + 1}. ${h.name}${h.putCall ? ` (${h.putCall})` : ''}${h.isNew ? ' [NEW]' : ''}: $${(h.value / 1e6).toFixed(1)}M (${(h.pctOfPortfolio || 0).toFixed(1)}%) — ${(h.shares || 0).toLocaleString()} shares`
+  ).join('\n');
+
+  const sectorMap = {};
+  for (const h of (holdings || [])) sectorMap[h.sector] = (sectorMap[h.sector] || 0) + h.value;
+  const totalVal = Object.values(sectorMap).reduce((a, b) => a + b, 0);
+  const sectorStr = Object.entries(sectorMap).sort((a, b) => b[1] - a[1])
+    .map(([s, v]) => `${s}: ${((v / totalVal) * 100).toFixed(1)}%`).join(', ');
+
+  const systemPrompt = `You are a senior portfolio analyst specialising in institutional fund analysis and 13F filings. Deep knowledge of hedge fund strategies, portfolio construction, and regulatory disclosures.
+
+FUND: ${fund || 'Unknown'}
+PORTFOLIO: ${meta?.positionCount || 0} positions · $${((meta?.totalValue || 0) / 1e9).toFixed(2)}B AUM · period ending ${meta?.period || 'unknown'}
+SECTOR BREAKDOWN: ${sectorStr || 'unavailable'}
+
+TOP HOLDINGS (by market value):
+${topH || 'No data'}
+
+RESPONSE FORMAT:
+- Lead with the direct answer in the first sentence
+- Use bullet points (•) for 3+ items
+- Bold key numbers and names with **markdown**
+- End analytical answers with a "Bottom line:" sentence
+- Under 200 words unless depth is genuinely needed
+- No generic disclaimers`;
+
+  try {
+    const body = JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 600,
+      temperature: 0.4,
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: question }],
+    });
+    const answer = await new Promise((resolve, reject) => {
+      const r = https.request({
+        hostname: 'api.groq.com', path: '/openai/v1/chat/completions', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`, 'Content-Length': Buffer.byteLength(body) },
+      }, res2 => {
+        let d = '';
+        res2.on('data', c => d += c);
+        res2.on('end', () => {
+          try { resolve(JSON.parse(d).choices?.[0]?.message?.content || 'No response'); }
+          catch { reject(new Error('Parse error')); }
+        });
+      });
+      r.on('error', reject);
+      r.setTimeout(30000, () => { r.destroy(); reject(new Error('Timeout')); });
+      r.write(body);
+      r.end();
+    });
+    res.json({ answer });
+  } catch (err) {
+    console.error('[ask-fund]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Serve built React app
 const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));

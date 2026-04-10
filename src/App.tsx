@@ -11,6 +11,7 @@ import PlayerPortfolio from './pages/PlayerPortfolio'
 import Admin from './pages/Admin'
 import NewsPage from './pages/News'
 import CongressPage from './pages/Congress'
+import FundsPage from './pages/Funds'
 import LoginModal from './components/auth/LoginModal'
 import { useLeagueStore } from './store/leagueStore'
 import { supabase, getPlayerByGoogleEmail } from './api/supabase'
@@ -72,6 +73,7 @@ export default function App() {
         <Route path="/admin" element={<Admin />} />
         <Route path="/news" element={<NewsPage />} />
         <Route path="/congress" element={<CongressPage />} />
+        <Route path="/funds" element={<FundsPage />} />
       </Routes>
     </AppShell>
   )
