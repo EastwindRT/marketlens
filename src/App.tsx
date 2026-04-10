@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
+import type { Session } from '@supabase/supabase-js'
 import AppShell from './components/layout/AppShell'
 import Dashboard from './pages/Dashboard'
 import StockDetail from './pages/StockDetail'
@@ -18,27 +19,30 @@ const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY
 
 export default function App() {
-  const { player, setPlayer } = useLeagueStore()
-  const [showLogin, setShowLogin] = useState(false)
-  const [authError, setAuthError] = useState<string | null>(null)
+  const { setPlayer } = useLeagueStore()
+  // null = loading, undefined = no session, Session = authenticated
+  const [session, setSession] = useState<Session | null | undefined>(undefined)
 
   // ── Handle Google OAuth redirect + session restore ──────────────────────
   useEffect(() => {
-    if (!SUPABASE_CONFIGURED) return
+    if (!SUPABASE_CONFIGURED) {
+      setSession(null) // no auth configured → open access
+      return
+    }
+
+    // Restore existing session on load
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session ?? null)
+    })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (event === 'SIGNED_IN' && session?.user?.email) {
-          const email = session.user.email
-          const found = await getPlayerByGoogleEmail(email)
-          if (found) {
-            setPlayer(found)
-          }
-          // If no matching player, still let them in — app is standalone
-          setShowLogin(false)
-          setAuthError(null)
-        }
-        if (event === 'SIGNED_OUT') {
+      async (_event, newSession) => {
+        setSession(newSession ?? null)
+        if (newSession?.user?.email) {
+          // Opportunistically match to league player — not required
+          const found = await getPlayerByGoogleEmail(newSession.user.email)
+          if (found) setPlayer(found)
+        } else {
           setPlayer(null)
         }
       }
@@ -47,29 +51,28 @@ export default function App() {
     return () => subscription.unsubscribe()
   }, [setPlayer])
 
-  return (
-    <>
-      <AppShell>
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/stock/:symbol" element={<StockDetail />} />
-          <Route path="/search" element={<Search />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/leaderboard" element={<Leaderboard />} />
-          <Route path="/portfolio" element={<Portfolio />} />
-          <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
-          <Route path="/admin" element={<Admin />} />
-          <Route path="/news" element={<NewsPage />} />
-          <Route path="/congress" element={<CongressPage />} />
-        </Routes>
-      </AppShell>
+  // Still loading session
+  if (session === undefined) return null
 
-      {showLogin && (
-        <LoginModal
-          onClose={() => { setShowLogin(false); setAuthError(null) }}
-          authError={authError}
-        />
-      )}
-    </>
+  // Not authenticated — show login wall
+  if (!session && SUPABASE_CONFIGURED) {
+    return <LoginModal />
+  }
+
+  return (
+    <AppShell>
+      <Routes>
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/stock/:symbol" element={<StockDetail />} />
+        <Route path="/search" element={<Search />} />
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/leaderboard" element={<Leaderboard />} />
+        <Route path="/portfolio" element={<Portfolio />} />
+        <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
+        <Route path="/admin" element={<Admin />} />
+        <Route path="/news" element={<NewsPage />} />
+        <Route path="/congress" element={<CongressPage />} />
+      </Routes>
+    </AppShell>
   )
 }
