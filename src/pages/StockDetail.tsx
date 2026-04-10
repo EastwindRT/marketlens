@@ -338,6 +338,18 @@ function ChartWithResponsiveHeight({
 
 interface ChatMessage { role: 'user' | 'ai'; text: string; }
 
+function escapeHtml(s: string) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderMarkdown(text: string): string {
+  return escapeHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^Bottom line:\s*/gim, '<strong>Bottom line:</strong> ')
+    .replace(/^•\s+/gm, '<span style="display:inline-block;margin-left:4px">•</span> ')
+    .replace(/\n/g, '<br/>');
+}
+
 function StockAIChat({ symbol, context }: {
   symbol: string;
   context: {
@@ -425,8 +437,7 @@ function StockAIChat({ symbol, context }: {
                 maxWidth: '85%', fontFamily: "'Inter', sans-serif",
                 background: m.role === 'user' ? 'var(--accent-blue)' : 'var(--bg-hover)',
                 color: m.role === 'user' ? '#fff' : 'var(--text-primary)',
-                whiteSpace: 'pre-wrap',
-              }}>{m.text}</div>
+              }} dangerouslySetInnerHTML={{ __html: m.role === 'ai' ? renderMarkdown(m.text) : escapeHtml(m.text) }} />
             </div>
           ))}
           {loading && (

@@ -648,6 +648,13 @@ export function FeedAICard({
               </div>
             )}
 
+            {/* Sentiment headline */}
+            {analysis.sentimentSummary && (
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic', lineHeight: 1.5, paddingLeft: 2 }}>
+                {analysis.sentimentSummary}
+              </p>
+            )}
+
             {/* Signal row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 14px', borderRadius: 9, background: sigBg(analysis.signal), border: `1px solid ${sigColor(analysis.signal)}33` }}>
@@ -663,6 +670,12 @@ export function FeedAICard({
                 <span style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '0 3px' }}>·</span>
                 <span style={{ fontSize: 11, color: '#F6465D', marginLeft: 4 }}>▼ {analysis.sellCount ?? 0}</span>
               </div>
+              {analysis.netBuyValue && (
+                <div style={{ padding: '6px 11px', borderRadius: 8, background: 'var(--bg-hover)', border: '1px solid var(--border-default)' }}>
+                  <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginRight: 4 }}>Net flow</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>{analysis.netBuyValue}</span>
+                </div>
+              )}
             </div>
 
             {/* Pattern */}
