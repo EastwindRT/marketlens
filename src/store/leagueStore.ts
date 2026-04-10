@@ -22,6 +22,6 @@ export const useLeagueStore = create<LeagueStore>()(
       updateCash: (cash) =>
         set((state) => state.player ? { player: { ...state.player, cash } } : {}),
     }),
-    { name: 'moneytalks-league-session' }
+    { name: 'tars-league-session' }
   )
 );

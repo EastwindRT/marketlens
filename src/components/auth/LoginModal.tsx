@@ -60,7 +60,7 @@ export default function LoginModal({ onClose, authError }: LoginModalProps) {
             className="text-xl font-bold"
             style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}
           >
-            MoneyTalks
+            TARS
           </h1>
           <p className="text-sm text-center" style={{ color: 'var(--text-secondary)' }}>
             Sign in with your Google account to join the league

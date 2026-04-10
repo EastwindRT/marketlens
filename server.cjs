@@ -40,7 +40,7 @@ app.use(
 // Proxy: /api/sec → www.sec.gov  (SEC EDGAR browse + Atom feeds)
 // Proxy: /api/edgar → efts.sec.gov (SEC EDGAR full-text search API)
 // User-Agent format required by SEC: "<Org> <contact-email>"
-const SEC_UA = 'MoneyTalks admin@moneytalks.app';
+const SEC_UA = 'TARS admin@tars.app';
 
 app.use('/api/sec', createProxyMiddleware({
   target: 'https://www.sec.gov',
@@ -166,7 +166,7 @@ app.get('/api/latest-insiders', async (req, res) => {
     const now = Date.now();
     if (!insiderFeedCache || now - insiderFeedLastFetch > INSIDER_FEED_TTL) {
       const url = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&dateb=&owner=include&count=80&output=atom';
-      const xml = await httpsGet(url, { 'User-Agent': 'MoneyTalks admin@moneytalks.app', 'Accept': 'text/xml' });
+      const xml = await httpsGet(url, { 'User-Agent': 'TARS admin@tars.app', 'Accept': 'text/xml' });
 
       // Parse atom XML entries
       // EDGAR Form 4 feed has alternating entries: (Reporting) = person, (Issuer) = company
@@ -225,7 +225,7 @@ app.get('/api/latest-insiders', async (req, res) => {
 app.use(express.json());
 
 async function fetchEdgarFilingText(edgarUrl) {
-  const UA = 'MoneyTalks admin@moneytalks.app';
+  const UA = 'TARS admin@tars.app';
 
   function secFetch(url) {
     return new Promise((resolve, reject) => {
@@ -747,5 +747,5 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`MoneyTalks server running on port ${PORT}`);
+  console.log(`TARS server running on port ${PORT}`);
 });

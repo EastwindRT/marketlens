@@ -48,7 +48,7 @@ export function Header({ onMenuClick }: HeaderProps) {
               <TrendingUp size={14} color="white" strokeWidth={2.5} />
             </div>
             <span className="font-bold text-sm tracking-tight" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-              MoneyTalks
+              TARS
             </span>
           </Link>
 
@@ -95,7 +95,7 @@ export function Header({ onMenuClick }: HeaderProps) {
               <TrendingUp size={16} color="white" strokeWidth={2.5} />
             </div>
             <span className="font-bold text-sm tracking-tight" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-              MoneyTalks
+              TARS
             </span>
           </Link>
 
