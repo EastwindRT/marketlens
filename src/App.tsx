@@ -12,7 +12,7 @@ import NewsPage from './pages/News'
 import CongressPage from './pages/Congress'
 import LoginModal from './components/auth/LoginModal'
 import { useLeagueStore } from './store/leagueStore'
-import { supabase, getPlayerByGoogleEmail, signOutGoogle } from './api/supabase'
+import { supabase, getPlayerByGoogleEmail } from './api/supabase'
 
 const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -33,16 +33,10 @@ export default function App() {
           const found = await getPlayerByGoogleEmail(email)
           if (found) {
             setPlayer(found)
-            setShowLogin(false)
-            setAuthError(null)
-          } else {
-            // Authenticated with Google but email not linked to any player
-            await signOutGoogle()
-            setAuthError(
-              `${email} is not linked to a league player. Ask your admin to add your Google email in Supabase.`
-            )
-            setShowLogin(true)
           }
+          // If no matching player, still let them in — app is standalone
+          setShowLogin(false)
+          setAuthError(null)
         }
         if (event === 'SIGNED_OUT') {
           setPlayer(null)
@@ -52,14 +46,6 @@ export default function App() {
 
     return () => subscription.unsubscribe()
   }, [setPlayer])
-
-  // ── Show login prompt on first visit if not signed in ───────────────────
-  useEffect(() => {
-    if (SUPABASE_CONFIGURED && !player) {
-      const timer = setTimeout(() => setShowLogin(true), 800)
-      return () => clearTimeout(timer)
-    }
-  }, [player])
 
   return (
     <>
