@@ -764,8 +764,7 @@ function parse13FXml(xml) {
     };
     const name = getTag('nameOfIssuer');
     const cusip = getTag('cusip');
-    const valueRaw = parseInt(getTag('value') || '0', 10);
-    const value = valueRaw * 1000; // SEC reports in thousands
+    const value = parseInt(getTag('value') || '0', 10); // XML value field is in full USD dollars
     const shares = parseInt(getTag('sshPrnamt') || '0', 10);
     const shareType = getTag('sshPrnamtType');
     const putCall = getTag('putCall') || null;
@@ -797,31 +796,21 @@ async function get13FFilings(cik) {
 async function fetchHoldings(cik, accession) {
   const cikClean = cik.toString().replace(/^0+/, '');
   const accClean = accession.replace(/-/g, '');
-  const indexUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/${accession}-index.json`;
+  const dirUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/`;
   let infoTableUrl = null;
   try {
-    const indexData = await httpsGet(indexUrl, { 'User-Agent': 'TARS admin@tars.app' });
-    const index = JSON.parse(indexData);
-    const docs = index.directory?.item ?? [];
-    for (const doc of docs) {
-      const fname = (doc.name || '').toLowerCase();
-      const type = (doc.type || '').toUpperCase();
-      if (type === 'INFORMATION TABLE' || fname.includes('infotable') || (fname.includes('form13f') && fname.endsWith('.xml'))) {
-        infoTableUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/${doc.name}`;
-        break;
-      }
-    }
-    if (!infoTableUrl) {
-      for (const doc of docs) {
-        const fname = (doc.name || '').toLowerCase();
-        if (fname.endsWith('.xml') && !fname.includes('primary') && !fname.includes('index') && fname !== `${accession}.xml`) {
-          infoTableUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/${doc.name}`;
-          break;
-        }
-      }
+    // Scrape the HTML directory listing — reliable for all filers
+    // (the {accession}-index.json file does not exist on EDGAR S3 for most filers)
+    const html = await httpsGet(dirUrl, { 'User-Agent': 'TARS admin@tars.app' });
+    const xmlHrefs = [...html.matchAll(/href="([^"]+\.xml)"/gi)].map(m => m[1]);
+    // Exclude primary_doc.xml (cover page) — info table is the other XML file
+    const infoHref = xmlHrefs.find(h => !h.toLowerCase().includes('primary_doc'));
+    if (infoHref) {
+      const filename = infoHref.split('/').pop();
+      infoTableUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/${filename}`;
     }
   } catch (e) {
-    console.error('[13f/index]', e.message);
+    console.error('[13f/dir]', e.message);
   }
   if (!infoTableUrl) return [];
   const xml = await httpsGet(infoTableUrl, { 'User-Agent': 'TARS admin@tars.app' });
@@ -934,7 +923,7 @@ app.get('/api/13f/search', async (req, res) => {
   }
 });
 
-// Get 13F holdings for a fund CIK — latest + previous for new-position detection
+// Get 13F holdings for a fund CIK — latest + previous for QoQ change detection
 app.get('/api/13f/holdings', async (req, res) => {
   const cik = (req.query.cik || '').trim().replace(/^0+/, '');
   if (!cik) return res.status(400).json({ error: 'Missing cik' });
@@ -946,18 +935,64 @@ app.get('/api/13f/holdings', async (req, res) => {
       fetchHoldings(cik, latestFiling.accession),
       prevFiling ? fetchHoldings(cik, prevFiling.accession) : Promise.resolve(null),
     ]);
-    const prevCusips = new Set((previous ?? []).map(h => h.cusip).filter(Boolean));
-    const prevNames  = new Set((previous ?? []).map(h => h.name.toUpperCase()));
+
     const totalValue = current.reduce((s, h) => s + h.value, 0);
-    const withFlags = current.map(h => ({
-      ...h,
-      isNew: !!previous && !prevCusips.has(h.cusip) && !prevNames.has(h.name.toUpperCase()),
-      pctOfPortfolio: totalValue > 0 ? (h.value / totalValue) * 100 : 0,
-    }));
+
+    // Build a lookup from previous quarter by CUSIP (primary) or name (fallback)
+    const prevMap = new Map();
+    for (const h of (previous ?? [])) {
+      if (h.cusip) prevMap.set(h.cusip, h);
+      prevMap.set(h.name.toUpperCase(), h);
+    }
+
+    const withFlags = current.map(h => {
+      const key = h.cusip || h.name.toUpperCase();
+      const prev = prevMap.get(key);
+      let changeType = 'unchanged';
+      let changePct = 0;
+      if (!previous) {
+        changeType = 'unknown';
+      } else if (!prev) {
+        changeType = 'new';
+      } else {
+        changePct = prev.shares > 0 ? ((h.shares - prev.shares) / prev.shares) * 100 : 0;
+        if (changePct > 1)       changeType = 'increased';
+        else if (changePct < -1) changeType = 'decreased';
+        else                     changeType = 'unchanged';
+      }
+      return {
+        ...h,
+        isNew: changeType === 'new',
+        changeType,
+        changePct,
+        pctOfPortfolio: totalValue > 0 ? (h.value / totalValue) * 100 : 0,
+      };
+    });
+
+    // Positions held last quarter but gone this quarter (fully exited)
+    const currentKeys = new Set(current.flatMap(h => [h.cusip, h.name.toUpperCase()].filter(Boolean)));
+    const exited = (previous ?? [])
+      .filter(h => !currentKeys.has(h.cusip) && !currentKeys.has(h.name.toUpperCase()))
+      .map(h => ({ ...h, changeType: 'exited', changePct: -100, isNew: false, pctOfPortfolio: 0 }));
+
+    const newCount       = withFlags.filter(h => h.changeType === 'new').length;
+    const increasedCount = withFlags.filter(h => h.changeType === 'increased').length;
+    const decreasedCount = withFlags.filter(h => h.changeType === 'decreased').length;
+
     res.json({
       fund: name,
-      meta: { filingDate: latestFiling.filingDate, period: latestFiling.period, totalValue, positionCount: current.length },
+      meta: {
+        filingDate: latestFiling.filingDate,
+        period: latestFiling.period,
+        totalValue,
+        positionCount: current.length,
+        newCount,
+        increasedCount,
+        decreasedCount,
+        exitedCount: exited.length,
+      },
       current: withFlags,
+      exited,
       previous: previous ? previous.map(h => ({ name: h.name, cusip: h.cusip, shares: h.shares, value: h.value })) : null,
     });
   } catch (err) {

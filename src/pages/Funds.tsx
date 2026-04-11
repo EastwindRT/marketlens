@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Search, Briefcase, Sparkles, Send } from 'lucide-react';
+import { Search, Briefcase, Sparkles, Send, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { finnhub } from '../api/finnhub';
 
@@ -11,12 +11,14 @@ interface FundResult { cik: string; name: string; lastFiled: string }
 interface Holding {
   name: string;
   cusip: string;
-  value: number;          // full dollars
+  value: number;
   shares: number;
   shareType: string;
-  putCall: string | null; // 'Put' | 'Call' | null
+  putCall: string | null;
   sector: string;
   isNew: boolean;
+  changeType: 'new' | 'increased' | 'decreased' | 'unchanged' | 'exited' | 'unknown';
+  changePct: number;
   pctOfPortfolio: number;
 }
 
@@ -25,12 +27,17 @@ interface HoldingsMeta {
   period: string;
   totalValue: number;
   positionCount: number;
+  newCount: number;
+  increasedCount: number;
+  decreasedCount: number;
+  exitedCount: number;
 }
 
 interface HoldingsResponse {
   fund: string;
   meta: HoldingsMeta;
   current: Holding[];
+  exited: Holding[];
   previous: { name: string; cusip: string; shares: number; value: number }[] | null;
 }
 
@@ -63,7 +70,7 @@ const SECTOR_COLORS: Record<string, string> = {
   Other:          '#6B7280',
 };
 
-// ── Markdown renderer (safe — no dangerouslySetInnerHTML) ─────────────────────
+// ── Markdown renderer ─────────────────────────────────────────────────────────
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -75,39 +82,105 @@ function renderMarkdown(text: string): string {
     .replace(/\n/g, '<br/>');
 }
 
-// ── Sector bar chart ──────────────────────────────────────────────────────────
+// ── Change badge ──────────────────────────────────────────────────────────────
+function ChangeBadge({ changeType, changePct }: { changeType: Holding['changeType']; changePct: number }) {
+  if (changeType === 'new') return (
+    <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 5px', borderRadius: 4, background: 'rgba(5,177,105,0.15)', color: '#05B169', border: '1px solid rgba(5,177,105,0.3)', whiteSpace: 'nowrap' }}>NEW</span>
+  );
+  if (changeType === 'increased') return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 2, fontSize: 10, color: '#05B169', fontFamily: "'Roboto Mono', monospace", whiteSpace: 'nowrap' }}>
+      <TrendingUp size={10} />+{Math.abs(changePct).toFixed(0)}%
+    </span>
+  );
+  if (changeType === 'decreased') return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 2, fontSize: 10, color: '#F6465D', fontFamily: "'Roboto Mono', monospace", whiteSpace: 'nowrap' }}>
+      <TrendingDown size={10} />-{Math.abs(changePct).toFixed(0)}%
+    </span>
+  );
+  if (changeType === 'unknown') return null;
+  return <Minus size={10} color="var(--text-tertiary)" />;
+}
+
+// ── Sector breakdown ──────────────────────────────────────────────────────────
 function SectorBreakdown({ holdings }: { holdings: Holding[] }) {
-  const map: Record<string, number> = {};
-  for (const h of holdings) {
-    if (!h.putCall) map[h.sector] = (map[h.sector] || 0) + h.value;
+  const longOnly = holdings.filter(h => !h.putCall && h.changeType !== 'exited');
+  const map: Record<string, { value: number; tops: string[] }> = {};
+  for (const h of longOnly) {
+    if (!map[h.sector]) map[h.sector] = { value: 0, tops: [] };
+    map[h.sector].value += h.value;
+    if (map[h.sector].tops.length < 3) map[h.sector].tops.push(h.name.split(' ')[0]);
   }
-  const total = Object.values(map).reduce((a, b) => a + b, 0);
-  const sorted = Object.entries(map).sort((a, b) => b[1] - a[1]);
+  const total = Object.values(map).reduce((a, b) => a + b.value, 0);
+  const sorted = Object.entries(map).sort((a, b) => b[1].value - a[1].value);
 
   return (
-    <div style={{ marginBottom: 24 }}>
-      <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-        Sector Breakdown (long only)
+    <div style={{ marginBottom: 28 }}>
+      <p style={{ margin: '0 0 12px', fontSize: 11, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+        Sector Breakdown · Long positions only
       </p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {sorted.map(([sector, val]) => {
-          const pct = total > 0 ? (val / total) * 100 : 0;
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {sorted.map(([sector, { value, tops }]) => {
+          const pct = total > 0 ? (value / total) * 100 : 0;
           const color = SECTOR_COLORS[sector] || SECTOR_COLORS.Other;
           return (
-            <div key={sector} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ width: 100, fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0, textAlign: 'right' }}>
-                {sector}
-              </span>
-              <div style={{ flex: 1, height: 8, borderRadius: 4, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
-                <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 4, transition: 'width 400ms ease' }} />
+            <div key={sector}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 3 }}>
+                <span style={{ width: 110, fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0, textAlign: 'right' }}>{sector}</span>
+                <div style={{ flex: 1, height: 8, borderRadius: 4, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 4, transition: 'width 400ms ease' }} />
+                </div>
+                <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0 }}>
+                  {pct.toFixed(1)}%
+                </span>
               </div>
-              <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0 }}>
-                {pct.toFixed(1)}%
-              </span>
+              {/* Top holdings chips */}
+              <div style={{ display: 'flex', gap: 4, paddingLeft: 120 }}>
+                {tops.map(t => (
+                  <span key={t} style={{ fontSize: 9, padding: '1px 6px', borderRadius: 4, background: `${color}18`, color, border: `1px solid ${color}30`, fontFamily: "'Roboto Mono', monospace", fontWeight: 700 }}>
+                    {t}
+                  </span>
+                ))}
+              </div>
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ── Options section ───────────────────────────────────────────────────────────
+function OptionsSection({ holdings }: { holdings: Holding[] }) {
+  const calls = holdings.filter(h => h.putCall?.toLowerCase() === 'call').sort((a, b) => b.value - a.value);
+  const puts  = holdings.filter(h => h.putCall?.toLowerCase() === 'put').sort((a, b) => b.value - a.value);
+
+  if (calls.length === 0 && puts.length === 0) {
+    return <p style={{ color: 'var(--text-tertiary)', fontSize: 13, padding: '24px 0', textAlign: 'center' }}>No options positions in this filing</p>;
+  }
+
+  function OptionList({ items, color, label }: { items: Holding[]; color: string; label: string }) {
+    return (
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 700, color, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {label} ({items.length})
+        </p>
+        {items.length === 0
+          ? <p style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>None</p>
+          : items.slice(0, 20).map((h, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 10px', borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', marginBottom: 4 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{h.name}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "'Roboto Mono', monospace", flexShrink: 0, marginLeft: 8 }}>{fmt(h.value)}</span>
+            </div>
+          ))
+        }
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 12 }}>
+      <OptionList items={calls} color="#05B169" label="Calls" />
+      <OptionList items={puts}  color="#F6465D" label="Puts" />
     </div>
   );
 }
@@ -151,21 +224,16 @@ function FundAIChat({ fund, holdings, meta }: { fund: string; holdings: Holding[
 
   return (
     <div style={{ marginTop: 32, borderRadius: 16, background: 'var(--bg-surface)', border: '1px solid var(--border-default)', overflow: 'hidden' }}>
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
         <Sparkles size={13} color="var(--accent-blue-light)" />
-        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          Ask AI about this fund
-        </span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Ask AI about this fund</span>
         <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>· Llama 3.3 70B</span>
       </div>
-
-      {/* Messages */}
       <div style={{ padding: '16px', maxHeight: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
         {messages.length === 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {suggestions.map(s => (
-              <button key={s} onClick={() => { setInput(s); }}
+              <button key={s} onClick={() => setInput(s)}
                 style={{ padding: '6px 12px', borderRadius: 20, fontSize: 12, cursor: 'pointer', background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border-default)', transition: 'border-color 150ms' }}
                 onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--accent-blue)')}
                 onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
@@ -181,9 +249,7 @@ function FundAIChat({ fund, holdings, meta }: { fund: string; holdings: Holding[
               color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6,
               border: m.role === 'ai' ? '1px solid var(--border-subtle)' : 'none',
             }}>
-              {m.role === 'ai'
-                ? <span dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
-                : m.text}
+              {m.role === 'ai' ? <span dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} /> : m.text}
             </div>
           </div>
         ))}
@@ -196,8 +262,6 @@ function FundAIChat({ fund, holdings, meta }: { fund: string; holdings: Holding[
         )}
         <div ref={bottomRef} />
       </div>
-
-      {/* Input */}
       <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: 8 }}>
         <input
           value={input}
@@ -220,17 +284,95 @@ function FundAIChat({ fund, holdings, meta }: { fund: string; holdings: Holding[
   );
 }
 
+// ── Holdings table ────────────────────────────────────────────────────────────
+function HoldingsTable({ holdings, navigateToStock, navigatingIdx }: {
+  holdings: Holding[];
+  navigateToStock: (h: Holding, i: number) => void;
+  navigatingIdx: number | null;
+}) {
+  if (holdings.length === 0) {
+    return <div style={{ padding: '32px', textAlign: 'center' }}><p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>No positions in this category</p></div>;
+  }
+
+  return (
+    <div style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', overflow: 'hidden', marginBottom: 8 }}>
+      {/* Header */}
+      <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 90px 90px 70px 70px', padding: '9px 14px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)' }}>
+        {['#', 'Company', 'Value', 'Shares', '% Port', 'Change'].map(h => (
+          <span key={h} style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</span>
+        ))}
+      </div>
+
+      {holdings.slice(0, 100).map((h, i) => {
+        const sectorColor = SECTOR_COLORS[h.sector] || SECTOR_COLORS.Other;
+        const isNavigating = navigatingIdx === i;
+        return (
+          <div
+            key={`${h.cusip}-${i}`}
+            onClick={() => navigateToStock(h, i)}
+            style={{
+              display: 'grid', gridTemplateColumns: '32px 1fr 90px 90px 70px 70px',
+              padding: '10px 14px', cursor: 'pointer',
+              borderBottom: i < Math.min(holdings.length, 100) - 1 ? '1px solid var(--border-subtle)' : 'none',
+              background: h.changeType === 'new' ? 'rgba(5,177,105,0.03)' : 'transparent',
+              transition: 'background 100ms', alignItems: 'center',
+              opacity: isNavigating ? 0.6 : 1,
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+            onMouseLeave={e => (e.currentTarget.style.background = h.changeType === 'new' ? 'rgba(5,177,105,0.03)' : 'transparent')}
+          >
+            <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>{i + 1}</span>
+
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.name}</span>
+                {h.putCall && (
+                  <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: h.putCall === 'Put' ? 'rgba(246,70,93,0.12)' : 'rgba(5,177,105,0.12)', color: h.putCall === 'Put' ? '#F6465D' : '#05B169', border: `1px solid ${h.putCall === 'Put' ? 'rgba(246,70,93,0.3)' : 'rgba(5,177,105,0.3)'}`, flexShrink: 0 }}>
+                    {h.putCall.toUpperCase()}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
+                <div style={{ width: 6, height: 6, borderRadius: '50%', background: sectorColor, flexShrink: 0 }} />
+                <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{h.sector}</span>
+              </div>
+            </div>
+
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}>
+              {fmt(h.value)}
+            </span>
+
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: "'Roboto Mono', monospace" }}>
+              {fmtShares(h.shares)}
+            </span>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <div style={{ width: 28, height: 4, borderRadius: 2, background: 'var(--bg-hover)', overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(h.pctOfPortfolio * 4, 100)}%`, height: '100%', background: 'var(--accent-blue)', borderRadius: 2 }} />
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: "'Roboto Mono', monospace" }}>
+                {h.pctOfPortfolio.toFixed(1)}%
+              </span>
+            </div>
+
+            <ChangeBadge changeType={h.changeType} changePct={h.changePct} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function FundsPage() {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [selectedFund, setSelectedFund] = useState<FundResult | null>(null);
-  const [tab, setTab] = useState<'all' | 'long' | 'options' | 'new'>('all');
+  const [tab, setTab] = useState<'all' | 'long' | 'options' | 'new' | 'exited'>('all');
   const [navigatingIdx, setNavigatingIdx] = useState<number | null>(null);
   const navigate = useNavigate();
 
-  // Debounce query
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query), 400);
     return () => clearTimeout(t);
@@ -261,26 +403,24 @@ export default function FundsPage() {
     const all = holdingsData?.current ?? [];
     if (tab === 'long')    return all.filter(h => !h.putCall);
     if (tab === 'options') return all.filter(h => !!h.putCall);
-    if (tab === 'new')     return all.filter(h => h.isNew);
+    if (tab === 'new')     return all.filter(h => h.changeType === 'new' || h.changeType === 'increased');
+    if (tab === 'exited')  return holdingsData?.exited ?? [];
     return all;
   }, [holdingsData, tab]);
 
-  const newCount     = (holdingsData?.current ?? []).filter(h => h.isNew).length;
+  const meta = holdingsData?.meta;
   const optionsCount = (holdingsData?.current ?? []).filter(h => !!h.putCall).length;
   const longCount    = (holdingsData?.current ?? []).filter(h => !h.putCall).length;
+  const activityCount = (meta?.newCount ?? 0) + (meta?.increasedCount ?? 0);
 
   async function navigateToStock(holding: Holding, idx: number) {
     setNavigatingIdx(idx);
     try {
-      // Try Finnhub search by company name (strip common suffixes)
       const clean = holding.name.replace(/\b(INC|CORP|LTD|LLC|PLC|CO|GROUP|HOLDINGS?|CLASS [AB])\b\.?/gi, '').trim();
       const result = await finnhub.search(clean);
       const match = result?.result?.find((r: { type: string; symbol: string }) => r.type === 'Common Stock' && !r.symbol.includes('.'));
-      if (match?.symbol) {
-        navigate(`/stock/${match.symbol}`);
-      } else {
-        navigate(`/search?q=${encodeURIComponent(clean)}`);
-      }
+      if (match?.symbol) navigate(`/stock/${match.symbol}`);
+      else navigate(`/search?q=${encodeURIComponent(clean)}`);
     } catch {
       navigate(`/search?q=${encodeURIComponent(holding.name)}`);
     } finally {
@@ -290,7 +430,7 @@ export default function FundsPage() {
 
   return (
     <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 80px' }}>
-      <div style={{ maxWidth: 840, margin: '0 auto' }}>
+      <div style={{ maxWidth: 860, margin: '0 auto' }}>
 
         {/* Header */}
         <div style={{ marginBottom: 24 }}>
@@ -310,13 +450,12 @@ export default function FundsPage() {
           <Search size={14} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
           <input
             value={query}
-            onChange={e => { setQuery(e.target.value); if (selectedFund) setSelectedFund(null); }}
+            onChange={e => { setQuery(e.target.value); if (selectedFund) setSelectedFund(null); setTab('all'); }}
             placeholder="Search fund name (Berkshire, Bridgewater, Citadel…)"
             style={{
               width: '100%', padding: '12px 14px 12px 38px', borderRadius: 12, boxSizing: 'border-box',
               background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
               color: 'var(--text-primary)', fontSize: 14, outline: 'none',
-              fontFamily: "'Inter', sans-serif",
             }}
             onFocus={e => (e.target.style.borderColor = 'var(--accent-blue)')}
             onBlur={e => (e.target.style.borderColor = 'var(--border-default)')}
@@ -326,13 +465,13 @@ export default function FundsPage() {
           )}
         </div>
 
-        {/* Search results dropdown */}
+        {/* Search results */}
         {!selectedFund && debouncedQuery.length >= 2 && (searchData?.funds ?? []).length > 0 && (
           <div style={{ marginBottom: 24, borderRadius: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', overflow: 'hidden' }}>
             {(searchData?.funds ?? []).map((f, i) => (
               <button
                 key={f.cik}
-                onClick={() => { setSelectedFund(f); setQuery(f.name); }}
+                onClick={() => { setSelectedFund(f); setQuery(f.name); setTab('all'); }}
                 style={{
                   width: '100%', padding: '12px 16px', textAlign: 'left', cursor: 'pointer',
                   background: 'transparent', border: 'none',
@@ -348,9 +487,7 @@ export default function FundsPage() {
                   <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>CIK {f.cik}</p>
                 </div>
                 {f.lastFiled && (
-                  <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0, marginLeft: 16 }}>
-                    Last filed {f.lastFiled}
-                  </span>
+                  <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0, marginLeft: 16 }}>Last filed {f.lastFiled}</span>
                 )}
               </button>
             ))}
@@ -379,19 +516,19 @@ export default function FundsPage() {
 
             {!holdingsLoading && holdingsData && (
               <>
-                {/* Fund meta */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10, margin: '20px 0 24px' }}>
+                {/* Stat cards */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10, margin: '20px 0 24px' }}>
                   {[
-                    { label: 'Total Value',  value: fmt(holdingsData.meta.totalValue) },
-                    { label: 'Positions',    value: holdingsData.meta.positionCount.toLocaleString() },
-                    { label: 'Long Stocks',  value: longCount.toLocaleString() },
-                    { label: 'Options',      value: optionsCount.toLocaleString() },
-                    { label: 'New Positions',value: newCount.toLocaleString() },
-                    { label: 'Period',       value: holdingsData.meta.period || '—' },
+                    { label: 'Total Value',  value: fmt(meta?.totalValue ?? 0),                        color: 'var(--text-primary)' },
+                    { label: 'Positions',    value: (meta?.positionCount ?? 0).toLocaleString(),        color: 'var(--text-primary)' },
+                    { label: 'New / Added',  value: `+${(meta?.newCount ?? 0) + (meta?.increasedCount ?? 0)}`, color: '#05B169' },
+                    { label: 'Reduced',      value: `${meta?.decreasedCount ?? 0}`,                    color: '#F6465D' },
+                    { label: 'Exited',       value: `${meta?.exitedCount ?? 0}`,                       color: '#F6465D' },
+                    { label: 'Period',       value: meta?.period || '—',                               color: 'var(--text-primary)' },
                   ].map(c => (
                     <div key={c.label} style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
                       <p style={{ margin: '0 0 2px', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{c.label}</p>
-                      <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}>{c.value}</p>
+                      <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: c.color, fontFamily: "'Roboto Mono', monospace" }}>{c.value}</p>
                     </div>
                   ))}
                 </div>
@@ -400,12 +537,13 @@ export default function FundsPage() {
                 <SectorBreakdown holdings={holdingsData.current} />
 
                 {/* Tabs */}
-                <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
                   {([
                     { key: 'all',     label: `All (${holdingsData.current.length})` },
                     { key: 'long',    label: `Long (${longCount})` },
                     { key: 'options', label: `Options (${optionsCount})` },
-                    { key: 'new',     label: `New (${newCount})` },
+                    { key: 'new',     label: `Active (${activityCount})` },
+                    { key: 'exited',  label: `Exited (${meta?.exitedCount ?? 0})` },
                   ] as const).map(t => (
                     <button
                       key={t.key}
@@ -421,104 +559,18 @@ export default function FundsPage() {
                   ))}
                 </div>
 
-                {/* Holdings table */}
-                <div style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', overflow: 'hidden', marginBottom: 8 }}>
-                  {/* Table header */}
-                  <div style={{
-                    display: 'grid', gridTemplateColumns: '32px 1fr 80px 90px 80px 60px',
-                    padding: '9px 14px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)',
-                  }}>
-                    {['#', 'Company', 'Value', 'Shares', '% Port', 'Type'].map(h => (
-                      <span key={h} style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</span>
-                    ))}
-                  </div>
-
-                  {filtered.length === 0 && (
-                    <div style={{ padding: '32px', textAlign: 'center' }}>
-                      <p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>No positions in this category</p>
-                    </div>
-                  )}
-
-                  {filtered.slice(0, 100).map((h, i) => {
-                    const sectorColor = SECTOR_COLORS[h.sector] || SECTOR_COLORS.Other;
-                    const isNavigating = navigatingIdx === i;
-                    return (
-                      <div
-                        key={`${h.cusip}-${i}`}
-                        onClick={() => navigateToStock(h, i)}
-                        style={{
-                          display: 'grid', gridTemplateColumns: '32px 1fr 80px 90px 80px 60px',
-                          padding: '10px 14px', cursor: 'pointer',
-                          borderBottom: i < filtered.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                          background: h.isNew ? 'rgba(5,177,105,0.03)' : 'transparent',
-                          transition: 'background 100ms',
-                          alignItems: 'center',
-                          opacity: isNavigating ? 0.6 : 1,
-                        }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = h.isNew ? 'rgba(5,177,105,0.03)' : 'transparent')}
-                      >
-                        {/* Rank */}
-                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
-                          {i + 1}
-                        </span>
-
-                        {/* Company name */}
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {h.name}
-                            </span>
-                            {h.isNew && (
-                              <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: 'rgba(5,177,105,0.15)', color: '#05B169', border: '1px solid rgba(5,177,105,0.3)', flexShrink: 0 }}>NEW</span>
-                            )}
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
-                            <div style={{ width: 6, height: 6, borderRadius: '50%', background: sectorColor, flexShrink: 0 }} />
-                            <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{h.sector}</span>
-                          </div>
-                        </div>
-
-                        {/* Value */}
-                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}>
-                          {fmt(h.value)}
-                        </span>
-
-                        {/* Shares */}
-                        <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: "'Roboto Mono', monospace" }}>
-                          {fmtShares(h.shares)}
-                        </span>
-
-                        {/* % of portfolio */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <div style={{ width: 28, height: 4, borderRadius: 2, background: 'var(--bg-hover)', overflow: 'hidden' }}>
-                            <div style={{ width: `${Math.min(h.pctOfPortfolio * 4, 100)}%`, height: '100%', background: 'var(--accent-blue)', borderRadius: 2 }} />
-                          </div>
-                          <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: "'Roboto Mono', monospace" }}>
-                            {h.pctOfPortfolio.toFixed(1)}%
-                          </span>
-                        </div>
-
-                        {/* Type badge */}
-                        <span style={{
-                          fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 5,
-                          background: h.putCall === 'Put' ? 'rgba(246,70,93,0.12)' : h.putCall === 'Call' ? 'rgba(5,177,105,0.12)' : 'var(--bg-hover)',
-                          color: h.putCall === 'Put' ? '#F6465D' : h.putCall === 'Call' ? '#05B169' : 'var(--text-tertiary)',
-                          border: `1px solid ${h.putCall === 'Put' ? 'rgba(246,70,93,0.25)' : h.putCall === 'Call' ? 'rgba(5,177,105,0.25)' : 'var(--border-subtle)'}`,
-                          fontFamily: "'Roboto Mono', monospace",
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {h.putCall || 'Long'}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {filtered.length > 100 && (
-                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8 }}>
-                    Showing top 100 of {filtered.length} positions
-                  </p>
+                {/* Options tab: split calls vs puts */}
+                {tab === 'options' ? (
+                  <OptionsSection holdings={holdingsData.current} />
+                ) : (
+                  <>
+                    <HoldingsTable holdings={filtered} navigateToStock={navigateToStock} navigatingIdx={navigatingIdx} />
+                    {filtered.length > 100 && (
+                      <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8 }}>
+                        Showing top 100 of {filtered.length} positions
+                      </p>
+                    )}
+                  </>
                 )}
 
                 {/* AI Chat */}
