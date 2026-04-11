@@ -173,7 +173,7 @@ export function Header({ onMenuClick }: HeaderProps) {
         )}
       </header>
 
-      {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
+      {showLogin && <LoginModal />}
     </>
   );
 }
