@@ -57,17 +57,17 @@ function fmtShares(n: number): string {
 }
 
 const SECTOR_COLORS: Record<string, string> = {
-  Technology:     '#1652F0',
-  Consumer:       '#F7931A',
-  Healthcare:     '#05B169',
-  Financials:     '#8B5CF6',
-  Energy:         '#EF4444',
-  Industrials:    '#06B6D4',
-  Communications: '#EC4899',
-  Utilities:      '#84CC16',
-  'Real Estate':  '#D97706',
-  Materials:      '#10B981',
-  Other:          '#6B7280',
+  Technology:     '#D97757',   // Claude coral — dominant accent
+  Consumer:       '#E8A87C',   // warm peach
+  Healthcare:     '#4CAF82',   // muted emerald
+  Financials:     '#9B7FD4',   // muted purple
+  Energy:         '#C4624A',   // deep terracotta
+  Industrials:    '#5BA8C4',   // steel blue
+  Communications: '#C47DB5',   // dusty rose
+  Utilities:      '#8DAF5A',   // olive green
+  'Real Estate':  '#B8956A',   // warm tan
+  Materials:      '#6BAF9B',   // sage teal
+  Other:          '#7A6F65',   // warm gray
 };
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────

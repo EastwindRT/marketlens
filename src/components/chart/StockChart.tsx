@@ -81,35 +81,35 @@ export function StockChart({
       width: Math.max(1, containerWidth - 1),
       height,
       layout: {
-        background: { color: '#0A0B0D' },
-        textColor: '#4E535C',
+        background: { color: '#1C1917' },
+        textColor: '#6B5F52',
         fontSize: 11,
         fontFamily: "'Inter', sans-serif",
       },
       grid: {
-        vertLines: { color: 'rgba(255,255,255,0.02)' },
-        horzLines: { color: 'rgba(255,255,255,0.03)' },
+        vertLines: { color: 'rgba(255,240,220,0.03)' },
+        horzLines: { color: 'rgba(255,240,220,0.04)' },
       },
       crosshair: {
         // Magnet on touch: snaps to nearest candle instead of floating freely
         mode: touch ? CrosshairMode.Magnet : CrosshairMode.Normal,
         vertLine: {
-          color: 'rgba(45,107,255,0.35)',
+          color: 'rgba(217,119,87,0.4)',
           width: 1,
           style: 3,
-          labelBackgroundColor: '#1652F0',
+          labelBackgroundColor: '#D97757',
         },
         horzLine: {
-          color: 'rgba(45,107,255,0.35)',
+          color: 'rgba(217,119,87,0.4)',
           width: 1,
           style: 3,
-          labelBackgroundColor: '#1652F0',
+          labelBackgroundColor: '#D97757',
         },
       },
       rightPriceScale: {
         borderVisible: false,
         scaleMargins: { top: 0.1, bottom: showVolume ? 0.22 : 0.1 },
-        textColor: '#4E535C',
+        textColor: '#6B5F52',
       },
       leftPriceScale: { visible: false },
       timeScale: {
@@ -128,16 +128,16 @@ export function StockChart({
 
     // ── Price series ───────────────────────────────────────────────────────
     if (chartType === 'area') {
-      // Robinhood/Coinbase style — smooth line + blue gradient fill
+      // Claude-style warm coral gradient fill
       const areaSeries = chart.addAreaSeries({
-        lineColor: '#2D6BFF',
+        lineColor: '#D97757',
         lineWidth: 2,
-        topColor: 'rgba(22, 82, 240, 0.28)',
-        bottomColor: 'rgba(22, 82, 240, 0.0)',
+        topColor: 'rgba(217, 119, 87, 0.28)',
+        bottomColor: 'rgba(217, 119, 87, 0.0)',
         crosshairMarkerVisible: true,
         crosshairMarkerRadius: 5,
-        crosshairMarkerBorderColor: '#2D6BFF',
-        crosshairMarkerBackgroundColor: '#0A0B0D',
+        crosshairMarkerBorderColor: '#D97757',
+        crosshairMarkerBackgroundColor: '#1C1917',
         priceLineVisible: false,
         lastValueVisible: true,
       });
@@ -151,11 +151,11 @@ export function StockChart({
     } else if (chartType === 'candlestick') {
       const candleSeries = chart.addCandlestickSeries({
         upColor:         'transparent',
-        borderUpColor:   '#05B169',
-        wickUpColor:     '#05B169',
-        downColor:       'rgba(246, 70, 93, 0.65)',
-        borderDownColor: '#F6465D',
-        wickDownColor:   '#F6465D',
+        borderUpColor:   '#4CAF82',
+        wickUpColor:     '#4CAF82',
+        downColor:       'rgba(224, 92, 106, 0.65)',
+        borderDownColor: '#E05C6A',
+        wickDownColor:   '#E05C6A',
         borderVisible:   true,
         wickVisible:     true,
         priceLineVisible: false,
@@ -174,12 +174,12 @@ export function StockChart({
     } else {
       // Plain line
       const lineSeries = chart.addLineSeries({
-        color: '#2D6BFF',
+        color: '#D97757',
         lineWidth: 2,
         crosshairMarkerVisible: true,
         crosshairMarkerRadius: 5,
-        crosshairMarkerBorderColor: '#2D6BFF',
-        crosshairMarkerBackgroundColor: '#0A0B0D',
+        crosshairMarkerBorderColor: '#D97757',
+        crosshairMarkerBackgroundColor: '#1C1917',
         priceLineVisible: false,
         lastValueVisible: true,
       });
@@ -195,7 +195,7 @@ export function StockChart({
     // ── Volume bars ───────────────────────────────────────────────────────
     if (showVolume && data.length > 0) {
       const volumeSeries = chart.addHistogramSeries({
-        color: '#2D6BFF',
+        color: '#D97757',
         priceFormat: { type: 'volume' },
         priceScaleId: 'volume',
       });
@@ -209,8 +209,8 @@ export function StockChart({
           time: bar.time as any,
           value: bar.volume,
           color: bar.close >= bar.open
-            ? 'rgba(5, 177, 105, 0.18)'
-            : 'rgba(246, 70, 93, 0.18)',
+            ? 'rgba(76, 175, 130, 0.2)'
+            : 'rgba(224, 92, 106, 0.2)',
         })) as HistogramData[]
       );
     }

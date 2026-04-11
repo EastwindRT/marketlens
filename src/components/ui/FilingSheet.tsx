@@ -34,8 +34,8 @@ const CONVICTION_COLOR: Record<FilingAnalysis['conviction'], string> = {
 const FORM_INFO: Record<string, { label: string; color: string; bg: string; border: string; description: string }> = {
   '13D':   { label: '13D',   color: '#F7931A', bg: 'rgba(247,147,26,0.12)', border: 'rgba(247,147,26,0.3)',  description: 'Activist investor — 5%+ ownership stake with intent to influence the company' },
   '13D/A': { label: '13D/A', color: '#F7931A', bg: 'rgba(247,147,26,0.12)', border: 'rgba(247,147,26,0.3)',  description: 'Amendment to activist 13D — stake or intent has changed' },
-  '13G':   { label: '13G',   color: '#2D6BFF', bg: 'rgba(45,107,255,0.12)', border: 'rgba(45,107,255,0.3)',  description: 'Passive investor — 5%+ ownership stake, no intent to control' },
-  '13G/A': { label: '13G/A', color: '#2D6BFF', bg: 'rgba(45,107,255,0.12)', border: 'rgba(45,107,255,0.3)',  description: 'Amendment to passive 13G — position size has changed' },
+  '13G':   { label: '13G',   color: '#D97757', bg: 'rgba(217,119,87,0.12)', border: 'rgba(217,119,87,0.3)',  description: 'Passive investor — 5%+ ownership stake, no intent to control' },
+  '13G/A': { label: '13G/A', color: '#D97757', bg: 'rgba(217,119,87,0.12)', border: 'rgba(217,119,87,0.3)',  description: 'Amendment to passive 13G — position size has changed' },
 };
 
 // ── Analysis result card ───────────────────────────────────────────────────

@@ -5,22 +5,31 @@
 @tailwind utilities;
 
 :root {
-  --bg-primary:        #0A0B0D;
-  --bg-surface:        #111316;
-  --bg-elevated:       #191B1F;
-  --bg-hover:          #21232A;
-  --text-primary:      #FFFFFF;
-  --text-secondary:    #8A8F98;
-  --text-tertiary:     #4E535C;
-  --accent-blue:       #1652F0;
-  --accent-blue-light: #2D6BFF;
-  --color-up:          #05B169;
-  --color-down:        #F6465D;
-  --color-neutral:     #8A8F98;
-  --border-subtle:     #1A1D23;
-  --border-default:    #262A33;
-  --insider-buy:       #05B169;
-  --insider-sell:      #F6465D;
+  /* ── Claude / Anthropic warm palette ── */
+  --bg-primary:        #1C1917;   /* warm near-black, like dark parchment */
+  --bg-surface:        #242019;   /* slightly lifted warm dark */
+  --bg-elevated:       #2E2923;   /* card / panel surfaces */
+  --bg-hover:          #3A342C;   /* hover state */
+  --text-primary:      #F5F0E8;   /* warm off-white, never harsh pure white */
+  --text-secondary:    #A8998A;   /* muted warm sand */
+  --text-tertiary:     #6B5F52;   /* dimmed warm brown-gray */
+
+  /* Claude signature coral-orange accent */
+  --accent-blue:       #D97757;   /* Claude's coral (replaces cold blue) */
+  --accent-blue-light: #E8916E;   /* lighter coral for hover / glow */
+
+  /* Semantic — keep green/red for financial up/down */
+  --color-up:          #4CAF82;   /* softer emerald green */
+  --color-down:        #E05C6A;   /* muted warm red */
+  --color-neutral:     #A8998A;
+
+  /* Borders — warm tone */
+  --border-subtle:     #2C2620;
+  --border-default:    #3D3630;
+
+  /* Insider markers */
+  --insider-buy:       #4CAF82;
+  --insider-sell:      #E05C6A;
 }
 
 /* ── Reset ── */
