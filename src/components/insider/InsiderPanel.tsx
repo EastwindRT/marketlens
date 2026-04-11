@@ -337,6 +337,7 @@ export function InsiderPanel({
   onRowClick,
 }: InsiderPanelProps) {
   const [filter, setFilter]     = useState<InsiderFilter>('all');
+  const [sortBy, setSortBy]     = useState<'date' | 'size'>('date');
   const [sortDir, setSortDir]   = useState<'asc' | 'desc'>('desc');
   const [showAI, setShowAI]     = useState(false);
 
@@ -347,7 +348,14 @@ export function InsiderPanel({
       return filter === 'buy' ? type === 'BUY' : type === 'SELL';
     })
     .sort((a, b) => {
-      const diff = new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime();
+      let diff: number;
+      if (sortBy === 'size') {
+        const aVal = Math.abs((a.share || 0) * (a.transactionPrice || 0));
+        const bVal = Math.abs((b.share || 0) * (b.transactionPrice || 0));
+        diff = aVal - bVal;
+      } else {
+        diff = new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime();
+      }
       return sortDir === 'desc' ? -diff : diff;
     });
 
@@ -394,17 +402,38 @@ export function InsiderPanel({
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6,
                   padding: '6px 12px', borderRadius: 8, cursor: 'pointer',
-                  background: showAI ? 'rgba(22,82,240,0.15)' : 'var(--bg-elevated)',
-                  border: showAI ? '1px solid rgba(45,107,255,0.4)' : '1px solid var(--border-default)',
+                  background: showAI ? 'rgba(217,119,87,0.15)' : 'var(--bg-elevated)',
+                  border: showAI ? '1px solid rgba(217,119,87,0.4)' : '1px solid var(--border-default)',
                   color: showAI ? 'var(--accent-blue-light)' : 'var(--text-secondary)',
-                  fontSize: 12, fontWeight: 600,
-                  transition: 'all 150ms',
+                  fontSize: 12, fontWeight: 600, transition: 'all 150ms',
                 }}
               >
                 <Sparkles size={12} />
                 Ask AI
               </button>
             )}
+
+            {/* Sort toggle */}
+            <div className="flex items-center rounded-xl p-1"
+              style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
+              {(['date', 'size'] as const).map(s => (
+                <button key={s} onClick={() => {
+                  if (sortBy === s) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+                  else { setSortBy(s); setSortDir('desc'); }
+                }}
+                  className="px-3 py-1 text-xs font-semibold rounded-lg"
+                  style={{
+                    background: sortBy === s ? 'var(--bg-hover)' : 'transparent',
+                    color: sortBy === s ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                    border: sortBy === s ? '1px solid var(--border-default)' : '1px solid transparent',
+                    cursor: 'pointer', transition: 'all 150ms ease-out', display: 'flex', alignItems: 'center', gap: 3,
+                  }}
+                >
+                  {s === 'date' ? 'Date' : 'Size'}
+                  {sortBy === s && <span style={{ fontSize: 9 }}>{sortDir === 'desc' ? '↓' : '↑'}</span>}
+                </button>
+              ))}
+            </div>
 
             {/* Filter pills */}
             <div className="flex items-center rounded-xl p-1"
@@ -418,8 +447,7 @@ export function InsiderPanel({
                       ? (f === 'buy' ? 'var(--color-up)' : f === 'sell' ? 'var(--color-down)' : 'var(--text-primary)')
                       : 'var(--text-tertiary)',
                     border: filter === f ? '1px solid var(--border-default)' : '1px solid transparent',
-                    cursor: 'pointer',
-                    transition: 'all 150ms ease-out',
+                    cursor: 'pointer', transition: 'all 150ms ease-out',
                   }}
                 >
                   {f === 'all' ? 'All' : f === 'buy' ? 'Buys' : 'Sells'}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { ExternalLink, Search, Building2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useWatchlistStore } from '../store/watchlistStore';
@@ -21,16 +21,38 @@ function partyColor(party: string) {
   return { color: 'var(--text-tertiary)', bg: 'var(--bg-hover)' };
 }
 
+// Parse Quiver amount string to a sortable number (midpoint of range)
+function parseAmountMid(s: string): number {
+  if (!s) return 0;
+  const nums = s.replace(/[^0-9,]/g, ' ').trim().split(/\s+/).map(n => parseInt(n.replace(/,/g, ''), 10)).filter(Boolean);
+  if (nums.length >= 2) return (nums[0] + nums[nums.length - 1]) / 2;
+  if (nums.length === 1) return nums[0];
+  return 0;
+}
+
 export default function CongressPage() {
   const [tickerFilter, setTickerFilter] = useState('');
+  const [sortBy, setSortBy]   = useState<'date' | 'size'>('date');
+  const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
   const { data: allTrades, isLoading } = useLatestCongressTrades(200);
 
-  const trades = (allTrades ?? []).filter(t => {
-    if (!tickerFilter) return true;
-    return t.ticker.toUpperCase().includes(tickerFilter.toUpperCase());
-  });
+  const trades = useMemo(() => {
+    const filtered = (allTrades ?? []).filter(t => {
+      if (!tickerFilter) return true;
+      return t.ticker.toUpperCase().includes(tickerFilter.toUpperCase());
+    });
+    return [...filtered].sort((a, b) => {
+      let diff: number;
+      if (sortBy === 'size') {
+        diff = parseAmountMid(a.amount) - parseAmountMid(b.amount);
+      } else {
+        diff = (a.transactionDate ?? '').localeCompare(b.transactionDate ?? '');
+      }
+      return sortDir === 'desc' ? -diff : diff;
+    });
+  }, [allTrades, tickerFilter, sortBy, sortDir]);
 
   return (
     <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 80px' }}>
@@ -101,9 +123,36 @@ export default function CongressPage() {
 
         {/* Trades feed */}
         <div style={{ marginBottom: 28 }}>
-          <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-            Latest Trades {trades.length > 0 && <span style={{ fontWeight: 400, textTransform: 'none', marginLeft: 4 }}>· {trades.length} shown</span>}
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+            <p style={{ margin: 0, fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+              Latest Trades {trades.length > 0 && <span style={{ fontWeight: 400, textTransform: 'none', marginLeft: 4 }}>· {trades.length} shown</span>}
+            </p>
+            {/* Sort controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sort</span>
+              <div style={{ display: 'flex', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: 3, gap: 2 }}>
+                {(['date', 'size'] as const).map(s => (
+                  <button
+                    key={s}
+                    onClick={() => {
+                      if (sortBy === s) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+                      else { setSortBy(s); setSortDir('desc'); }
+                    }}
+                    style={{
+                      padding: '4px 10px', borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                      background: sortBy === s ? 'var(--bg-hover)' : 'transparent',
+                      color: sortBy === s ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                      border: sortBy === s ? '1px solid var(--border-default)' : '1px solid transparent',
+                      transition: 'all 120ms', display: 'flex', alignItems: 'center', gap: 3,
+                    }}
+                  >
+                    {s === 'date' ? 'Date' : 'Size'}
+                    {sortBy === s && <span style={{ fontSize: 9 }}>{sortDir === 'desc' ? '↓' : '↑'}</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
 
           {isLoading && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

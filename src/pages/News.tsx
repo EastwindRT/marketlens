@@ -8,7 +8,7 @@ import { FilingSheet } from '../components/ui/FilingSheet';
 import { format, subDays } from 'date-fns';
 import { useWatchlistStore } from '../store/watchlistStore';
 import { useInsiderData, getInsiderType } from '../hooks/useInsiderData';
-import { useCongressTradesForWatchlist, useLatestCongressTrades } from '../hooks/useCongressTrades';
+import { useCongressTradesForWatchlist } from '../hooks/useCongressTrades';
 import type { InsiderTransaction } from '../api/types';
 import type { CongressTrade } from '../api/congress';
 import { formatPrice, formatLargeNumber } from '../utils/formatters';
@@ -134,9 +134,7 @@ export default function NewsPage() {
     retry: 1,
   });
 
-  // Latest house trades via server-side fetch (no CORS/403)
-  const { data: congressTrades, isLoading: congressLoading } = useLatestCongressTrades(60);
-  // Watchlist congress only for confluence signals
+  // Watchlist congress only for confluence signals (full congress feed lives in /congress tab)
   const { data: watchlistCongressTrades } = useCongressTradesForWatchlist(
     symbols.map(s => s.replace(/\.TO$/i, '')),
     Math.max(days, 90)
@@ -293,20 +291,7 @@ export default function NewsPage() {
           </>
         )}
 
-        {/* ── SECTION 2: Congress Trades ── */}
-        <SectionHeader title="🏛 Congress Trades" subtitle="Latest House member disclosures — STOCK Act value ranges" />
-
-        {congressLoading && <FilingsSkeleton />}
-
-        {!congressLoading && (!congressTrades || congressTrades.length === 0) && (
-          <EmptyState message="No recent House trades found — data may still be loading." />
-        )}
-
-        {!congressLoading && congressTrades && congressTrades.length > 0 && (
-          <CongressFeed trades={congressTrades} onNavigate={(ticker) => navigate(`/stock/${ticker}`)} />
-        )}
-
-        {/* ── SECTION 3: 13D / 13G Major Filings ── */}
+        {/* ── SECTION 2: 13D / 13G Major Filings ── */}
         <SectionHeader title="Major Ownership Filings" subtitle="13D activist · 13G passive — 5%+ stake disclosures via SEC EDGAR" />
 
         {filingsLoading && <FilingsSkeleton />}
@@ -399,7 +384,7 @@ export default function NewsPage() {
   );
 }
 
-// ── Congress Feed ─────────────────────────────────────────────────────────────
+// ── Congress Feed (kept for confluence signal display only, not used as standalone section) ──
 
 function CongressFeed({ trades, onNavigate }: { trades: CongressTrade[]; onNavigate: (ticker: string) => void }) {
   return (
