@@ -80,16 +80,17 @@ function httpsGet(url, headers = {}) {
 }
 
 // In-memory cache
-let houseCache = null;
-let houseLastFetch = 0;
-const HOUSE_CACHE_TTL = 60 * 60 * 1000; // 1h
+let congressCache = null;
+let congressLastFetch = 0;
+const CONGRESS_CACHE_TTL = 30 * 60 * 1000; // 30 min — Quiver updates ~daily but let's stay fresh
 
-// Senate Stock Watcher GitHub — free, public, server-side accessible
-// Data is organised by ticker: [{ticker, transactions:[{senator, type, amount, transaction_date, ...}]}]
-const SENATE_ALL_URL = 'https://raw.githubusercontent.com/timothycarambat/senate-stock-watcher-data/master/aggregate/all_ticker_transactions.json';
+// Quiver Quant — free public endpoint, covers both House & Senate, updated daily with ~1-2 day lag
+const QUIVER_CONGRESS_URL = 'https://api.quiverquant.com/beta/live/congresstrading';
+const QUIVER_HEADERS = { 'Authorization': 'Bearer public', 'Accept': 'application/json' };
 
 async function fetchCongressData() {
-  return httpsGet(SENATE_ALL_URL);
+  const raw = await httpsGet(QUIVER_CONGRESS_URL, QUIVER_HEADERS);
+  return JSON.parse(raw);
 }
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
@@ -97,42 +98,40 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.get('/api/latest-congress', async (req, res) => {
   try {
     const now = Date.now();
-    if (!houseCache || now - houseLastFetch > HOUSE_CACHE_TTL) {
-      const raw = await fetchCongressData();
-      const data = JSON.parse(raw);
-      houseCache = Array.isArray(data) ? data : [];
-      houseLastFetch = now;
+    if (!congressCache || now - congressLastFetch > CONGRESS_CACHE_TTL) {
+      congressCache = await fetchCongressData();
+      congressLastFetch = now;
     }
 
-    const limit = Math.min(parseInt(req.query.limit || '60', 10), 200);
+    const limit = Math.min(parseInt(req.query.limit || '60', 10), 500);
 
-    // Flatten ticker-keyed senate data into a trades list
+    // Quiver fields: Representative, ReportDate, TransactionDate, Ticker, Transaction,
+    //   Range, House, Amount, Party, TickerType, Description, BioGuideID
     const trades = [];
-    for (const entry of houseCache) {
-      const ticker = (entry.ticker || '').trim().toUpperCase();
+    for (const t of (Array.isArray(congressCache) ? congressCache : [])) {
+      const ticker = (t.Ticker || '').trim().toUpperCase();
       if (!ticker || ticker === 'N/A' || ticker === '--' || ticker.length > 8) continue;
-      for (const t of (entry.transactions || [])) {
-        const typeLower = (t.type || '').toLowerCase();
-        if (!typeLower.includes('purchase') && !typeLower.includes('sale') && !typeLower.includes('sell') && !typeLower.includes('exchange')) continue;
-        const txDate = normaliseDate(t.transaction_date || '');
-        if (!txDate) continue;
-        const member = (t.senator || '').replace(/^Sen\.\s*/i, '').trim();
-        if (!member) continue;
-        trades.push({
-          member,
-          party: '',   // senate source doesn't include party
-          state: '',
-          ticker,
-          assetDescription: t.asset_description || '',
-          type: typeLower.includes('purchase') ? 'purchase' : 'sale',
-          amount: t.amount || '',
-          amountMin: 0,
-          transactionDate: txDate,
-          disclosureDate: normaliseDate(t.disclosure_date || ''),
-          filingUrl: t.ptr_link || t.link || '',
-          chamber: 'senate',
-        });
-      }
+      const txType = (t.Transaction || '').toLowerCase();
+      if (!txType.includes('purchase') && !txType.includes('sale') && !txType.includes('sell') && !txType.includes('exchange')) continue;
+      const txDate = normaliseDate(t.TransactionDate || '');
+      if (!txDate) continue;
+      const member = (t.Representative || '').trim();
+      if (!member) continue;
+
+      trades.push({
+        member,
+        party: (t.Party || '').trim(),
+        state: '',
+        ticker,
+        assetDescription: t.Description || '',
+        type: txType.includes('purchase') ? 'purchase' : 'sale',
+        amount: t.Range || t.Amount || '',
+        amountMin: 0,
+        transactionDate: txDate,
+        disclosureDate: normaliseDate(t.ReportDate || ''),
+        filingUrl: '',
+        chamber: (t.House || '').toLowerCase() === 'senate' ? 'senate' : 'house',
+      });
     }
 
     trades.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
