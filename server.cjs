@@ -84,15 +84,11 @@ let houseCache = null;
 let houseLastFetch = 0;
 const HOUSE_CACHE_TTL = 60 * 60 * 1000; // 1h
 
-// Quiver Quant free API — real-time congress trades
-// Requires a 2-step session: first fetch homepage for cookies, then fetch data
-const CONGRESS_API_URL = 'https://api.quiverquant.com/beta/live/congresstrading';
+// House Stock Watcher S3 — free, no auth, server-side fetch avoids CORS
+const HOUSE_S3_URL = 'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json';
 
 async function fetchCongressData() {
-  return httpsGet(CONGRESS_API_URL, {
-    'Authorization': 'Bearer public',
-    'Accept': 'application/json, text/plain, */*',
-  });
+  return httpsGet(HOUSE_S3_URL);
 }
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
@@ -109,33 +105,34 @@ app.get('/api/latest-congress', async (req, res) => {
 
     const limit = Math.min(parseInt(req.query.limit || '60', 10), 200);
 
-    // Normalise Quiver Quant format and sort
-    // Fields: Representative, House, ReportDate, TransactionDate, Ticker, Transaction, Range, Amount, Party
+    // Normalise House Stock Watcher format
+    // Fields: representative, party, state, district, ticker, type, amount, transaction_date, disclosure_date, asset_description, link
     const trades = [];
     for (const r of houseCache) {
-      const txRaw = (r.Transaction || '').toLowerCase();
-      if (!txRaw.includes('purchase') && !txRaw.includes('sale') && !txRaw.includes('sell')) continue;
-      const ticker = (r.Ticker || '').trim().toUpperCase();
+      const type = (r.type || '').toLowerCase();
+      if (!type.includes('purchase') && !type.includes('sale') && !type.includes('sell')) continue;
+      const ticker = (r.ticker || '').trim().toUpperCase();
       if (!ticker || ticker === '--' || ticker.length > 8) continue;
-      // Already in YYYY-MM-DD format from Quiver Quant
-      const txDate = r.TransactionDate ? String(r.TransactionDate).slice(0, 10) : '';
+      const txDate = normaliseDate(r.transaction_date || '');
       if (!txDate) continue;
-      const member = (r.Representative || '').trim();
+      // representative may be "FirstName LastName (District)" or just "FirstName LastName"
+      const repRaw = (r.representative || '').trim();
+      const nameMatch = repRaw.match(/^(.*?)\s*\(/);
+      const member = (nameMatch ? nameMatch[1] : repRaw).trim();
       if (!member) continue;
-      const chamber = (r.House || '').toLowerCase().includes('senate') ? 'senate' : 'house';
       trades.push({
         member,
-        party: r.Party || '',
-        state: '',
+        party: r.party || '',
+        state: r.state || '',
         ticker,
-        assetDescription: r.Description || '',
-        type: txRaw.includes('purchase') ? 'purchase' : 'sale',
-        amount: r.Range || (r.Amount ? `$${r.Amount}` : ''),
-        amountMin: parseFloat(r.Amount || '0') || 0,
+        assetDescription: r.asset_description || '',
+        type: type.includes('purchase') ? 'purchase' : 'sale',
+        amount: r.amount || '',
+        amountMin: 0,
         transactionDate: txDate,
-        disclosureDate: r.ReportDate ? String(r.ReportDate).slice(0, 10) : '',
-        filingUrl: '',
-        chamber,
+        disclosureDate: normaliseDate(r.disclosure_date || ''),
+        filingUrl: r.link || '',
+        chamber: 'house',
       });
     }
 
@@ -833,29 +830,30 @@ async function fetchHoldings(cik, accession) {
   return parse13FXml(xml);
 }
 
-// Search for funds by name — uses EDGAR company search atom feed
+// Search for funds by name — uses EDGAR EFTS JSON search API (more reliable than CGI atom feed)
 app.get('/api/13f/search', async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q || q.length < 2) return res.json({ funds: [] });
   try {
-    const url = `https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(q)}&CIK=&type=13F-HR&dateb=&owner=include&count=20&action=getcompany&output=atom`;
-    const xml = await httpsGet(url, { 'User-Agent': 'TARS admin@tars.app' });
+    const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    // entity= searches by filer entity name; q= as quoted string searches full text
+    const url = `https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(q)}%22&forms=13F-HR&dateRange=custom&startdt=${oneYearAgo}`;
+    const raw = await httpsGet(url, { 'User-Agent': 'TARS admin@tars.app', 'Accept': 'application/json' });
+    const json = JSON.parse(raw);
+    const hits = json.hits?.hits ?? [];
+
     const filers = new Map();
-    const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
-    let m;
-    while ((m = entryRe.exec(xml)) !== null) {
-      const block = m[1];
-      const getTag = (tag) => { const r = new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`); const x = r.exec(block); return x ? x[1].trim() : ''; };
-      const title = getTag('title');
-      const updated = getTag('updated').slice(0, 10);
-      const linkMatch = /<link[^>]*href="([^"]*)"/.exec(block);
-      const href = linkMatch ? linkMatch[1] : '';
-      const cikMatch = href.match(/CIK=0*(\d+)/) || href.match(/CIK=(\d+)/);
-      const cik = cikMatch ? cikMatch[1] : '';
-      const nameMatch = title.match(/^[\w\/\-]+\s+-\s+(.+?)\s+\(\d+\)/);
-      const name = nameMatch ? nameMatch[1].trim() : title;
+    for (const hit of hits) {
+      const src = hit._source ?? {};
+      const name = (src.entity_name || '').trim();
+      // Accession _id format: "XXXXXXXXXX-YY-NNNNNN" — first 10 digits is filer CIK
+      const id = (hit._id || '').replace(/-/g, '');
+      const cikPadded = id.slice(0, 10);
+      const cik = cikPadded.replace(/^0+/, '');
+      const lastFiled = (src.file_date || '').slice(0, 10);
+
       if (cik && name && !filers.has(cik)) {
-        filers.set(cik, { cik, name, lastFiled: updated });
+        filers.set(cik, { cik, name, lastFiled });
       }
     }
     res.json({ funds: Array.from(filers.values()).slice(0, 15) });
