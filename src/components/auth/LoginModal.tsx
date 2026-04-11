@@ -1,6 +1,18 @@
 import React, { useState } from 'react';
-import { TrendingUp, AlertCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { signInWithGoogle } from '../../api/supabase';
+
+// TARS logo — a 4-pointed star ✦ because TARS is an anagram of STAR
+function TarsIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M8 1C8 1 8.8 5.2 11.2 6.8C13.6 8.4 15 8 15 8C15 8 13.6 7.6 11.2 9.2C8.8 10.8 8 15 8 15C8 15 7.2 10.8 4.8 9.2C2.4 7.6 1 8 1 8C1 8 2.4 8.4 4.8 6.8C7.2 5.2 8 1 8 1Z"
+        fill="white"
+      />
+    </svg>
+  );
+}
 
 export default function LoginModal() {
   const [loading, setLoading] = useState(false);
@@ -32,8 +44,9 @@ export default function LoginModal() {
           <div
             className="w-14 h-14 rounded-2xl flex items-center justify-center"
             style={{ background: 'var(--accent-blue)' }}
+            title="TARS — an anagram of STAR ✦"
           >
-            <TrendingUp size={28} color="white" strokeWidth={2.5} />
+            <TarsIcon size={30} />
           </div>
           <div className="flex flex-col items-center gap-1">
             <h1
@@ -42,6 +55,9 @@ export default function LoginModal() {
             >
               TARS
             </h1>
+            <p className="text-xs" style={{ color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", letterSpacing: '0.05em' }}>
+              ✦ an anagram of STAR
+            </p>
             <p className="text-sm text-center" style={{ color: 'var(--text-secondary)' }}>
               Sign in to access your stock research dashboard
             </p>

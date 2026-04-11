@@ -1,6 +1,18 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { TrendingUp, Menu, Search, X, Trophy, User } from 'lucide-react';
+import { Menu, Search, X, Trophy, User } from 'lucide-react';
+
+// TARS logo — a 4-pointed star ✦ because TARS is an anagram of STAR
+function TarsIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M8 1C8 1 8.8 5.2 11.2 6.8C13.6 8.4 15 8 15 8C15 8 13.6 7.6 11.2 9.2C8.8 10.8 8 15 8 15C8 15 7.2 10.8 4.8 9.2C2.4 7.6 1 8 1 8C1 8 2.4 8.4 4.8 6.8C7.2 5.2 8 1 8 1Z"
+        fill="white"
+      />
+    </svg>
+  );
+}
 import { SearchBar } from '../ui/SearchBar';
 import { useLeagueStore } from '../../store/leagueStore';
 import LoginModal from '../auth/LoginModal';
@@ -43,9 +55,9 @@ export function Header({ onMenuClick }: HeaderProps) {
           </button>
 
           {/* Logo — centered */}
-          <Link to="/" className="flex items-center gap-2 no-underline flex-1 justify-center">
+          <Link to="/" className="flex items-center gap-2 no-underline flex-1 justify-center" title="TARS — an anagram of STAR ✦">
             <div className="w-7 h-7 rounded-xl flex items-center justify-center" style={{ background: 'var(--accent-blue)' }}>
-              <TrendingUp size={14} color="white" strokeWidth={2.5} />
+              <TarsIcon size={15} />
             </div>
             <span className="font-bold text-sm tracking-tight" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
               TARS
@@ -90,9 +102,9 @@ export function Header({ onMenuClick }: HeaderProps) {
         {/* ── Desktop layout ── */}
         <div className="hidden lg:flex items-center gap-6 px-6 w-full">
           {/* Logo */}
-          <Link to="/" className="flex items-center gap-2.5 no-underline flex-shrink-0">
+          <Link to="/" className="flex items-center gap-2.5 no-underline flex-shrink-0" title="TARS — an anagram of STAR ✦">
             <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: 'var(--accent-blue)' }}>
-              <TrendingUp size={16} color="white" strokeWidth={2.5} />
+              <TarsIcon size={17} />
             </div>
             <span className="font-bold text-sm tracking-tight" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
               TARS
