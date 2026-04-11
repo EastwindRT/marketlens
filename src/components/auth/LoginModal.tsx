@@ -55,9 +55,6 @@ export default function LoginModal() {
             >
               TARS
             </h1>
-            <p className="text-xs" style={{ color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", letterSpacing: '0.05em' }}>
-              ✦ an anagram of STAR
-            </p>
             <p className="text-sm text-center" style={{ color: 'var(--text-secondary)' }}>
               Sign in to access your stock research dashboard
             </p>
