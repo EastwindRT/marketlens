@@ -840,7 +840,7 @@ const KNOWN_FUNDS = [
   { cik: '1595882', name: 'TWO SIGMA INVESTMENTS LP' },
   { cik: '1540159', name: 'POINT72 ASSET MANAGEMENT LP' },
   { cik: '1167557', name: 'AQR CAPITAL MANAGEMENT LLC' },
-  { cik: '1352851', name: 'MAGNETAR FINANCIAL LLC' },
+  { cik: '1649339', name: 'MAGNETAR FINANCIAL LLC' },
   { cik: '1218710', name: 'BALYASNY ASSET MANAGEMENT LP' },
   { cik: '1612063', name: 'WINTON GROUP LTD' },
   { cik: '1637460', name: 'MAN GROUP PLC' },
