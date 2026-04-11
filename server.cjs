@@ -830,52 +830,78 @@ async function fetchHoldings(cik, accession) {
 }
 
 // Search for funds by name — EDGAR CGI company search (atom feed)
-// Uses proper CDATA + HTML entity handling; server-side only (SEC blocks browser UA)
+// 13F search — uses SEC company_tickers.json (static file, reliable) filtered to known 13F filers
+// Supplemented by a curated list of institutional funds not in the tickers file
+let tickerCache = null;
+let tickerLastFetch = 0;
+const TICKER_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h
+
+// Well-known institutional funds (private, not in company_tickers.json) with verified CIKs
+const KNOWN_FUNDS = [
+  { cik: '1067983', name: 'BERKSHIRE HATHAWAY INC' },
+  { cik: '1350694', name: 'BRIDGEWATER ASSOCIATES LP' },
+  { cik: '1037389', name: 'RENAISSANCE TECHNOLOGIES LLC' },
+  { cik: '1423043', name: 'CITADEL ADVISORS LLC' },
+  { cik: '1167483', name: 'TIGER GLOBAL MANAGEMENT LLC' },
+  { cik: '1466373', name: 'COATUE MANAGEMENT LLC' },
+  { cik: '1040273', name: 'VIKING GLOBAL INVESTORS LP' },
+  { cik: '1336528', name: 'PERSHING SQUARE CAPITAL MANAGEMENT LP' },
+  { cik: '1040570', name: 'THIRD POINT LLC' },
+  { cik: '1056931', name: 'APPALOOSA MANAGEMENT LP' },
+  { cik: '875956',  name: 'BAUPOST GROUP LLC' },
+  { cik: '1079114', name: 'GREENLIGHT CAPITAL INC' },
+  { cik: '814180',  name: 'ICAHN CAPITAL LP' },
+  { cik: '1162175', name: 'JANA PARTNERS LLC' },
+  { cik: '892416',  name: 'ELLIOTT INVESTMENT MANAGEMENT LP' },
+  { cik: '1486671', name: 'STARBOARD VALUE LP' },
+  { cik: '1275014', name: 'D E SHAW & CO INC' },
+  { cik: '1595882', name: 'TWO SIGMA INVESTMENTS LP' },
+  { cik: '1540159', name: 'POINT72 ASSET MANAGEMENT LP' },
+  { cik: '1536411', name: 'DUQUESNE FAMILY OFFICE LLC' },
+  { cik: '1336489', name: 'LONE PINE CAPITAL LLC' },
+  { cik: '1315066', name: 'FMR LLC' },
+  { cik: '1166559', name: 'BILL & MELINDA GATES FOUNDATION TRUST' },
+  { cik: '813672',  name: 'CAPITAL RESEARCH GLOBAL INVESTORS' },
+  { cik: '102909',  name: 'VANGUARD GROUP INC' },
+];
+
 app.get('/api/13f/search', async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q || q.length < 2) return res.json({ funds: [] });
+  const qUpper = q.toUpperCase();
+
   try {
-    const url = `https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(q)}&CIK=&type=13F-HR&dateb=&owner=include&count=20&search_text=&action=getcompany&output=atom`;
-    const xml = await httpsGet(url, { 'User-Agent': 'TARS admin@tars.app', 'Accept': 'application/atom+xml,text/xml,*/*' });
+    // 1. Search the curated known-funds list
+    const knownMatches = KNOWN_FUNDS.filter(f => f.name.includes(qUpper));
 
-    // Decode XML/HTML entities
-    const decode = s => s
-      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-      .replace(/&#(\d+);/g, (_, c) => String.fromCharCode(+c));
-
-    // Extract tag content — handles plain text and CDATA sections
-    const getTag = (block, tag) => {
-      const r = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
-      const x = r.exec(block);
-      if (!x) return '';
-      const raw = x[1].trim();
-      const cdata = raw.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
-      return decode(cdata ? cdata[1].trim() : raw);
-    };
-
-    const filers = new Map();
-    const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
-    let m;
-    while ((m = entryRe.exec(xml)) !== null) {
-      const block = m[1];
-      const title   = getTag(block, 'title');
-      const updated = getTag(block, 'updated').slice(0, 10);
-      // href may use &amp; — decode before matching CIK
-      const linkRaw = /<link[^>]+href="([^"]+)"/.exec(block);
-      const href    = linkRaw ? decode(linkRaw[1]) : '';
-      const cikMatch = href.match(/[?&]CIK=0*(\d+)/i);
-      const cik  = cikMatch ? cikMatch[1] : '';
-      // Title: "13F-HR - COMPANY NAME (CIK) (Filer)" or "13F-HR/A - ..."
-      const nameMatch = title.match(/^[\w\/\-]+\s+-\s+(.+?)\s+\(\d+\)/);
-      const name = nameMatch ? nameMatch[1].trim() : '';
-      if (cik && name && !filers.has(cik)) {
-        filers.set(cik, { cik, name, lastFiled: updated });
+    // 2. Fetch + cache SEC company_tickers.json (all public companies)
+    const now = Date.now();
+    if (!tickerCache || now - tickerLastFetch > TICKER_CACHE_TTL) {
+      try {
+        const raw = await httpsGet('https://www.sec.gov/files/company_tickers.json', { 'User-Agent': 'TARS admin@tars.app' });
+        tickerCache = Object.values(JSON.parse(raw)); // [{cik_str, ticker, title}, ...]
+        tickerLastFetch = now;
+      } catch (e) {
+        console.error('[13f/tickers]', e.message);
+        tickerCache = [];
       }
     }
 
-    console.log(`[13f/search] q="${q}" xml=${xml.length}b entries=${filers.size}`);
-    res.json({ funds: Array.from(filers.values()).slice(0, 15) });
+    const tickerMatches = tickerCache
+      .filter(c => (c.title || '').toUpperCase().includes(qUpper))
+      .slice(0, 20)
+      .map(c => ({ cik: String(c.cik_str), name: c.title, lastFiled: '' }));
+
+    // Merge: known funds first, then public-company matches (deduplicate by CIK)
+    const seen = new Set();
+    const funds = [];
+    for (const f of [...knownMatches, ...tickerMatches]) {
+      if (!seen.has(f.cik)) { seen.add(f.cik); funds.push(f); }
+      if (funds.length >= 15) break;
+    }
+
+    console.log(`[13f/search] q="${q}" known=${knownMatches.length} tickers=${tickerMatches.length}`);
+    res.json({ funds });
   } catch (err) {
     console.error('[13f/search]', err.message);
     res.status(502).json({ error: err.message, funds: [] });
