@@ -826,31 +826,46 @@ const TICKER_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h
 
 // Well-known institutional funds (private, not in company_tickers.json) with verified CIKs
 const KNOWN_FUNDS = [
+  // Mega / Index
+  { cik: '102909',  name: 'VANGUARD GROUP INC' },
+  { cik: '1315066', name: 'FMR LLC' },
+  { cik: '813672',  name: 'CAPITAL RESEARCH GLOBAL INVESTORS' },
   { cik: '1067983', name: 'BERKSHIRE HATHAWAY INC' },
-  { cik: '1350694', name: 'BRIDGEWATER ASSOCIATES LP' },
+  { cik: '1166559', name: 'BILL & MELINDA GATES FOUNDATION TRUST' },
+  // Quant / Multi-strat
   { cik: '1037389', name: 'RENAISSANCE TECHNOLOGIES LLC' },
+  { cik: '1273087', name: 'MILLENNIUM MANAGEMENT LLC' },
   { cik: '1423053', name: 'CITADEL ADVISORS LLC' },
+  { cik: '1275014', name: 'D E SHAW & CO INC' },
+  { cik: '1595882', name: 'TWO SIGMA INVESTMENTS LP' },
+  { cik: '1540159', name: 'POINT72 ASSET MANAGEMENT LP' },
+  { cik: '1167557', name: 'AQR CAPITAL MANAGEMENT LLC' },
+  { cik: '1352851', name: 'MAGNETAR FINANCIAL LLC' },
+  { cik: '1218710', name: 'BALYASNY ASSET MANAGEMENT LP' },
+  { cik: '1612063', name: 'WINTON GROUP LTD' },
+  { cik: '1637460', name: 'MAN GROUP PLC' },
+  // Long / Short Equity
+  { cik: '1350694', name: 'BRIDGEWATER ASSOCIATES LP' },
   { cik: '1167483', name: 'TIGER GLOBAL MANAGEMENT LLC' },
   { cik: '1466373', name: 'COATUE MANAGEMENT LLC' },
   { cik: '1040273', name: 'VIKING GLOBAL INVESTORS LP' },
-  { cik: '1336528', name: 'PERSHING SQUARE CAPITAL MANAGEMENT LP' },
-  { cik: '1040570', name: 'THIRD POINT LLC' },
+  { cik: '1336489', name: 'LONE PINE CAPITAL LLC' },
   { cik: '1056931', name: 'APPALOOSA MANAGEMENT LP' },
   { cik: '875956',  name: 'BAUPOST GROUP LLC' },
+  { cik: '1536411', name: 'DUQUESNE FAMILY OFFICE LLC' },
+  { cik: '1318757', name: 'MARSHALL WACE LLP' },
+  { cik: '1602189', name: 'DRAGONEER INVESTMENT GROUP LLC' },
+  { cik: '923093',  name: 'TUDOR INVESTMENT CORP' },
+  // Activist
+  { cik: '1336528', name: 'PERSHING SQUARE CAPITAL MANAGEMENT LP' },
+  { cik: '1040570', name: 'THIRD POINT LLC' },
   { cik: '1079114', name: 'GREENLIGHT CAPITAL INC' },
   { cik: '814180',  name: 'ICAHN CAPITAL LP' },
   { cik: '1162175', name: 'JANA PARTNERS LLC' },
   { cik: '892416',  name: 'ELLIOTT INVESTMENT MANAGEMENT LP' },
   { cik: '1486671', name: 'STARBOARD VALUE LP' },
-  { cik: '1275014', name: 'D E SHAW & CO INC' },
-  { cik: '1595882', name: 'TWO SIGMA INVESTMENTS LP' },
-  { cik: '1540159', name: 'POINT72 ASSET MANAGEMENT LP' },
-  { cik: '1536411', name: 'DUQUESNE FAMILY OFFICE LLC' },
-  { cik: '1336489', name: 'LONE PINE CAPITAL LLC' },
-  { cik: '1315066', name: 'FMR LLC' },
-  { cik: '1166559', name: 'BILL & MELINDA GATES FOUNDATION TRUST' },
-  { cik: '813672',  name: 'CAPITAL RESEARCH GLOBAL INVESTORS' },
-  { cik: '102909',  name: 'VANGUARD GROUP INC' },
+  // AI / Tech focused
+  { cik: '2045724', name: 'SITUATIONAL AWARENESS LP' },
 ];
 
 app.get('/api/13f/search', async (req, res) => {
@@ -859,8 +874,29 @@ app.get('/api/13f/search', async (req, res) => {
   const qUpper = q.toUpperCase();
 
   try {
-    // 1. Search the curated known-funds list
-    const knownMatches = KNOWN_FUNDS.filter(f => f.name.includes(qUpper));
+    // Helper: get latest 13F-HR filing date for a CIK from EDGAR submissions API
+    async function getLatest13FDate(cik) {
+      try {
+        const padded = cik.padStart(10, '0');
+        const data = await httpsGet(`https://data.sec.gov/submissions/CIK${padded}.json`, { 'User-Agent': 'TARS admin@tars.app' });
+        const json = JSON.parse(data);
+        const recent = json.filings?.recent ?? {};
+        const forms = recent.form ?? [];
+        const dates = recent.filingDate ?? [];
+        for (let i = 0; i < forms.length; i++) {
+          if (forms[i] === '13F-HR') return dates[i] ?? '';
+        }
+      } catch {}
+      return '';
+    }
+
+    // 1. Search the curated known-funds list + fetch latest filing dates in parallel
+    const knownBase = KNOWN_FUNDS.filter(f => f.name.includes(qUpper));
+    const knownMatches = await Promise.all(
+      knownBase.map(async f => ({ ...f, lastFiled: await getLatest13FDate(f.cik) }))
+    );
+    // Sort known matches by most-recent filing first
+    knownMatches.sort((a, b) => b.lastFiled.localeCompare(a.lastFiled));
 
     // 2. Fetch + cache SEC company_tickers.json (all public companies)
     const now = Date.now();
@@ -908,6 +944,7 @@ app.get('/api/13f/search', async (req, res) => {
     }
 
     // Merge all three sources (known list → public tickers → EDGAR CGI), deduplicate by CIK
+    // Known list is pre-sorted by lastFiled desc; others follow after
     const seen = new Set();
     const funds = [];
     for (const f of [...knownMatches, ...tickerMatches, ...edgarMatches]) {
