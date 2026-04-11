@@ -892,15 +892,42 @@ app.get('/api/13f/search', async (req, res) => {
       .slice(0, 20)
       .map(c => ({ cik: String(c.cik_str), name: c.title, lastFiled: '' }));
 
-    // Merge: known funds first, then public-company matches (deduplicate by CIK)
+    // 3. EDGAR CGI company search — catches private hedge funds not in tickers file
+    //    Use default browser UA (TARS UA is blocked by EDGAR CGI, data.sec.gov UA isn't)
+    let edgarMatches = [];
+    try {
+      const edgarUrl = `https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(q)}&CIK=&type=13F-HR&dateb=&owner=include&count=20&search_text=&action=getcompany&output=atom`;
+      const xml = await httpsGet(edgarUrl); // default Mozilla/Chrome UA — do NOT override
+      const decode = s => s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#(\d+);/g,(_,c)=>String.fromCharCode(+c));
+      const getTag = (block, tag) => { const r=new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`,'i'); const x=r.exec(block); if(!x)return''; const raw=x[1].trim(); const cd=raw.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/); return decode(cd?cd[1].trim():raw); };
+      const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+      let m;
+      while ((m = entryRe.exec(xml)) !== null) {
+        const block = m[1];
+        const title = getTag(block, 'title');
+        const updated = getTag(block, 'updated').slice(0, 10);
+        const linkRaw = /<link[^>]+href="([^"]+)"/.exec(block);
+        const href = linkRaw ? decode(linkRaw[1]) : '';
+        const cikMatch = href.match(/[?&]CIK=0*(\d+)/i);
+        const cik = cikMatch ? cikMatch[1] : '';
+        const nameMatch = title.match(/^[\w\/\-]+\s+-\s+(.+?)\s+\(\d+\)/);
+        const name = nameMatch ? nameMatch[1].trim() : '';
+        if (cik && name) edgarMatches.push({ cik, name, lastFiled: updated });
+      }
+      console.log(`[13f/search] EDGAR CGI: xml=${xml.length}b entries=${edgarMatches.length}`);
+    } catch (e) {
+      console.error('[13f/edgar]', e.message);
+    }
+
+    // Merge all three sources (known list → public tickers → EDGAR CGI), deduplicate by CIK
     const seen = new Set();
     const funds = [];
-    for (const f of [...knownMatches, ...tickerMatches]) {
+    for (const f of [...knownMatches, ...tickerMatches, ...edgarMatches]) {
       if (!seen.has(f.cik)) { seen.add(f.cik); funds.push(f); }
       if (funds.length >= 15) break;
     }
 
-    console.log(`[13f/search] q="${q}" known=${knownMatches.length} tickers=${tickerMatches.length}`);
+    console.log(`[13f/search] q="${q}" known=${knownMatches.length} tickers=${tickerMatches.length} edgar=${edgarMatches.length}`);
     res.json({ funds });
   } catch (err) {
     console.error('[13f/search]', err.message);
