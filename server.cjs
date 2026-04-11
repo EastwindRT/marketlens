@@ -829,7 +829,7 @@ const KNOWN_FUNDS = [
   { cik: '1067983', name: 'BERKSHIRE HATHAWAY INC' },
   { cik: '1350694', name: 'BRIDGEWATER ASSOCIATES LP' },
   { cik: '1037389', name: 'RENAISSANCE TECHNOLOGIES LLC' },
-  { cik: '1423043', name: 'CITADEL ADVISORS LLC' },
+  { cik: '1423053', name: 'CITADEL ADVISORS LLC' },
   { cik: '1167483', name: 'TIGER GLOBAL MANAGEMENT LLC' },
   { cik: '1466373', name: 'COATUE MANAGEMENT LLC' },
   { cik: '1040273', name: 'VIKING GLOBAL INVESTORS LP' },
