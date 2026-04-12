@@ -17,9 +17,21 @@ import { isTSXTicker } from '../utils/marketHours';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formStyle(formType: string): { bg: string; color: string; border: string } {
+  if (formType === '13D')   return { bg: 'rgba(247,147,26,0.15)', color: '#F7931A',                   border: 'rgba(247,147,26,0.5)' };
+  if (formType === '13D/A') return { bg: 'rgba(247,147,26,0.08)', color: '#F7931A',                   border: 'rgba(247,147,26,0.3)' };
+  if (formType === '13G')   return { bg: 'rgba(45,107,255,0.12)', color: 'var(--accent-blue-light)',  border: 'rgba(45,107,255,0.4)' };
+  if (formType === '13G/A') return { bg: 'rgba(45,107,255,0.07)', color: 'var(--accent-blue-light)',  border: 'rgba(45,107,255,0.25)' };
+  // Legacy fallback for SCHEDULE 13D etc.
   if (formType.startsWith('13D') || formType.startsWith('SCHEDULE 13D'))
     return { bg: 'rgba(247,147,26,0.12)', color: '#F7931A', border: 'rgba(247,147,26,0.3)' };
-  return { bg: 'rgba(45,107,255,0.12)', color: 'var(--accent-blue-light)', border: 'rgba(45,107,255,0.3)' };
+  return { bg: 'var(--bg-hover)', color: 'var(--text-secondary)', border: 'var(--border-subtle)' };
+}
+
+function formTypeLabel(formType: string): { intent: string; amended: boolean } {
+  const amended = formType.endsWith('/A');
+  const base = amended ? formType.slice(0, -2) : formType;
+  const intent = base === '13D' || base === 'SCHEDULE 13D' ? 'Activist' : 'Passive';
+  return { intent, amended };
 }
 
 function typeStyle(type: 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL') {
@@ -123,7 +135,8 @@ interface FlatTrade extends InsiderTransaction {
 export default function NewsPage() {
   const [days, setDays] = useState(14);
   const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
-  const [filingsSort, setFilingsSort] = useState<'date' | 'form'>('date');
+  const [filingsSort, setFilingsSort] = useState<'date' | 'filer' | 'subject'>('date');
+  const [formFilter, setFormFilter] = useState<'all' | '13D' | '13D/A' | '13G' | '13G/A'>('all');
   const [confSort, setConfSort] = useState<'date' | 'trades'>('date');
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
@@ -177,12 +190,14 @@ export default function NewsPage() {
   }, [correlations, confSort]);
 
   const sortedFilings = useMemo(() => {
-    if (!filings) return [];
-    if (filingsSort === 'form') {
-      return [...filings].sort((a, b) => a.formType.localeCompare(b.formType));
-    }
-    return filings; // API already returns newest-first
-  }, [filings, filingsSort]);
+    let list = filings ?? [];
+    if (formFilter !== 'all') list = list.filter(f => f.formType === formFilter);
+    return [...list].sort((a, b) => {
+      if (filingsSort === 'filer')   return (a.filerName ?? '').localeCompare(b.filerName ?? '');
+      if (filingsSort === 'subject') return (a.subjectCompany ?? 'ZZZ').localeCompare(b.subjectCompany ?? 'ZZZ');
+      return b.filedDate.localeCompare(a.filedDate); // date desc
+    });
+  }, [filings, formFilter, filingsSort]);
 
   return (
     <>
@@ -330,14 +345,14 @@ export default function NewsPage() {
         )}
 
         {/* ── SECTION 2: 13D / 13G Major Filings ── */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10, gap: 12 }}>
           <SectionHeader
             noMargin
             title="Major Ownership Filings"
-            subtitle="13D activist · 13G passive — 5%+ stake disclosures via SEC EDGAR"
+            subtitle={`${sortedFilings.length} filings · 13D activist · 13G passive · 5%+ stake disclosures`}
           />
           <div style={{ display: 'flex', gap: 2, background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, border: '1px solid var(--border-subtle)', flexShrink: 0 }}>
-            {(['date', 'form'] as const).map(opt => (
+            {(['date', 'filer', 'subject'] as const).map(opt => (
               <button
                 key={opt}
                 onClick={() => setFilingsSort(opt)}
@@ -348,10 +363,39 @@ export default function NewsPage() {
                   transition: 'all 120ms',
                 }}
               >
-                {opt === 'date' ? 'Date' : 'Type'}
+                {opt === 'date' ? 'Date' : opt === 'filer' ? 'Filer' : 'Subject'}
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Form type filter chips */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+          {(['all', '13D', '13D/A', '13G', '13G/A'] as const).map(f => {
+            const isActive = formFilter === f;
+            let activeColor = 'var(--accent-blue-light)';
+            let activeBg    = 'rgba(45,107,255,0.12)';
+            let activeBorder = 'rgba(45,107,255,0.4)';
+            if (f === '13D')   { activeColor = '#F7931A'; activeBg = 'rgba(247,147,26,0.15)'; activeBorder = 'rgba(247,147,26,0.5)'; }
+            if (f === '13D/A') { activeColor = '#F7931A'; activeBg = 'rgba(247,147,26,0.10)'; activeBorder = 'rgba(247,147,26,0.35)'; }
+            if (f === '13G/A') { activeBg = 'rgba(45,107,255,0.08)'; activeBorder = 'rgba(45,107,255,0.25)'; }
+            return (
+              <button
+                key={f}
+                onClick={() => setFormFilter(f)}
+                style={{
+                  padding: '4px 12px', borderRadius: 14, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                  background: isActive ? activeBg : 'var(--bg-elevated)',
+                  color: isActive ? (f === 'all' ? 'var(--text-primary)' : activeColor) : 'var(--text-tertiary)',
+                  border: `1px solid ${isActive ? activeBorder : 'var(--border-subtle)'}`,
+                  transition: 'all 120ms',
+                  fontFamily: "'Inter', sans-serif",
+                }}
+              >
+                {f === 'all' ? 'All' : f}
+              </button>
+            );
+          })}
         </div>
 
         {filingsLoading && <FilingsSkeleton />}
@@ -392,14 +436,24 @@ export default function NewsPage() {
                     onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
                     onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
                   >
-                    <span style={{
-                      fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-                      flexShrink: 0, whiteSpace: 'nowrap',
-                      background: fc.bg, color: fc.color, border: `1px solid ${fc.border}`,
-                      fontFamily: "'Roboto Mono', monospace",
-                    }}>
-                      {f.formType}
-                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3, flexShrink: 0 }}>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
+                        whiteSpace: 'nowrap',
+                        background: fc.bg, color: fc.color, border: `1px solid ${fc.border}`,
+                        fontFamily: "'Roboto Mono', monospace",
+                      }}>
+                        {f.formType}
+                      </span>
+                      {(() => {
+                        const { intent, amended } = formTypeLabel(f.formType);
+                        return (
+                          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', whiteSpace: 'nowrap', lineHeight: 1 }}>
+                            {intent}{amended ? ' · Amended' : ''}
+                          </span>
+                        );
+                      })()}
+                    </div>
 
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {f.subjectCompany && (

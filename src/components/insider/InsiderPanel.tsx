@@ -17,6 +17,17 @@ interface InsiderPanelProps {
   onRowClick?: (transaction: InsiderTransaction) => void;
 }
 
+// ─── Role classifier ──────────────────────────────────────────────────────────
+
+function classifyRole(title?: string): 'director' | 'exec' | 'owner' | 'other' {
+  if (!title) return 'other';
+  const t = title.toLowerCase();
+  if (/\bdirector\b|\bboard\b/.test(t)) return 'director';
+  if (/\bceo\b|\bcfo\b|\bcoo\b|\bcto\b|\bchief\b|\bpresident\b|\b(e?svp|evp|vp)\b|\bofficer\b/.test(t)) return 'exec';
+  if (/10%|beneficial owner|major shareholder/.test(t)) return 'owner';
+  return 'other';
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface InsiderAnalysis {
@@ -336,16 +347,28 @@ export function InsiderPanel({
   isCanadian = false,
   onRowClick,
 }: InsiderPanelProps) {
-  const [filter, setFilter]     = useState<InsiderFilter>('all');
-  const [sortBy, setSortBy]     = useState<'date' | 'size'>('date');
-  const [sortDir, setSortDir]   = useState<'asc' | 'desc'>('desc');
-  const [showAI, setShowAI]     = useState(false);
+  const [filter, setFilter]       = useState<InsiderFilter>('all');
+  const [sortBy, setSortBy]       = useState<'date' | 'size'>('date');
+  const [sortDir, setSortDir]     = useState<'asc' | 'desc'>('desc');
+  const [showAI, setShowAI]       = useState(false);
+  const [roleFilter, setRoleFilter] = useState<'all' | 'director' | 'exec'>('all');
+
+  // Auto-sort: buys → sort by size desc; anything else → date desc
+  useEffect(() => {
+    if (filter === 'buy') { setSortBy('size'); setSortDir('desc'); }
+    else                  { setSortBy('date'); setSortDir('desc'); }
+  }, [filter]);
 
   const filtered = transactions
     .filter(t => {
-      if (filter === 'all') return true;
-      const type = getInsiderType(t.transactionCode, t.change);
-      return filter === 'buy' ? type === 'BUY' : type === 'SELL';
+      if (filter !== 'all') {
+        const type = getInsiderType(t.transactionCode, t.change);
+        if (filter === 'buy'  && type !== 'BUY')  return false;
+        if (filter === 'sell' && type !== 'SELL') return false;
+      }
+      if (roleFilter === 'director') return classifyRole(t.title) === 'director';
+      if (roleFilter === 'exec')     return classifyRole(t.title) === 'exec';
+      return true;
     })
     .sort((a, b) => {
       let diff: number;
@@ -362,6 +385,15 @@ export function InsiderPanel({
   const buys  = transactions.filter(t => getInsiderType(t.transactionCode, t.change) === 'BUY').length;
   const sells = transactions.filter(t => getInsiderType(t.transactionCode, t.change) === 'SELL').length;
 
+  // Role counts (applying buy/sell filter but ignoring roleFilter for badge counts)
+  const roleBase = transactions.filter(t => {
+    if (filter === 'all') return true;
+    const type = getInsiderType(t.transactionCode, t.change);
+    return filter === 'buy' ? type === 'BUY' : type === 'SELL';
+  });
+  const directorCount = roleBase.filter(t => classifyRole(t.title) === 'director').length;
+  const execCount     = roleBase.filter(t => classifyRole(t.title) === 'exec').length;
+
   const hasCorrelation = candles.length > 0;
 
   return (
@@ -371,6 +403,9 @@ export function InsiderPanel({
     >
       {/* ── Panel Header ── */}
       <div className="px-6 py-5" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+        {/* Row 1: title + buy/sell counts + right-side controls */}
         <div className="flex items-center justify-between flex-wrap gap-4">
 
           <div className="flex items-center gap-4">
@@ -455,6 +490,41 @@ export function InsiderPanel({
               ))}
             </div>
           </div>
+        </div>
+
+        {/* Row 2: role filter chips */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          {([
+            { key: 'all',      label: 'All Roles',   count: roleBase.length },
+            { key: 'director', label: 'Directors',   count: directorCount },
+            { key: 'exec',     label: 'Executives',  count: execCount },
+          ] as const).map(({ key, label, count }) => {
+            const isActive = roleFilter === key;
+            let activeColor  = 'var(--text-primary)';
+            let activeBg     = 'var(--bg-hover)';
+            let activeBorder = 'var(--border-default)';
+            if (key === 'director') { activeColor = '#9B7FD4'; activeBg = 'rgba(155,127,212,0.12)'; activeBorder = 'rgba(155,127,212,0.35)'; }
+            if (key === 'exec')     { activeColor = '#D97757'; activeBg = 'rgba(217,119,87,0.12)';  activeBorder = 'rgba(217,119,87,0.35)'; }
+            return (
+              <button
+                key={key}
+                onClick={() => setRoleFilter(key)}
+                style={{
+                  padding: '4px 11px', borderRadius: 14, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                  background: isActive ? activeBg : 'var(--bg-elevated)',
+                  color: isActive ? activeColor : 'var(--text-tertiary)',
+                  border: `1px solid ${isActive ? activeBorder : 'var(--border-subtle)'}`,
+                  transition: 'all 120ms',
+                  fontFamily: "'Inter', sans-serif",
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {label} ({count})
+              </button>
+            );
+          })}
+        </div>
+
         </div>
       </div>
 
