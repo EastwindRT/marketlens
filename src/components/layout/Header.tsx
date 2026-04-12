@@ -55,7 +55,7 @@ export function Header({ onMenuClick }: HeaderProps) {
           </button>
 
           {/* Logo — centered */}
-          <Link to="/" className="flex items-center gap-2 no-underline flex-1 justify-center" title="TARS — an anagram of STAR ✦">
+          <Link to="/" className="flex items-center gap-2 no-underline flex-1 justify-center" title="TARS">
             <div className="w-7 h-7 rounded-xl flex items-center justify-center" style={{ background: 'var(--accent-blue)' }}>
               <TarsIcon size={15} />
             </div>
@@ -102,7 +102,7 @@ export function Header({ onMenuClick }: HeaderProps) {
         {/* ── Desktop layout ── */}
         <div className="hidden lg:flex items-center gap-6 px-6 w-full">
           {/* Logo */}
-          <Link to="/" className="flex items-center gap-2.5 no-underline flex-shrink-0" title="TARS — an anagram of STAR ✦">
+          <Link to="/" className="flex items-center gap-2.5 no-underline flex-shrink-0" title="TARS">
             <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: 'var(--accent-blue)' }}>
               <TarsIcon size={17} />
             </div>

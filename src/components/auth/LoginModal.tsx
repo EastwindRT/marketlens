@@ -44,7 +44,7 @@ export default function LoginModal() {
           <div
             className="w-14 h-14 rounded-2xl flex items-center justify-center"
             style={{ background: 'var(--accent-blue)' }}
-            title="TARS — an anagram of STAR ✦"
+            title="TARS"
           >
             <TarsIcon size={30} />
           </div>
