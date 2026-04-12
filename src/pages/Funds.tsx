@@ -373,6 +373,15 @@ export default function FundsPage() {
   const [navigatingIdx, setNavigatingIdx] = useState<number | null>(null);
   const navigate = useNavigate();
 
+  const { data: recentFilersData } = useQuery({
+    queryKey: ['13f-recent-filers'],
+    queryFn: async () => {
+      const res = await fetch('/api/13f/recent-filers');
+      return res.json() as Promise<{ funds: (FundResult & { category: string })[] }>;
+    },
+    staleTime: 60 * 60 * 1000,
+  });
+
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query), 400);
     return () => clearTimeout(t);
@@ -580,14 +589,70 @@ export default function FundsPage() {
           </>
         )}
 
-        {/* Empty state */}
+        {/* Recent filers grid — shown when no query and no fund selected */}
         {!selectedFund && !debouncedQuery && (
-          <div style={{ padding: '48px 0', textAlign: 'center' }}>
-            <Briefcase size={32} color="var(--text-tertiary)" style={{ margin: '0 auto 12px', display: 'block' }} />
-            <p style={{ color: 'var(--text-secondary)', fontSize: 14, fontWeight: 600, margin: '0 0 6px' }}>Search any institutional fund</p>
-            <p style={{ color: 'var(--text-tertiary)', fontSize: 12, margin: 0 }}>
-              Berkshire Hathaway · Bridgewater · Citadel · Pershing Square · Renaissance · Tiger Global
-            </p>
+          <div style={{ marginTop: 24 }}>
+            <div style={{ marginBottom: 16 }}>
+              <p style={{ margin: '0 0 2px', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.01em' }}>
+                Recent 13F Filers
+              </p>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
+                Latest institutional fund disclosures · SEC EDGAR
+              </p>
+            </div>
+
+            {/* Skeleton while loading */}
+            {!recentFilersData && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
+                {[0, 1, 2].map(i => (
+                  <div key={i} className="animate-pulse" style={{ padding: 12, borderRadius: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ width: '70%', height: 14, borderRadius: 4, background: 'var(--bg-hover)', marginBottom: 8 }} />
+                    <div style={{ width: '40%', height: 10, borderRadius: 4, background: 'var(--bg-hover)', marginBottom: 6 }} />
+                    <div style={{ width: '55%', height: 10, borderRadius: 4, background: 'var(--bg-hover)' }} />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {recentFilersData && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
+                {recentFilersData.funds.map(f => (
+                  <button
+                    key={f.cik}
+                    onClick={() => { setSelectedFund(f); setQuery(f.name); setTab('all'); }}
+                    style={{
+                      padding: 12, borderRadius: 12, textAlign: 'left', cursor: 'pointer',
+                      background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                      transition: 'border-color 150ms',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
+                    onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
+                  >
+                    <p style={{
+                      margin: '0 0 6px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {f.name}
+                    </p>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
+                        background: 'rgba(45,107,255,0.12)', color: 'var(--accent-blue-light)',
+                        border: '1px solid rgba(45,107,255,0.25)',
+                        fontFamily: "'Inter', sans-serif", letterSpacing: '0.03em',
+                      }}>
+                        {f.category}
+                      </span>
+                      {f.lastFiled && (
+                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0 }}>
+                          Last filed: {f.lastFiled}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

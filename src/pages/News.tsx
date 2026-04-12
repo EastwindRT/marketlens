@@ -123,6 +123,8 @@ interface FlatTrade extends InsiderTransaction {
 export default function NewsPage() {
   const [days, setDays] = useState(14);
   const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
+  const [filingsSort, setFilingsSort] = useState<'date' | 'form'>('date');
+  const [confSort, setConfSort] = useState<'date' | 'trades'>('date');
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
   const symbols = watchlist.map(w => w.symbol);
@@ -164,6 +166,23 @@ export default function NewsPage() {
     if (!watchlistCongressTrades || watchlistInsiderTrades.length === 0) return [];
     return findCorrelations(watchlistInsiderTrades, watchlistCongressTrades);
   }, [watchlistInsiderTrades, watchlistCongressTrades]);
+
+  const sortedCorrelations = useMemo(() => {
+    if (confSort === 'trades') {
+      return [...correlations].sort((a, b) =>
+        (b.congressTrades.length + b.insiderTrades.length) - (a.congressTrades.length + a.insiderTrades.length)
+      );
+    }
+    return correlations; // already date-sorted
+  }, [correlations, confSort]);
+
+  const sortedFilings = useMemo(() => {
+    if (!filings) return [];
+    if (filingsSort === 'form') {
+      return [...filings].sort((a, b) => a.formType.localeCompare(b.formType));
+    }
+    return filings; // API already returns newest-first
+  }, [filings, filingsSort]);
 
   return (
     <>
@@ -207,12 +226,31 @@ export default function NewsPage() {
         {/* ── SECTION 0: Confluence Signals ── */}
         {correlations.length > 0 && (
           <>
-            <SectionHeader
-              title="⚡ Confluence Signals"
-              subtitle="Congress members + company insiders traded the same stock in the same month"
-            />
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 12 }}>
+              <SectionHeader
+                noMargin
+                title="⚡ Confluence Signals"
+                subtitle="Congress members + company insiders traded the same stock in the same month"
+              />
+              <div style={{ display: 'flex', gap: 2, background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, border: '1px solid var(--border-subtle)', flexShrink: 0 }}>
+                {(['date', 'trades'] as const).map(opt => (
+                  <button
+                    key={opt}
+                    onClick={() => setConfSort(opt)}
+                    style={{
+                      padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
+                      background: confSort === opt ? 'var(--bg-hover)' : 'transparent',
+                      color: confSort === opt ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                      transition: 'all 120ms',
+                    }}
+                  >
+                    {opt === 'date' ? 'Date' : 'Activity'}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 32 }}>
-              {correlations.slice(0, 10).map((sig, i) => {
+              {sortedCorrelations.slice(0, 10).map((sig, i) => {
                 const isBuy = sig.direction === 'buy';
                 const accentColor  = isBuy ? '#05B169' : '#F6465D';
                 const accentBg     = isBuy ? 'rgba(5,177,105,0.08)' : 'rgba(246,70,93,0.08)';
@@ -292,7 +330,29 @@ export default function NewsPage() {
         )}
 
         {/* ── SECTION 2: 13D / 13G Major Filings ── */}
-        <SectionHeader title="Major Ownership Filings" subtitle="13D activist · 13G passive — 5%+ stake disclosures via SEC EDGAR" />
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 12 }}>
+          <SectionHeader
+            noMargin
+            title="Major Ownership Filings"
+            subtitle="13D activist · 13G passive — 5%+ stake disclosures via SEC EDGAR"
+          />
+          <div style={{ display: 'flex', gap: 2, background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, border: '1px solid var(--border-subtle)', flexShrink: 0 }}>
+            {(['date', 'form'] as const).map(opt => (
+              <button
+                key={opt}
+                onClick={() => setFilingsSort(opt)}
+                style={{
+                  padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
+                  background: filingsSort === opt ? 'var(--bg-hover)' : 'transparent',
+                  color: filingsSort === opt ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                  transition: 'all 120ms',
+                }}
+              >
+                {opt === 'date' ? 'Date' : 'Type'}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {filingsLoading && <FilingsSkeleton />}
 
@@ -302,7 +362,7 @@ export default function NewsPage() {
           </p>
         )}
 
-        {!filingsLoading && !filingsError && filings?.length === 0 && (
+        {!filingsLoading && !filingsError && sortedFilings.length === 0 && (
           <EmptyState message={`No 13D/13G filings in the last ${days} days.`}>
             <a
               href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=SCHEDULE+13D&dateb=&owner=include&count=40&output=atom"
@@ -314,10 +374,10 @@ export default function NewsPage() {
           </EmptyState>
         )}
 
-        {!filingsLoading && !filingsError && filings && filings.length > 0 && (
+        {!filingsLoading && !filingsError && sortedFilings.length > 0 && (
           <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {filings.map((f: MarketFiling, i: number) => {
+              {sortedFilings.map((f: MarketFiling, i: number) => {
                 const fc = formStyle(f.formType);
                 return (
                   <button

@@ -48,17 +48,12 @@ export default function LoginModal() {
           >
             <TarsIcon size={30} />
           </div>
-          <div className="flex flex-col items-center gap-1">
-            <h1
-              className="text-2xl font-bold"
-              style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}
-            >
-              TARS
-            </h1>
-            <p className="text-sm text-center" style={{ color: 'var(--text-secondary)' }}>
-              Sign in to access your stock research dashboard
-            </p>
-          </div>
+          <h1
+            className="text-2xl font-bold"
+            style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}
+          >
+            TARS
+          </h1>
         </div>
 
         {/* Error card */}
@@ -94,7 +89,7 @@ export default function LoginModal() {
             <path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18z" />
             <path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.3z" />
           </svg>
-          {loading ? 'Redirecting to Google…' : 'Continue with Google'}
+          {loading ? 'Redirecting to Google…' : 'Sign in with Google'}
         </button>
       </div>
     </div>

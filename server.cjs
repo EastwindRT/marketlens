@@ -868,6 +868,76 @@ const KNOWN_FUNDS = [
   { cik: '2045724', name: 'SITUATIONAL AWARENESS LP' },
 ];
 
+// Cached recent-filers response
+let recentFilersCache = null;
+let recentFilersFetch = 0;
+const RECENT_FILERS_TTL = 6 * 60 * 60 * 1000; // 6h
+
+app.get('/api/13f/recent-filers', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (recentFilersCache && now - recentFilersFetch < RECENT_FILERS_TTL) {
+      return res.json(recentFilersCache);
+    }
+
+    const categories = {
+      '102909':  'Index / Mega', '1315066': 'Index / Mega', '813672': 'Index / Mega',
+      '1067983': 'Value',         '1166559': 'Foundation',
+      '1037389': 'Quant',         '1273087': 'Multi-Strat',  '1423053': 'Multi-Strat',
+      '1275014': 'Quant',         '1595882': 'Quant',         '1540159': 'Multi-Strat',
+      '1167557': 'Quant',         '1649339': 'Quant',         '1218710': 'Multi-Strat',
+      '1612063': 'Quant',         '1637460': 'Multi-Strat',
+      '1350694': 'Macro',         '1167483': 'Long/Short',    '1466373': 'Long/Short',
+      '1040273': 'Long/Short',    '1336489': 'Long/Short',    '1056931': 'Long/Short',
+      '875956':  'Long/Short',    '1536411': 'Family Office', '1318757': 'Long/Short',
+      '1602189': 'Growth',        '923093':  'Macro',
+      '1336528': 'Activist',      '1040570': 'Activist',      '1079114': 'Activist',
+      '814180':  'Activist',      '1162175': 'Activist',      '892416':  'Activist',
+      '1486671': 'Activist',      '2045724': 'AI / Tech',
+    };
+
+    async function getLatestDate(cik) {
+      try {
+        const pad = cik.padStart(10, '0');
+        const data = await httpsGet(`https://data.sec.gov/submissions/CIK${pad}.json`, { 'User-Agent': 'TARS admin@tars.app' });
+        const json = JSON.parse(data);
+        const forms = json.filings?.recent?.form ?? [];
+        const dates = json.filings?.recent?.filingDate ?? [];
+        for (let i = 0; i < forms.length; i++) {
+          if (forms[i] === '13F-HR') return dates[i] ?? '';
+        }
+      } catch {}
+      return '';
+    }
+
+    // Batch 5 at a time to avoid overwhelming EDGAR
+    const batchSize = 5;
+    const results = [];
+    for (let i = 0; i < KNOWN_FUNDS.length; i += batchSize) {
+      const batch = KNOWN_FUNDS.slice(i, i + batchSize);
+      const batchResults = await Promise.all(
+        batch.map(async f => ({
+          cik: f.cik,
+          name: f.name,
+          lastFiled: await getLatestDate(f.cik),
+          category: categories[f.cik] || 'Other',
+        }))
+      );
+      results.push(...batchResults);
+    }
+
+    // Sort by most recently filed
+    results.sort((a, b) => b.lastFiled.localeCompare(a.lastFiled));
+
+    recentFilersCache = { funds: results };
+    recentFilersFetch = now;
+    res.json(recentFilersCache);
+  } catch (err) {
+    console.error('[13f/recent-filers]', err.message);
+    res.status(502).json({ error: err.message, funds: [] });
+  }
+});
+
 app.get('/api/13f/search', async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q || q.length < 2) return res.json({ funds: [] });

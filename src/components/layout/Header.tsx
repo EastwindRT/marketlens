@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Menu, Search, X, Trophy, User } from 'lucide-react';
+import { Menu, Search, X, Trophy, User, LogOut, BarChart2 } from 'lucide-react';
+import { supabase } from '../../api/supabase';
 
 // TARS logo — a 4-pointed star ✦ because TARS is an anagram of STAR
 function TarsIcon({ size }: { size: number }) {
@@ -27,8 +28,28 @@ const SUPABASE_CONFIGURED =
 export function Header({ onMenuClick }: HeaderProps) {
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
+  const [showPlayerMenu, setShowPlayerMenu] = useState(false);
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
+  const desktopMenuRef = useRef<HTMLDivElement>(null);
   const { player } = useLeagueStore();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!showPlayerMenu) return;
+    function handleClick(e: MouseEvent) {
+      const target = e.target as Node;
+      const inMobile  = mobileMenuRef.current?.contains(target);
+      const inDesktop = desktopMenuRef.current?.contains(target);
+      if (!inMobile && !inDesktop) setShowPlayerMenu(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showPlayerMenu]);
+
+  async function handleSignOut() {
+    setShowPlayerMenu(false);
+    await supabase.auth.signOut();
+  }
 
   return (
     <>
@@ -77,14 +98,41 @@ export function Header({ onMenuClick }: HeaderProps) {
 
             {SUPABASE_CONFIGURED && (
               player ? (
-                <button
-                  onClick={() => navigate('/portfolio')}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-                  style={{ background: player.avatar_color, color: '#fff', border: 'none', cursor: 'pointer' }}
-                  title={player.name}
-                >
-                  {player.name[0].toUpperCase()}
-                </button>
+                <div ref={mobileMenuRef} style={{ position: 'relative' }}>
+                  <button
+                    onClick={() => setShowPlayerMenu(v => !v)}
+                    className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                    style={{ background: player.avatar_color, color: '#fff', border: 'none', cursor: 'pointer' }}
+                    title={player.name}
+                  >
+                    {player.name[0].toUpperCase()}
+                  </button>
+                  {showPlayerMenu && (
+                    <div style={{
+                      position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 200,
+                      background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
+                      borderRadius: 10, overflow: 'hidden', minWidth: 140, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                    }}>
+                      <button
+                        onClick={() => { setShowPlayerMenu(false); navigate('/portfolio'); }}
+                        style={{ width: '100%', padding: '10px 14px', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <BarChart2 size={14} color="var(--text-secondary)" /> Portfolio
+                      </button>
+                      <div style={{ height: 1, background: 'var(--border-subtle)' }} />
+                      <button
+                        onClick={handleSignOut}
+                        style={{ width: '100%', padding: '10px 14px', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#F6465D' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <LogOut size={14} color="#F6465D" /> Sign out
+                      </button>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <button
                   onClick={() => setShowLogin(true)}
@@ -133,19 +181,46 @@ export function Header({ onMenuClick }: HeaderProps) {
               </Link>
 
               {player ? (
-                <button
-                  onClick={() => navigate('/portfolio')}
-                  className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium"
-                  style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', cursor: 'pointer' }}
-                >
-                  <div
-                    className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-                    style={{ background: player.avatar_color, color: '#fff' }}
+                <div ref={desktopMenuRef} style={{ position: 'relative' }}>
+                  <button
+                    onClick={() => setShowPlayerMenu(v => !v)}
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium"
+                    style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', cursor: 'pointer' }}
                   >
-                    {player.name[0].toUpperCase()}
-                  </div>
-                  {player.name.split(' ')[0]}
-                </button>
+                    <div
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
+                      style={{ background: player.avatar_color, color: '#fff' }}
+                    >
+                      {player.name[0].toUpperCase()}
+                    </div>
+                    {player.name.split(' ')[0]}
+                  </button>
+                  {showPlayerMenu && (
+                    <div style={{
+                      position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 200,
+                      background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
+                      borderRadius: 10, overflow: 'hidden', minWidth: 150, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                    }}>
+                      <button
+                        onClick={() => { setShowPlayerMenu(false); navigate('/portfolio'); }}
+                        style={{ width: '100%', padding: '10px 14px', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <BarChart2 size={14} color="var(--text-secondary)" /> Portfolio
+                      </button>
+                      <div style={{ height: 1, background: 'var(--border-subtle)' }} />
+                      <button
+                        onClick={handleSignOut}
+                        style={{ width: '100%', padding: '10px 14px', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#F6465D' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <LogOut size={14} color="#F6465D" /> Sign out
+                      </button>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <button
                   onClick={() => setShowLogin(true)}
