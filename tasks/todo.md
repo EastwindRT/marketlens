@@ -1,3 +1,20 @@
+## Plan: Insider $ / Congress / Funds Improvements — SHIPPED 2026-04-14
+
+### Features
+- [x] Insider $: 7D / 14D / 30D period toggle; evenly-sampled entries per period; per-period server cache
+- [x] Congress: compact amount display — bold midpoint estimate (~$8K) + range ($1K–$15K) below
+- [x] Funds — Options tab: CALL/PUT/All sub-filter; unified value-sorted list; clickable rows; NEW badge
+- [x] Funds — New/Active tab: sorted by value desc (largest new bets first)
+- [x] Funds — All long tabs: ≥$10M toggle to filter large positions
+- [x] Funds — Landing: cross-fund options scan across all 35 curated funds; pre-warms on server start; grouped by security; shows fund count when multiple funds hold same option; clicking opens that fund's options tab
+- [x] Build clean; pushed to Render
+
+### Open items
+- [ ] Watchlist E2E (requires live auth login — deferred)
+- [ ] Canadian insider coverage (US-only currently; TMX SEDI future task)
+
+---
+
 ## Plan: Insider Activity + Ask AI Upgrade + Watchlist Persistence — SHIPPED 2026-04-13
 
 ### Current Status

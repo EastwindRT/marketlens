@@ -38,6 +38,14 @@
 
 ---
 
+## Lesson: 2026-04-14 — EDGAR 429s during bulk scans are transient and non-blocking
+
+**Observation:** When the cross-fund options scan fires 35 sequential EDGAR fetches in batches of 3, some `www.sec.gov/Archives/` directory requests return 429 (rate limit). Those funds produce empty results for that scan cycle.
+**Root cause:** EDGAR's rate limiter kicks in when too many requests arrive too quickly. The batch size of 3 concurrent requests is acceptable for normal use but still clips the limit during a full 35-fund scan.
+**Rule:** 429s from EDGAR during bulk scans are expected and non-fatal — `Promise.allSettled` absorbs them. The 24h cache means the scan only runs once per deploy. If coverage is poor on first load, a simple `setTimeout` retry on 429'd funds after 5s would improve completeness without hammering the rate limit.
+
+---
+
 ## Lesson: 2026-04-11 — EDGAR CGI (www.sec.gov/cgi-bin) is IP-blocked from cloud providers
 
 **Mistake:** Used `www.sec.gov/cgi-bin/browse-edgar` EDGAR company search endpoint from server-side.
