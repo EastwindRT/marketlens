@@ -219,8 +219,8 @@ app.get('/api/latest-insiders', async (req, res) => {
   }
 });
 
-let insiderActivityCache = null;
-let insiderActivityLastFetch = 0;
+const insiderActivityCaches = { 7: null, 14: null, 30: null };
+const insiderActivityLastFetch = { 7: 0, 14: 0, 30: 0 };
 const INSIDER_ACTIVITY_TTL = 30 * 60 * 1000;
 
 function quarterOfMonth(month) {
@@ -368,23 +368,52 @@ async function fetchSecInsiderActivityItem(entry) {
   }).filter(Boolean);
 }
 
-async function fetchLatestInsiderActivity() {
-  const entries = await fetchRecentForm4Entries(8);
-  const latestEntries = entries.slice(0, 60);
-  const groups = await Promise.all(latestEntries.map((entry) => fetchSecInsiderActivityItem(entry)));
+async function fetchLatestInsiderActivity(days = 7) {
+  // Fetch enough days to cover weekends / holidays
+  const daysBack = days + Math.ceil(days / 5) * 2 + 1;
+  const entries = await fetchRecentForm4Entries(daysBack);
+
+  // Cut to entries actually within requested window
+  const cutoff = new Date();
+  cutoff.setUTCDate(cutoff.getUTCDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const inWindow = entries.filter(e => e.filedDate >= cutoffStr);
+
+  // Group by date then sample evenly across the alphabet so we don't
+  // end up with only companies starting with A-C.
+  const byDate = new Map();
+  for (const e of inWindow) {
+    if (!byDate.has(e.filedDate)) byDate.set(e.filedDate, []);
+    byDate.get(e.filedDate).push(e);
+  }
+  const perDay = days <= 7 ? 12 : days <= 14 ? 9 : 6;
+  const sampled = [];
+  for (const dayEntries of byDate.values()) {
+    if (dayEntries.length <= perDay) {
+      sampled.push(...dayEntries);
+    } else {
+      const step = Math.floor(dayEntries.length / perDay);
+      for (let i = 0; i < dayEntries.length && sampled.length < perDay * byDate.size; i += step) {
+        sampled.push(dayEntries[i]);
+      }
+    }
+  }
+
+  const groups = await Promise.all(sampled.map((entry) => fetchSecInsiderActivityItem(entry)));
   return groups.flat().sort((a, b) => b.totalValue - a.totalValue);
 }
 
 app.get('/api/insider-activity', async (req, res) => {
   try {
+    const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
     const now = Date.now();
-    if (!insiderActivityCache || now - insiderActivityLastFetch > INSIDER_ACTIVITY_TTL) {
-      insiderActivityCache = await fetchLatestInsiderActivity();
-      insiderActivityLastFetch = now;
+    if (!insiderActivityCaches[days] || now - insiderActivityLastFetch[days] > INSIDER_ACTIVITY_TTL) {
+      insiderActivityCaches[days] = await fetchLatestInsiderActivity(days);
+      insiderActivityLastFetch[days] = now;
     }
 
     const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
-    res.json({ trades: insiderActivityCache.slice(0, limit) });
+    res.json({ trades: insiderActivityCaches[days].slice(0, limit) });
   } catch (err) {
     console.error('[insider-activity]', err.message);
     res.status(502).json({ error: err.message, trades: [] });
@@ -1441,6 +1470,70 @@ RESPONSE FORMAT:
     res.status(502).json({ error: err.message });
   }
 });
+
+// ── Cross-fund options scan ───────────────────────────────────────────────────
+// Pre-fetches options positions (putCall != null) from all curated KNOWN_FUNDS.
+// Runs in background on startup + cached 24h. Returns {positions, loading}.
+let optionsScanCache = null;
+let optionsScanLastFetch = 0;
+let optionsScanBuilding = false;
+const OPTIONS_SCAN_TTL = 24 * 60 * 60 * 1000;
+
+async function buildOptionsScan() {
+  if (optionsScanBuilding) return;
+  optionsScanBuilding = true;
+  try {
+    const all = [];
+    const batchSize = 3;
+    for (let i = 0; i < KNOWN_FUNDS.length; i += batchSize) {
+      const batch = KNOWN_FUNDS.slice(i, i + batchSize);
+      const results = await Promise.allSettled(batch.map(async (fund) => {
+        try {
+          const { results: filings } = await get13FFilings(fund.cik);
+          if (!filings.length) return [];
+          const holdings = await fetchHoldings(fund.cik, filings[0].accession);
+          return holdings
+            .filter(h => h.putCall)
+            .map(h => ({
+              fund: fund.name,
+              fundCik: fund.cik,
+              name: h.name,
+              cusip: h.cusip,
+              putCall: h.putCall,
+              value: h.value,
+              shares: h.shares,
+              sector: h.sector,
+            }));
+        } catch { return []; }
+      }));
+      for (const r of results) {
+        if (r.status === 'fulfilled') all.push(...r.value);
+      }
+    }
+    optionsScanCache = all.sort((a, b) => b.value - a.value);
+    optionsScanLastFetch = Date.now();
+    console.log(`[options-scan] built: ${optionsScanCache.length} positions across ${KNOWN_FUNDS.length} funds`);
+  } catch (e) {
+    console.error('[options-scan]', e.message);
+  } finally {
+    optionsScanBuilding = false;
+  }
+}
+
+app.get('/api/13f/options-scan', async (_req, res) => {
+  const now = Date.now();
+  if (optionsScanCache && now - optionsScanLastFetch < OPTIONS_SCAN_TTL) {
+    return res.json({ positions: optionsScanCache, loading: false });
+  }
+  if (!optionsScanBuilding) buildOptionsScan(); // fire-and-forget refresh
+  if (optionsScanCache) {
+    return res.json({ positions: optionsScanCache, loading: true }); // stale while refreshing
+  }
+  res.json({ positions: [], loading: true }); // first load — still building
+});
+
+// Pre-warm on startup (delay 8s to let server stabilise first)
+setTimeout(() => buildOptionsScan().catch(e => console.error('[options-scan init]', e.message)), 8000);
 
 // Serve built React app
 const distPath = path.join(__dirname, 'dist');

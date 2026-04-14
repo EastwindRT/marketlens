@@ -30,6 +30,28 @@ function parseAmountMid(s: string): number {
   return 0;
 }
 
+// Format a dollar amount compactly: 1000 → "$1K", 1500000 → "$1.5M"
+function compactDollar(n: number): string {
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(n >= 10e6 ? 0 : 1)}M`;
+  if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
+  return `$${n.toLocaleString()}`;
+}
+
+// Returns { mid: "~$8K", range: "$1K – $15K" } from Quiver range strings
+function formatCongressAmount(s: string): { mid: string; range: string } {
+  if (!s) return { mid: '—', range: '' };
+  const nums = s.replace(/,/g, '').match(/\d+/g)?.map(Number) ?? [];
+  if (s.toLowerCase().includes('over') && nums.length >= 1) {
+    return { mid: `>${compactDollar(nums[0])}`, range: '' };
+  }
+  if (nums.length >= 2) {
+    const [lo, hi] = [nums[0], nums[nums.length - 1]];
+    return { mid: `~${compactDollar((lo + hi) / 2)}`, range: `${compactDollar(lo)} – ${compactDollar(hi)}` };
+  }
+  if (nums.length === 1) return { mid: compactDollar(nums[0]), range: '' };
+  return { mid: s, range: '' };
+}
+
 export default function CongressPage() {
   const [tickerFilter, setTickerFilter] = useState('');
   const [sortBy, setSortBy]   = useState<'date' | 'size'>('date');
@@ -224,15 +246,22 @@ export default function CongressPage() {
                       </p>
                     </div>
 
-                    {/* Value range — prominent on the right */}
-                    {t.amount && (
-                      <span style={{
-                        fontSize: 12, fontWeight: 700, color: tradeColor,
-                        fontFamily: "'Roboto Mono', monospace", flexShrink: 0, textAlign: 'right',
-                      }}>
-                        {t.amount}
-                      </span>
-                    )}
+                    {/* Value — midpoint estimate + range */}
+                    {t.amount && (() => {
+                      const { mid, range } = formatCongressAmount(t.amount);
+                      return (
+                        <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: tradeColor, fontFamily: "'Roboto Mono', monospace" }}>
+                            {mid}
+                          </div>
+                          {range && (
+                            <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", marginTop: 1 }}>
+                              {range}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}

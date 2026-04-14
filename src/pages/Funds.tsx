@@ -150,37 +150,57 @@ function SectorBreakdown({ holdings }: { holdings: Holding[] }) {
 }
 
 // ── Options section ───────────────────────────────────────────────────────────
-function OptionsSection({ holdings }: { holdings: Holding[] }) {
-  const calls = holdings.filter(h => h.putCall?.toLowerCase() === 'call').sort((a, b) => b.value - a.value);
-  const puts  = holdings.filter(h => h.putCall?.toLowerCase() === 'put').sort((a, b) => b.value - a.value);
+function OptionsSection({ holdings, navigateToStock }: { holdings: Holding[]; navigateToStock: (h: Holding, i: number) => void }) {
+  const [filter, setFilter] = useState<'all' | 'call' | 'put'>('all');
+  const allCalls = holdings.filter(h => h.putCall?.toLowerCase() === 'call').sort((a, b) => b.value - a.value);
+  const allPuts  = holdings.filter(h => h.putCall?.toLowerCase() === 'put').sort((a, b) => b.value - a.value);
 
-  if (calls.length === 0 && puts.length === 0) {
+  if (allCalls.length === 0 && allPuts.length === 0) {
     return <p style={{ color: 'var(--text-tertiary)', fontSize: 13, padding: '24px 0', textAlign: 'center' }}>No options positions in this filing</p>;
   }
 
-  function OptionList({ items, color, label }: { items: Holding[]; color: string; label: string }) {
-    return (
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 700, color, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          {label} ({items.length})
-        </p>
-        {items.length === 0
-          ? <p style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>None</p>
-          : items.slice(0, 20).map((h, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 10px', borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', marginBottom: 4 }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{h.name}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "'Roboto Mono', monospace", flexShrink: 0, marginLeft: 8 }}>{fmt(h.value)}</span>
-            </div>
-          ))
-        }
-      </div>
-    );
-  }
+  const visible = filter === 'call' ? allCalls : filter === 'put' ? allPuts : [...allCalls, ...allPuts].sort((a, b) => b.value - a.value);
 
   return (
-    <div style={{ display: 'flex', gap: 12 }}>
-      <OptionList items={calls} color="#05B169" label="Calls" />
-      <OptionList items={puts}  color="#F6465D" label="Puts" />
+    <div>
+      {/* Sub-filter */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        {(['all', 'call', 'put'] as const).map(f => (
+          <button key={f} onClick={() => setFilter(f)} style={{
+            padding: '5px 14px', borderRadius: 20, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+            background: filter === f ? (f === 'put' ? '#F6465D' : f === 'call' ? '#05B169' : 'var(--accent-blue)') : 'var(--bg-elevated)',
+            color: filter === f ? '#fff' : 'var(--text-secondary)',
+            border: `1px solid ${filter === f ? 'transparent' : 'var(--border-default)'}`,
+            transition: 'all 120ms', textTransform: 'uppercase',
+          }}>
+            {f === 'all' ? `All (${allCalls.length + allPuts.length})` : f === 'call' ? `Calls (${allCalls.length})` : `Puts (${allPuts.length})`}
+          </button>
+        ))}
+      </div>
+
+      {/* Unified list sorted by value */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {visible.slice(0, 50).map((h, i) => {
+          const isCall = h.putCall?.toLowerCase() === 'call';
+          const color = isCall ? '#05B169' : '#F6465D';
+          const bg    = isCall ? 'rgba(5,177,105,0.08)' : 'rgba(246,70,93,0.08)';
+          return (
+            <div key={`${h.cusip}-${i}`} onClick={() => navigateToStock(h, i)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', cursor: 'pointer', transition: 'border-color 120ms' }}
+              onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
+              onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
+            >
+              <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: bg, color, border: `1px solid ${color}30`, flexShrink: 0, fontFamily: "'Roboto Mono', monospace" }}>
+                {h.putCall?.toUpperCase()}
+              </span>
+              <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.name}</span>
+              <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace', flexShrink: 0" }}>{fmtShares(h.shares)} shs</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color, fontFamily: "'Roboto Mono', monospace", flexShrink: 0, minWidth: 64, textAlign: 'right' }}>{fmt(h.value)}</span>
+              {h.changeType === 'new' && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 5px', borderRadius: 4, background: 'rgba(5,177,105,0.15)', color: '#05B169', border: '1px solid rgba(5,177,105,0.3)', flexShrink: 0 }}>NEW</span>}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -371,7 +391,10 @@ export default function FundsPage() {
   const [selectedFund, setSelectedFund] = useState<FundResult | null>(null);
   const [tab, setTab] = useState<'all' | 'long' | 'options' | 'new' | 'exited'>('all');
   const [navigatingIdx, setNavigatingIdx] = useState<number | null>(null);
+  const [largeOnly, setLargeOnly] = useState(false);
   const navigate = useNavigate();
+
+  const [optionsFilter, setOptionsFilter] = useState<'all' | 'call' | 'put'>('all');
 
   const { data: recentFilersData } = useQuery({
     queryKey: ['13f-recent-filers'],
@@ -380,6 +403,16 @@ export default function FundsPage() {
       return res.json() as Promise<{ funds: (FundResult & { category: string })[] }>;
     },
     staleTime: 60 * 60 * 1000,
+  });
+
+  const { data: optionsScanData } = useQuery({
+    queryKey: ['13f-options-scan'],
+    queryFn: async () => {
+      const res = await fetch('/api/13f/options-scan');
+      return res.json() as Promise<{ positions: Array<{ fund: string; fundCik: string; name: string; cusip: string; putCall: string; value: number; shares: number; sector: string }>; loading: boolean }>;
+    },
+    staleTime: 60 * 60 * 1000,
+    refetchInterval: (query) => (query.state.data?.loading ? 30_000 : false),
   });
 
   useEffect(() => {
@@ -410,12 +443,19 @@ export default function FundsPage() {
 
   const filtered = useMemo<Holding[]>(() => {
     const all = holdingsData?.current ?? [];
-    if (tab === 'long')    return all.filter(h => !h.putCall);
-    if (tab === 'options') return all.filter(h => !!h.putCall);
-    if (tab === 'new')     return all.filter(h => h.changeType === 'new' || h.changeType === 'increased');
-    if (tab === 'exited')  return holdingsData?.exited ?? [];
-    return all;
-  }, [holdingsData, tab]);
+    let base: Holding[];
+    if (tab === 'long')    base = all.filter(h => !h.putCall);
+    else if (tab === 'options') base = all.filter(h => !!h.putCall);
+    else if (tab === 'new') {
+      // Sort new/active by value desc so largest new bets appear first
+      base = all
+        .filter(h => h.changeType === 'new' || h.changeType === 'increased')
+        .sort((a, b) => b.value - a.value);
+    }
+    else if (tab === 'exited') base = holdingsData?.exited ?? [];
+    else base = all;
+    return largeOnly ? base.filter(h => h.value >= 10_000_000) : base;
+  }, [holdingsData, tab, largeOnly]);
 
   const meta = holdingsData?.meta;
   const optionsCount = (holdingsData?.current ?? []).filter(h => !!h.putCall).length;
@@ -569,8 +609,23 @@ export default function FundsPage() {
                 </div>
 
                 {/* Options tab: split calls vs puts */}
+                {/* Large only toggle — shown on non-options tabs */}
+                {tab !== 'options' && tab !== 'exited' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <button onClick={() => setLargeOnly(v => !v)} style={{
+                      padding: '4px 12px', borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                      background: largeOnly ? 'var(--accent-blue)' : 'var(--bg-elevated)',
+                      color: largeOnly ? '#fff' : 'var(--text-secondary)',
+                      border: `1px solid ${largeOnly ? 'var(--accent-blue)' : 'var(--border-default)'}`,
+                      transition: 'all 120ms',
+                    }}>
+                      {largeOnly ? '≥$10M ✓' : '≥$10M only'}
+                    </button>
+                  </div>
+                )}
+
                 {tab === 'options' ? (
-                  <OptionsSection holdings={holdingsData.current} />
+                  <OptionsSection holdings={holdingsData.current} navigateToStock={navigateToStock} />
                 ) : (
                   <>
                     <HoldingsTable holdings={filtered} navigateToStock={navigateToStock} navigatingIdx={navigatingIdx} />
@@ -587,6 +642,102 @@ export default function FundsPage() {
               </>
             )}
           </>
+        )}
+
+        {/* Cross-fund options scan — shown on landing page */}
+        {!selectedFund && !debouncedQuery && (
+          <div style={{ marginTop: 24, marginBottom: 32 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+              <div>
+                <p style={{ margin: '0 0 2px', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.01em' }}>
+                  Options Activity — All Curated Funds
+                </p>
+                <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
+                  Calls &amp; puts across {optionsScanData?.positions.length ? `${[...new Set(optionsScanData.positions.map(p => p.fund))].length} funds` : 'curated hedge funds'} · latest 13F filings
+                  {optionsScanData?.loading && <span style={{ marginLeft: 6, color: 'var(--accent-blue-light)' }}>· scanning…</span>}
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {(['all', 'call', 'put'] as const).map(f => (
+                  <button key={f} onClick={() => setOptionsFilter(f)} style={{
+                    padding: '5px 14px', borderRadius: 20, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                    background: optionsFilter === f ? (f === 'put' ? '#F6465D' : f === 'call' ? '#05B169' : 'var(--accent-blue)') : 'var(--bg-elevated)',
+                    color: optionsFilter === f ? '#fff' : 'var(--text-secondary)',
+                    border: `1px solid ${optionsFilter === f ? 'transparent' : 'var(--border-default)'}`,
+                    transition: 'all 120ms', textTransform: 'uppercase',
+                  }}>{f === 'all' ? 'All' : f === 'call' ? 'Calls' : 'Puts'}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Loading skeleton */}
+            {(!optionsScanData || (optionsScanData.loading && optionsScanData.positions.length === 0)) && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="animate-pulse" style={{ height: 44, borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', opacity: 0.7 - i * 0.1 }} />
+                ))}
+                <p style={{ fontSize: 12, color: 'var(--text-tertiary)', textAlign: 'center', marginTop: 4 }}>
+                  Scanning {optionsScanData?.loading ? 'funds' : '35 funds'} for options positions — this takes ~60s on first load…
+                </p>
+              </div>
+            )}
+
+            {optionsScanData && optionsScanData.positions.length > 0 && (() => {
+              const visible = optionsScanData.positions.filter(p =>
+                optionsFilter === 'all' ? true : p.putCall?.toLowerCase() === optionsFilter
+              );
+              // Group by company name to surface "multiple funds hold same option"
+              const grouped = new Map<string, typeof visible>();
+              for (const p of visible) {
+                const key = p.name;
+                if (!grouped.has(key)) grouped.set(key, []);
+                grouped.get(key)!.push(p);
+              }
+              // Sort groups by total value desc
+              const sorted = [...grouped.entries()].sort((a, b) =>
+                b[1].reduce((s, x) => s + x.value, 0) - a[1].reduce((s, x) => s + x.value, 0)
+              ).slice(0, 60);
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {sorted.map(([name, positions]) => {
+                    const totalVal = positions.reduce((s, p) => s + p.value, 0);
+                    const isCall = positions[0].putCall?.toLowerCase() === 'call';
+                    const mixedTypes = new Set(positions.map(p => p.putCall?.toLowerCase())).size > 1;
+                    const typeColor = mixedTypes ? 'var(--text-secondary)' : isCall ? '#05B169' : '#F6465D';
+                    const typeBg = mixedTypes ? 'var(--bg-hover)' : isCall ? 'rgba(5,177,105,0.1)' : 'rgba(246,70,93,0.1)';
+                    const typeLabel = mixedTypes ? 'MIXED' : positions[0].putCall?.toUpperCase();
+                    return (
+                      <div key={name} onClick={() => { setSelectedFund({ cik: positions[0].fundCik, name: positions[0].fund, lastFiled: '' }); setQuery(positions[0].fund); setTab('options'); }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', cursor: 'pointer', transition: 'border-color 120ms' }}
+                        onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
+                        onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
+                      >
+                        <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: typeBg, color: typeColor, border: `1px solid ${typeColor}30`, flexShrink: 0, fontFamily: "'Roboto Mono', monospace" }}>
+                          {typeLabel}
+                        </span>
+                        <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                        {positions.length > 1 && (
+                          <span style={{ fontSize: 10, color: 'var(--accent-blue-light)', fontWeight: 700, fontFamily: "'Roboto Mono', monospace", flexShrink: 0 }}>
+                            {positions.length} funds
+                          </span>
+                        )}
+                        <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {positions.length === 1 ? positions[0].fund.split(' ').slice(0, 2).join(' ') : positions.map(p => p.fund.split(' ')[0]).join(', ')}
+                        </span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: typeColor, fontFamily: "'Roboto Mono', monospace", flexShrink: 0, minWidth: 60, textAlign: 'right' }}>
+                          {fmt(totalVal)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                    Showing top 60 · click any row to open that fund's full options tab
+                  </p>
+                </div>
+              );
+            })()}
+          </div>
         )}
 
         {/* Recent filers grid — shown when no query and no fund selected */}

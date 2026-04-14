@@ -8,17 +8,21 @@ import { formatLargeNumber, formatPrice } from '../utils/formatters';
 
 type SortMode = 'value' | 'date';
 type FilterMode = 'all' | 'buy' | 'sell';
+type PeriodMode = '7d' | '14d' | '30d';
 
 export default function InsiderActivityPage() {
   const navigate = useNavigate();
   const [sortMode, setSortMode] = useState<SortMode>('value');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [periodMode, setPeriodMode] = useState<PeriodMode>('7d');
   const watchlistSymbols = useWatchlistStore((state) => state.items.map((item) => item.symbol));
 
+  const days = periodMode === '7d' ? 7 : periodMode === '14d' ? 14 : 30;
+
   const { data, isLoading, error } = useQuery({
-    queryKey: ['insider-activity-feed'],
+    queryKey: ['insider-activity-feed', days],
     queryFn: async (): Promise<{ trades: InsiderFeedItem[] }> => {
-      const res = await fetch('/api/insider-activity');
+      const res = await fetch(`/api/insider-activity?days=${days}`);
       if (!res.ok) throw new Error(`Feed error ${res.status}`);
       return res.json();
     },
@@ -53,6 +57,15 @@ export default function InsiderActivityPage() {
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <SegmentedControl<PeriodMode>
+              value={periodMode}
+              onChange={setPeriodMode}
+              options={[
+                { id: '7d', label: '7D' },
+                { id: '14d', label: '14D' },
+                { id: '30d', label: '30D' },
+              ]}
+            />
             <SegmentedControl<SortMode>
               value={sortMode}
               onChange={setSortMode}
