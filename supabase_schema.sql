@@ -36,25 +36,41 @@ create table if not exists trades (
   traded_at timestamptz default now()
 );
 
+-- User watchlists
+create table if not exists watchlists (
+  id uuid primary key default gen_random_uuid(),
+  player_id uuid not null references players(id) on delete cascade,
+  symbol text not null,
+  name text,
+  exchange text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  unique(player_id, symbol)
+);
+
 -- Enable Row Level Security but allow all reads (public leaderboard)
 alter table players enable row level security;
 alter table holdings enable row level security;
 alter table trades enable row level security;
+alter table watchlists enable row level security;
 
 -- Allow anyone to read (leaderboard is public within the group)
 create policy "Public read players" on players for select using (true);
 create policy "Public read holdings" on holdings for select using (true);
 create policy "Public read trades" on trades for select using (true);
+create policy "Public read watchlists" on watchlists for select using (true);
 
 -- Allow insert/update/delete for all (PIN-gated at app level)
 create policy "Allow all writes players" on players for all using (true) with check (true);
 create policy "Allow all writes holdings" on holdings for all using (true) with check (true);
 create policy "Allow all writes trades" on trades for all using (true) with check (true);
+create policy "Allow all writes watchlists" on watchlists for all using (true) with check (true);
 
 -- Real-time: enable for leaderboard live updates
 alter publication supabase_realtime add table players;
 alter publication supabase_realtime add table holdings;
 alter publication supabase_realtime add table trades;
+alter publication supabase_realtime add table watchlists;
 
 -- Seed players — add more later via Supabase Table Editor
 insert into players (name, pin, avatar_color, cash) values

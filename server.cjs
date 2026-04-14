@@ -219,6 +219,178 @@ app.get('/api/latest-insiders', async (req, res) => {
   }
 });
 
+let insiderActivityCache = null;
+let insiderActivityLastFetch = 0;
+const INSIDER_ACTIVITY_TTL = 30 * 60 * 1000;
+
+function quarterOfMonth(month) {
+  return Math.floor((month - 1) / 3) + 1;
+}
+
+function formatIndexDate(date) {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return { y, ymd: `${y}${m}${d}`, qtr: quarterOfMonth(date.getUTCMonth() + 1) };
+}
+
+function xmlMatch(block, regex) {
+  const match = regex.exec(block);
+  return match ? match[1].trim() : '';
+}
+
+function parseNumber(value) {
+  const n = Number(String(value ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+function inferOwnerTitle(xml) {
+  const officerTitle = xmlMatch(xml, /<officerTitle>\s*([^<]*)\s*<\/officerTitle>/i);
+  if (officerTitle) return officerTitle;
+
+  const bits = [];
+  if (/<isDirector>\s*1\s*<\/isDirector>/i.test(xml)) bits.push('Director');
+  if (/<isOfficer>\s*1\s*<\/isOfficer>/i.test(xml)) bits.push('Officer');
+  if (/<isTenPercentOwner>\s*1\s*<\/isTenPercentOwner>/i.test(xml)) bits.push('10% Owner');
+  const otherText = xmlMatch(xml, /<otherText>\s*([^<]*)\s*<\/otherText>/i);
+  if (otherText) bits.push(otherText);
+  return bits.join(' · ');
+}
+
+async function fetchRecentForm4Entries(daysBack = 7) {
+  const entries = [];
+
+  for (let i = 0; i < daysBack; i += 1) {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() - i);
+    const { y, ymd, qtr } = formatIndexDate(date);
+    const indexUrl = `https://www.sec.gov/Archives/edgar/daily-index/${y}/QTR${qtr}/company.${ymd}.idx`;
+
+    try {
+      const idx = await httpsGet(indexUrl, { 'User-Agent': SEC_UA, Accept: 'text/plain' });
+      const lines = idx.split(/\r?\n/);
+
+      for (const line of lines) {
+        if (line.length < 100) continue; // skip header, blank, and dashed separator lines
+        // Fixed-width format: company name occupies first 62 chars, then form type, CIK, date, filename
+        const m = line.match(/^(.{62})(.*?)\s+(\d{6,10})\s+(\d{8})\s+(edgar\/\S+)/);
+        if (!m) continue;
+        const companyName = m[1].trim();
+        const formType = m[2].trim();
+        const cik = m[3];
+        const dateRaw = m[4];
+        const filename = m[5];
+        if (formType !== '4' && formType !== '4/A') continue;
+        const filedDate = `${dateRaw.slice(0, 4)}-${dateRaw.slice(4, 6)}-${dateRaw.slice(6, 8)}`;
+        const accession = filename.split('/').pop()?.replace(/\.txt$/i, '');
+        if (!accession) continue;
+        entries.push({ cik, companyName, formType, filedDate, filename, accession });
+      }
+    } catch {
+      // Non-trading days simply won't have an index file.
+    }
+  }
+
+  const seen = new Set();
+  return entries.filter((entry) => {
+    if (seen.has(entry.filename)) return false;
+    seen.add(entry.filename);
+    return true;
+  });
+}
+
+async function fetchSecInsiderActivityItem(entry) {
+  const cikClean = String(Number(entry.cik));
+  const accClean = entry.accession.replace(/-/g, '');
+  const dirUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/`;
+
+  let dirHtml = '';
+  try {
+    dirHtml = await httpsGet(dirUrl, { 'User-Agent': SEC_UA, Accept: 'text/html' });
+  } catch {
+    return [];
+  }
+
+  const xmlFiles = [...dirHtml.matchAll(/href="([^"]+\.xml)"/gi)]
+    .map((match) => match[1])
+    .filter((href) => !/xsl/i.test(href));
+  const ownershipFile = xmlFiles.find((href) => /ownership|form4/i.test(href))
+    || xmlFiles.find((href) => !/primary_doc/i.test(href));
+  if (!ownershipFile) return [];
+
+  const xmlUrl = ownershipFile.startsWith('http')
+    ? ownershipFile
+    : `https://www.sec.gov${ownershipFile.startsWith('/Archives') ? '' : `/Archives/edgar/data/${cikClean}/${accClean}/`}${ownershipFile}`;
+
+  let xml = '';
+  try {
+    xml = await httpsGet(xmlUrl, { 'User-Agent': SEC_UA, Accept: 'application/xml,text/xml' });
+  } catch {
+    return [];
+  }
+
+  const symbol = xmlMatch(xml, /<issuerTradingSymbol>\s*([^<]+)\s*<\/issuerTradingSymbol>/i).toUpperCase();
+  if (!symbol) return [];
+
+  const companyName = xmlMatch(xml, /<issuerName>\s*([^<]+)\s*<\/issuerName>/i) || entry.companyName;
+  const insiderName = xmlMatch(xml, /<rptOwnerName>\s*([^<]+)\s*<\/rptOwnerName>/i) || 'Unknown Insider';
+  const title = inferOwnerTitle(xml);
+
+  const transactions = [...xml.matchAll(/<nonDerivativeTransaction>([\s\S]*?)<\/nonDerivativeTransaction>/gi)];
+  return transactions.map((match, index) => {
+    const block = match[1];
+    const code = xmlMatch(block, /<transactionCode>\s*([^<]+)\s*<\/transactionCode>/i).toUpperCase();
+    if (code !== 'P' && code !== 'S' && code !== 'S-') return null;
+
+    const transactionDate = xmlMatch(block, /<transactionDate>[\s\S]*?<value>\s*([^<]+)\s*<\/value>/i);
+    const shares = parseNumber(xmlMatch(block, /<transactionShares>[\s\S]*?<value>\s*([^<]+)\s*<\/value>/i));
+    const pricePerShare = parseNumber(xmlMatch(block, /<transactionPricePerShare>[\s\S]*?<value>\s*([^<]+)\s*<\/value>/i));
+    const totalValue = shares * pricePerShare;
+    if (!transactionDate || shares <= 0 || pricePerShare <= 0 || totalValue <= 0) return null;
+
+    return {
+      id: `${entry.accession}-${index}`,
+      symbol,
+      companyName,
+      insiderName,
+      title,
+      type: code === 'P' ? 'BUY' : 'SELL',
+      transactionDate: transactionDate.slice(0, 10),
+      filingDate: entry.filedDate,
+      shares,
+      pricePerShare,
+      totalValue,
+      market: 'US',
+      exchange: 'SEC',
+      source: 'SEC Form 4',
+      filingUrl: `https://www.sec.gov/Archives/${entry.filename}`,
+    };
+  }).filter(Boolean);
+}
+
+async function fetchLatestInsiderActivity() {
+  const entries = await fetchRecentForm4Entries(8);
+  const latestEntries = entries.slice(0, 60);
+  const groups = await Promise.all(latestEntries.map((entry) => fetchSecInsiderActivityItem(entry)));
+  return groups.flat().sort((a, b) => b.totalValue - a.totalValue);
+}
+
+app.get('/api/insider-activity', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (!insiderActivityCache || now - insiderActivityLastFetch > INSIDER_ACTIVITY_TTL) {
+      insiderActivityCache = await fetchLatestInsiderActivity();
+      insiderActivityLastFetch = now;
+    }
+
+    const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
+    res.json({ trades: insiderActivityCache.slice(0, limit) });
+  } catch (err) {
+    console.error('[insider-activity]', err.message);
+    res.status(502).json({ error: err.message, trades: [] });
+  }
+});
+
 app.use(express.json());
 
 async function fetchEdgarFilingText(edgarUrl) {
@@ -654,6 +826,86 @@ app.post('/api/analyze-congress', async (req, res) => {
   }
 });
 
+function lastN(arr, n) {
+  return Array.isArray(arr) ? arr.slice(Math.max(0, arr.length - n)) : [];
+}
+
+function average(values) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function stddev(values, mean) {
+  if (!values.length) return 0;
+  const variance = values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+function summarizeTechnicals(candles) {
+  const clean = (candles || [])
+    .map((c) => ({
+      close: Number(c.close),
+      high: Number(c.high),
+      low: Number(c.low),
+      open: Number(c.open),
+      volume: Number(c.volume),
+      time: c.time,
+    }))
+    .filter((c) => Number.isFinite(c.close) && Number.isFinite(c.high) && Number.isFinite(c.low));
+
+  if (clean.length < 25) {
+    return 'Technical context unavailable: not enough candle history.';
+  }
+
+  const closes = clean.map((c) => c.close);
+  const recent20 = lastN(clean, 20);
+  const recent10 = lastN(clean, 10);
+  const recent60 = lastN(clean, 60);
+  const last = clean[clean.length - 1];
+  const prev = clean[clean.length - 2];
+
+  const sma20 = average(recent20.map((c) => c.close));
+  const bandStd = stddev(recent20.map((c) => c.close), sma20);
+  const upperBand = sma20 + (2 * bandStd);
+  const lowerBand = sma20 - (2 * bandStd);
+  const support20 = Math.min(...recent20.map((c) => c.low));
+  const resistance20 = Math.max(...recent20.map((c) => c.high));
+  const support60 = recent60.length ? Math.min(...recent60.map((c) => c.low)) : support20;
+  const resistance60 = recent60.length ? Math.max(...recent60.map((c) => c.high)) : resistance20;
+  const trend10 = recent10.length >= 2 ? ((recent10[recent10.length - 1].close / recent10[0].close) - 1) * 100 : 0;
+  const bandWidthPct = sma20 ? ((upperBand - lowerBand) / sma20) * 100 : 0;
+
+  let pattern = 'Range-bound';
+  if (last.close > upperBand) pattern = 'Breakout above upper Bollinger band';
+  else if (last.close < lowerBand) pattern = 'Breakdown below lower Bollinger band';
+  else if (trend10 > 5 && last.close > sma20) pattern = 'Short-term uptrend with higher closes';
+  else if (trend10 < -5 && last.close < sma20) pattern = 'Short-term downtrend with lower closes';
+  else if (bandWidthPct < 8) pattern = 'Volatility squeeze';
+  else if (prev.low <= lowerBand && last.close > prev.close) pattern = 'Rebound from lower band support';
+
+  const thresholdRead =
+    last.close >= resistance20 * 0.98 ? 'Testing recent breakout threshold'
+    : last.close <= support20 * 1.02 ? 'Testing near-term floor'
+    : 'Trading inside the recent range';
+
+  return [
+    `Latest close: $${last.close.toFixed(2)} on ${String(last.time).slice(0, 10)}`,
+    `SMA20: $${sma20.toFixed(2)} | Bollinger: lower $${lowerBand.toFixed(2)}, upper $${upperBand.toFixed(2)} | bandwidth ${bandWidthPct.toFixed(1)}%`,
+    `Near-term floor / support: $${support20.toFixed(2)} | Near-term threshold / resistance: $${resistance20.toFixed(2)}`,
+    `Intermediate floor / support: $${support60.toFixed(2)} | Intermediate threshold / resistance: $${resistance60.toFixed(2)}`,
+    `10-bar trend: ${trend10 >= 0 ? '+' : ''}${trend10.toFixed(1)}%`,
+    `Detected pattern: ${pattern}`,
+    `Regime read: ${thresholdRead}`,
+  ].join('\n');
+}
+
+function summarizeNews(news) {
+  if (!Array.isArray(news) || news.length === 0) return 'No recent company news available.';
+  return news.slice(0, 5).map((item, index) =>
+    `${index + 1}. ${item.headline} (${item.source || 'Unknown source'})`
+  ).join('\n');
+}
+
 // ── Stock Q&A Chat ────────────────────────────────────────────────────────────
 app.post('/api/ask-stock', async (req, res) => {
   const { question, symbol, context } = req.body ?? {};
@@ -669,6 +921,10 @@ app.post('/api/ask-stock', async (req, res) => {
   if (context?.marketCap)   ctx.push(`Market cap: ${context.marketCap}`);
   if (context?.volume)      ctx.push(`Volume: ${context.volume}`);
   if (context?.exchange)    ctx.push(`Exchange: ${context.exchange}`);
+  if (context?.candles?.length) {
+    ctx.push('Technical snapshot:');
+    ctx.push(summarizeTechnicals(context.candles));
+  }
   if (context?.insiders?.length) {
     const buys  = context.insiders.filter(t => t.transactionCode === 'P');
     const sells = context.insiders.filter(t => t.transactionCode === 'S' || t.transactionCode === 'S-');
@@ -678,20 +934,33 @@ app.post('/api/ask-stock', async (req, res) => {
     );
     ctx.push('Recent insider trades:\n' + top.join('\n'));
   }
+  if (context?.news?.length) {
+    ctx.push('Recent news headlines:');
+    ctx.push(summarizeNews(context.news));
+  }
 
-  const systemPrompt = `You are a sharp Wall Street equity analyst covering ${symbol}. Answer like a senior analyst briefing a PM — direct, specific, data-driven.
+  const systemPrompt = `You are a sharp Wall Street equity analyst covering ${symbol}. Answer like a senior analyst briefing a PM - direct, specific, data-driven.
 
 RESPONSE FORMAT RULES:
-- Lead with the direct answer or bottom-line verdict in the first sentence
-- Use bullet points (•) when listing 3+ items — never prose lists
+- Lead with a one-line verdict first
+- Use compact markdown sections in this order when the question is analytical:
+  **Trend / Regime**
+  **Key Levels**
+  **Indicator Read**
+  **Insider / News Read**
+  **Bullish Case**
+  **Bearish Case**
+  **Bottom line**
+- Use bullet points (-) when listing 3+ items
 - Bold key numbers and names with **markdown**
-- End with a one-sentence "Bottom line:" when the question is analytical
-- Under 200 words unless the question genuinely requires more depth
+- Keep it under 260 words unless the question clearly needs more
 - Never use generic disclaimers ("consult a financial advisor", "past performance", etc.)
-- If you don't know a specific fact, say so in one clause and pivot to what the data does show
+- If you don't know a specific fact, say so briefly and pivot to what the data does show
+- Explicitly mention price floors, thresholds, Bollinger context, and pattern read when technical data is available
+- Explicitly comment on insider buy/sell balance and how the news flow supports or conflicts with the chart
 
 STOCK CONTEXT (live data as of today):
-${ctx.join('\n') || 'No live context — rely on your training knowledge about this company.'}`;
+${ctx.join('\n') || 'No live context - rely on your training knowledge about this company.'}`;
 
   try {
     const body = JSON.stringify({

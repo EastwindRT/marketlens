@@ -39,6 +39,22 @@ export interface Trade {
   traded_at: string;
 }
 
+export interface WatchlistRecord {
+  id: string;
+  player_id: string;
+  symbol: string;
+  name?: string;
+  exchange?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WatchlistInput {
+  symbol: string;
+  name?: string;
+  exchange?: string;
+}
+
 // ── Google OAuth auth ─────────────────────────────────────────────────────────
 
 export async function signInWithGoogle(): Promise<void> {
@@ -99,6 +115,71 @@ export async function getAllHoldings(): Promise<Holding[]> {
   const { data, error } = await supabase.from('holdings').select('*');
   if (error) throw error;
   return data ?? [];
+}
+
+// -- Watchlist persistence ----------------------------------------------------
+
+export async function getWatchlist(playerId: string): Promise<WatchlistInput[]> {
+  const { data, error } = await supabase
+    .from('watchlists')
+    .select('*')
+    .eq('player_id', playerId)
+    .order('updated_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map((item: WatchlistRecord) => ({
+    symbol: item.symbol,
+    name: item.name,
+    exchange: item.exchange,
+  }));
+}
+
+export async function upsertWatchlistItem(playerId: string, item: WatchlistInput): Promise<void> {
+  const payload = {
+    player_id: playerId,
+    symbol: item.symbol,
+    name: item.name ?? null,
+    exchange: item.exchange ?? null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from('watchlists')
+    .upsert(payload, { onConflict: 'player_id,symbol' });
+  if (error) throw error;
+}
+
+export async function removeWatchlistItem(playerId: string, symbol: string): Promise<void> {
+  const { error } = await supabase
+    .from('watchlists')
+    .delete()
+    .eq('player_id', playerId)
+    .eq('symbol', symbol);
+  if (error) throw error;
+}
+
+export async function replaceWatchlist(playerId: string, items: WatchlistInput[]): Promise<void> {
+  const { error: deleteError } = await supabase
+    .from('watchlists')
+    .delete()
+    .eq('player_id', playerId);
+  if (deleteError) throw deleteError;
+
+  if (items.length === 0) return;
+
+  const now = new Date().toISOString();
+  const rows = items.map((item) => ({
+    player_id: playerId,
+    symbol: item.symbol,
+    name: item.name ?? null,
+    exchange: item.exchange ?? null,
+    created_at: now,
+    updated_at: now,
+  }));
+
+  const { error: insertError } = await supabase
+    .from('watchlists')
+    .insert(rows);
+  if (insertError) throw insertError;
 }
 
 // ── Trade execution ───────────────────────────────────────────────────────────

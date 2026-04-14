@@ -10,10 +10,12 @@ import Portfolio from './pages/Portfolio'
 import PlayerPortfolio from './pages/PlayerPortfolio'
 import Admin from './pages/Admin'
 import NewsPage from './pages/News'
+import InsiderActivityPage from './pages/InsiderActivity'
 import CongressPage from './pages/Congress'
 import FundsPage from './pages/Funds'
 import LoginModal from './components/auth/LoginModal'
 import { useLeagueStore } from './store/leagueStore'
+import { useWatchlistStore } from './store/watchlistStore'
 import { supabase, getPlayerByGoogleEmail } from './api/supabase'
 
 const SUPABASE_CONFIGURED =
@@ -21,36 +23,45 @@ const SUPABASE_CONFIGURED =
 
 export default function App() {
   const { setPlayer } = useLeagueStore()
+  const initializeWatchlist = useWatchlistStore((state) => state.initialize)
   // null = loading, undefined = no session, Session = authenticated
   const [session, setSession] = useState<Session | null | undefined>(undefined)
 
   // ── Handle Google OAuth redirect + session restore ──────────────────────
   useEffect(() => {
+    const applySession = async (nextSession: Session | null) => {
+      setSession(nextSession)
+
+      if (!nextSession?.user?.email) {
+        setPlayer(null)
+        await initializeWatchlist(null)
+        return
+      }
+
+      const found = await getPlayerByGoogleEmail(nextSession.user.email)
+      setPlayer(found ?? null)
+      await initializeWatchlist(found?.id ?? null)
+    }
+
     if (!SUPABASE_CONFIGURED) {
       setSession(null) // no auth configured → open access
+      void initializeWatchlist(null)
       return
     }
 
     // Restore existing session on load
     supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session ?? null)
+      void applySession(data.session ?? null)
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, newSession) => {
-        setSession(newSession ?? null)
-        if (newSession?.user?.email) {
-          // Opportunistically match to league player — not required
-          const found = await getPlayerByGoogleEmail(newSession.user.email)
-          if (found) setPlayer(found)
-        } else {
-          setPlayer(null)
-        }
+        await applySession(newSession ?? null)
       }
     )
 
     return () => subscription.unsubscribe()
-  }, [setPlayer])
+  }, [initializeWatchlist, setPlayer])
 
   // Still loading session
   if (session === undefined) return null
@@ -72,6 +83,7 @@ export default function App() {
         <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/news" element={<NewsPage />} />
+        <Route path="/insiders" element={<InsiderActivityPage />} />
         <Route path="/congress" element={<CongressPage />} />
         <Route path="/funds" element={<FundsPage />} />
       </Routes>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
-import { Minus, Star, X, Trophy, Users, TrendingUp, TrendingDown, Shield, User, Newspaper, Building2, Briefcase } from 'lucide-react';
+import { Minus, Star, X, Trophy, Users, TrendingUp, TrendingDown, Shield, User, Newspaper, Building2, Briefcase, CircleDollarSign } from 'lucide-react';
 import { useWatchlistStore } from '../../store/watchlistStore';
 import { useLeagueStore } from '../../store/leagueStore';
 import { useStockQuote } from '../../hooks/useStockData';
@@ -313,6 +313,7 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
 
       {/* ── Market nav — always visible ── */}
       <NavLink to="/news"     icon={<Newspaper size={14} />}  label="Market Signals" onClose={onClose} />
+      <NavLink to="/insiders" icon={<CircleDollarSign size={14} />} label="Insider $" onClose={onClose} />
       <NavLink to="/congress" icon={<Building2 size={14} />}  label="Congress Trades" onClose={onClose} />
       <NavLink to="/funds"    icon={<Briefcase size={14} />}  label="Fund Holdings" onClose={onClose} />
 

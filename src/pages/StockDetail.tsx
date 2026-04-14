@@ -4,11 +4,12 @@ import { Plus, Check, RefreshCw, ArrowUpDown, Send, Bot } from 'lucide-react';
 import { useStockCandles, useStockQuote, useStockProfile } from '../hooks/useStockData';
 import { useInsiderData } from '../hooks/useInsiderData';
 import { useRealTimeQuote } from '../hooks/useRealTimeQuote';
+import { useStockNews } from '../hooks/useStockNews';
 import { useChartStore } from '../store/chartStore';
 import { useWatchlistStore } from '../store/watchlistStore';
 import { useLeagueStore } from '../store/leagueStore';
 import { StockChart } from '../components/chart/StockChart';
-import type { OHLCVBar, ChartType, InsiderTransaction } from '../api/types';
+import type { OHLCVBar, ChartType, InsiderTransaction, NewsItem } from '../api/types';
 import { PriceDisplay } from '../components/ui/PriceDisplay';
 import { TimeRangePicker } from '../components/ui/TimeRangePicker';
 import { InsiderPanel } from '../components/insider/InsiderPanel';
@@ -37,6 +38,7 @@ export default function StockDetail() {
   const { data: quote, isLoading: quoteLoading } = useStockQuote(symbol);
   const { data: profile, isLoading: profileLoading } = useStockProfile(symbol);
   const { data: insiders, isLoading: insidersLoading } = useInsiderData(symbol);
+  const { data: news } = useStockNews(symbol);
   const liveQuote = useRealTimeQuote(symbol);
 
   const inWatchlist = hasItem(symbol);
@@ -262,6 +264,8 @@ export default function StockDetail() {
             volume: volumeDisplay,
             exchange: isCanadian ? (quote?._exchange || 'TSX') : (profile?.exchange || 'NASDAQ'),
             insiders: insiders || [],
+            candles: (candles || []).slice(-90),
+            news: (news || []).slice(0, 6),
           }}
         />
       </div>
@@ -355,6 +359,8 @@ function StockAIChat({ symbol, context }: {
   context: {
     price?: string; change?: string; marketCap?: string;
     volume?: string; exchange?: string; insiders?: InsiderTransaction[];
+    candles?: OHLCVBar[];
+    news?: NewsItem[];
   };
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -389,10 +395,10 @@ function StockAIChat({ symbol, context }: {
   }, [input, loading, symbol, context]);
 
   const SUGGESTIONS = [
-    `Why are insiders buying ${symbol}?`,
-    `What are the key risks for ${symbol}?`,
-    `What catalysts could move ${symbol}?`,
-    `Is ${symbol} overvalued right now?`,
+    `Read the chart, insiders, and news for ${symbol}. What is the setup?`,
+    `Where are the key support and resistance levels for ${symbol}?`,
+    `What do Bollinger Bands and recent price action say about ${symbol}?`,
+    `Give me the bullish and bearish case for ${symbol} right now.`,
   ];
 
   return (

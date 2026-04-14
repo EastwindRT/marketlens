@@ -121,3 +121,21 @@ export interface Edgar13DFiling {
   periodOfReport?: string;
   edgarUrl: string;
 }
+
+export interface InsiderFeedItem {
+  id: string;
+  symbol: string;
+  companyName: string;
+  insiderName: string;
+  title?: string;
+  type: 'BUY' | 'SELL';
+  transactionDate: string;
+  filingDate?: string;
+  shares: number;
+  pricePerShare: number;
+  totalValue: number;
+  market: 'US' | 'CA';
+  exchange: string;
+  source: string;
+  filingUrl?: string;
+}
