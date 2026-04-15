@@ -153,7 +153,9 @@ function normaliseDate(d) {
   return s.slice(0, 10);
 }
 
-// Latest insider filings via SEC EDGAR Form 4 atom feed (all companies, no Finnhub needed)
+// Latest insider filings via SEC EDGAR daily-index files (cloud-safe, no cgi-bin)
+// NOTE: cgi-bin/browse-edgar atom feed is blocked on cloud provider IPs (Render/AWS).
+// Replaced with daily-index .idx parsing, same approach used by /api/insider-activity.
 let insiderFeedCache = null;
 let insiderFeedLastFetch = 0;
 const INSIDER_FEED_TTL = 30 * 60 * 1000; // 30min
@@ -162,56 +164,17 @@ app.get('/api/latest-insiders', async (req, res) => {
   try {
     const now = Date.now();
     if (!insiderFeedCache || now - insiderFeedLastFetch > INSIDER_FEED_TTL) {
-      const url = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&dateb=&owner=include&count=80&output=atom';
-      const xml = await httpsGet(url, { 'User-Agent': 'TARS admin@tars.app', 'Accept': 'text/xml' });
-
-      // Parse atom XML entries
-      // EDGAR Form 4 feed has alternating entries: (Reporting) = person, (Issuer) = company
-      // We pair them by accession number (same accession, consecutive entries)
-      const rawEntries = [];
-      const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
-      let m;
-      while ((m = entryRe.exec(xml)) !== null) {
-        const block = m[1];
-        const getTag = (tag) => { const r = new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`); const x = r.exec(block); return x ? x[1].trim() : ''; };
-        const title = getTag('title');
-        const filedDate = getTag('updated').slice(0, 10);
-        const linkMatch = /<link[^>]*href="([^"]*)"/.exec(block);
-        const filingUrl = linkMatch ? linkMatch[1] : '';
-        // Accession number from filename: "0001193125-26-148615-index.htm"
-        // Same accession appears for both Reporting and Issuer entries
-        const accMatch = filingUrl.match(/\/(\d{10}-\d{2}-\d+)-index\.htm/);
-        const accession = accMatch ? accMatch[1] : filingUrl;
-        rawEntries.push({ title, filedDate, filingUrl, accession });
-      }
-
-      // Build deduplicated filings: one entry per accession, prefer (Issuer) for company name
-      const byAccession = new Map();
-      for (const e of rawEntries) {
-        const isIssuer = e.title.includes('(Issuer)');
-        const isReporting = e.title.includes('(Reporting)');
-        // Extract name: "4 - NAME (CIK) (Role)" → NAME
-        const nameMatch = e.title.match(/^[\d\/A-Z]+\s*-\s*(.*?)\s*\(\d+\)/);
-        const name = nameMatch ? nameMatch[1].trim() : e.title;
-
-        if (!byAccession.has(e.accession)) {
-          byAccession.set(e.accession, { companyName: '', insiderName: '', filedDate: e.filedDate, filingUrl: e.filingUrl });
-        }
-        const rec = byAccession.get(e.accession);
-        if (isIssuer) rec.companyName = name;
-        else if (isReporting) rec.insiderName = name;
-      }
-
-      const entries = [];
-      for (const [, rec] of byAccession) {
-        if (!rec.companyName || !rec.filedDate) continue;
-        entries.push({ companyName: rec.companyName, insiderName: rec.insiderName, formType: '4', filedDate: rec.filedDate, filingUrl: rec.filingUrl });
-      }
-
-      insiderFeedCache = entries;
+      // fetchRecentForm4Entries scans daily-index .idx files — works from cloud IPs
+      const entries = await fetchRecentForm4Entries(5);
+      insiderFeedCache = entries.slice(0, 80).map(e => ({
+        companyName: e.companyName,
+        insiderName: '', // daily-index doesn't include reporter name; fetch individual XML if needed
+        formType: e.formType,
+        filedDate: e.filedDate,
+        filingUrl: `https://www.sec.gov/Archives/edgar/data/${Number(e.cik)}/${e.accession.replace(/-/g, '')}/`,
+      }));
       insiderFeedLastFetch = now;
     }
-
     res.json({ filings: insiderFeedCache });
   } catch (err) {
     console.error('[latest-insiders]', err.message);

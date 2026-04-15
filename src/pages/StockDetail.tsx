@@ -216,6 +216,7 @@ export default function StockDetail() {
       {/* ── Chart ── */}
       <div style={{ background: 'var(--bg-primary)' }}>
         <ChartWithResponsiveHeight
+          key={symbol}
           data={candles || []}
           chartType={chartType}
           showSMA20={showSMA20}

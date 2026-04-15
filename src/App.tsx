@@ -1,19 +1,21 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense, lazy } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import AppShell from './components/layout/AppShell'
 import Dashboard from './pages/Dashboard'
-import StockDetail from './pages/StockDetail'
-import Search from './pages/Search'
-import Leaderboard from './pages/Leaderboard'
-import Portfolio from './pages/Portfolio'
-import PlayerPortfolio from './pages/PlayerPortfolio'
-import Admin from './pages/Admin'
-import NewsPage from './pages/News'
-import InsiderActivityPage from './pages/InsiderActivity'
-import CongressPage from './pages/Congress'
-import FundsPage from './pages/Funds'
 import LoginModal from './components/auth/LoginModal'
+
+// Lazy-load heavy pages to reduce initial bundle size
+const StockDetail       = lazy(() => import('./pages/StockDetail'))
+const Search            = lazy(() => import('./pages/Search'))
+const Leaderboard       = lazy(() => import('./pages/Leaderboard'))
+const Portfolio         = lazy(() => import('./pages/Portfolio'))
+const PlayerPortfolio   = lazy(() => import('./pages/PlayerPortfolio'))
+const Admin             = lazy(() => import('./pages/Admin'))
+const NewsPage          = lazy(() => import('./pages/News'))
+const InsiderActivityPage = lazy(() => import('./pages/InsiderActivity'))
+const CongressPage      = lazy(() => import('./pages/Congress'))
+const FundsPage         = lazy(() => import('./pages/Funds'))
 import { useLeagueStore } from './store/leagueStore'
 import { useWatchlistStore } from './store/watchlistStore'
 import { supabase, getPlayerByGoogleEmail } from './api/supabase'
@@ -73,20 +75,22 @@ export default function App() {
 
   return (
     <AppShell>
-      <Routes>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/stock/:symbol" element={<StockDetail />} />
-        <Route path="/search" element={<Search />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/leaderboard" element={<Leaderboard />} />
-        <Route path="/portfolio" element={<Portfolio />} />
-        <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
-        <Route path="/admin" element={<Admin />} />
-        <Route path="/news" element={<NewsPage />} />
-        <Route path="/insiders" element={<InsiderActivityPage />} />
-        <Route path="/congress" element={<CongressPage />} />
-        <Route path="/funds" element={<FundsPage />} />
-      </Routes>
+      <Suspense fallback={null}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/stock/:symbol" element={<StockDetail />} />
+          <Route path="/search" element={<Search />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/portfolio" element={<Portfolio />} />
+          <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
+          <Route path="/admin" element={<Admin />} />
+          <Route path="/news" element={<NewsPage />} />
+          <Route path="/insiders" element={<InsiderActivityPage />} />
+          <Route path="/congress" element={<CongressPage />} />
+          <Route path="/funds" element={<FundsPage />} />
+        </Routes>
+      </Suspense>
     </AppShell>
   )
 }
