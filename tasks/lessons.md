@@ -46,6 +46,14 @@
 
 ---
 
+## Lesson: 2026-04-14 — Don't bulk-fetch all funds on landing; show a filing tape and load details on demand
+
+**Mistake:** The Funds landing page pre-fetched 35 EDGAR submissions endpoints to build a "curated funds" grid, and also ran a cross-fund options scan across all 35 funds in parallel batches on server start.
+**Root cause:** Both approaches make a large number of EDGAR requests upfront. The submissions batch (35 × `data.sec.gov`) is slow and serialized; the options scan fires 35 directory + XML fetches and regularly hits 429s, leaving many funds with no data. Users saw a 60s spinner or an incomplete list.
+**Rule:** For landing pages backed by slow external APIs, prefer a filing-tape approach: scan the EDGAR daily-index for the relevant form type (13F-HR, 4, etc.), return a flat list of who filed recently, and load individual detail only when the user explicitly selects a fund. This is fast, cloud-safe, and requires zero per-fund prefetching.
+
+---
+
 ## Lesson: 2026-04-14 — React Router reuses component instances between same-route navigations; use key to force remount
 
 **Mistake:** When navigating from `/stock/AAPL` to `/stock/MSFT`, the StockChart's DOM refs (including the chart canvas) were preserved across the symbol change because React Router reuses the same component instance for matching route patterns.

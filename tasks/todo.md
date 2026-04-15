@@ -1,3 +1,19 @@
+## Plan: Funds Holdings Simplification — SHIPPED 2026-04-14 (commit 7be0224)
+
+### Features
+- [x] New server endpoint `/api/13f/recent-filings` — scans last 60 days of EDGAR daily-index `.idx` files for 13F-HR entries; deduplicates by CIK; 24h cache; cloud-safe (no cgi-bin)
+- [x] Funds landing page replaced: removed slow cross-fund options scan (60s+, 429-prone) and curated 35-fund grid (35 EDGAR calls per cache miss)
+- [x] New landing: clean sorted list of recent filers — name, filed date, CIK — click any row to load full holdings on demand
+- [x] Fund detail view (tabs, options, AI chat, sector chart) unchanged
+- [x] Funds chunk: 27.9kB → 23.3kB
+
+### Open items (deferred)
+- [ ] Watchlist E2E (requires live Supabase auth login)
+- [ ] Ask AI manual QA (multi-question flow and fallback states)
+- [ ] Canadian insider coverage (US-only; TMX SEDI future task)
+
+---
+
 ## Plan: Chart Fix / EDGAR CGI / Bundle Size — SHIPPED 2026-04-14 (commit 5aeed4e)
 
 ### Features
