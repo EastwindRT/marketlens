@@ -1,3 +1,18 @@
+## Plan: Chart Fix / EDGAR CGI / Bundle Size — SHIPPED 2026-04-14 (commit 5aeed4e)
+
+### Features
+- [x] Chart persistence: `key={symbol}` added to `ChartWithResponsiveHeight` in `StockDetail.tsx` — forces full remount on ticker change, fixes AAPL graph sticking
+- [x] EDGAR CGI: `/api/latest-insiders` migrated from blocked `cgi-bin/browse-edgar` atom feed to `fetchRecentForm4Entries()` daily-index approach — cloud-safe on Render
+- [x] Bundle size: lazy-loaded all pages except Dashboard; initial bundle 838kB → 483kB (42%); StockDetail splits into separate 231kB chunk
+- [x] Build clean; pushed to Render (commit 5aeed4e)
+
+### Open items (require live session, deferred)
+- [ ] Watchlist E2E (requires live Supabase auth login)
+- [ ] Ask AI manual QA (multi-question flow and fallback states)
+- [ ] Canadian insider coverage (US-only; TMX SEDI future task)
+
+---
+
 ## Plan: Insider $ / Congress / Funds Improvements — SHIPPED 2026-04-14
 
 ### Features

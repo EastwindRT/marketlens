@@ -46,6 +46,14 @@
 
 ---
 
+## Lesson: 2026-04-14 — React Router reuses component instances between same-route navigations; use key to force remount
+
+**Mistake:** When navigating from `/stock/AAPL` to `/stock/MSFT`, the StockChart's DOM refs (including the chart canvas) were preserved across the symbol change because React Router reuses the same component instance for matching route patterns.
+**Root cause:** React Router does not unmount/remount `<StockDetail>` when only the `:symbol` param changes. Imperative refs (`useRef`) survive the param change. While React Query correctly switches to the new query key and `initChart` re-runs when `data` changes, edge cases (brief undefined data, stale cache, rapid navigation) can cause the old chart to persist visually.
+**Rule:** When a component owns imperative resources (chart canvases, WebGL contexts, third-party library instances) that must reset when a URL param changes, add `key={param}` to that component in the parent. `key={symbol}` on `ChartWithResponsiveHeight` guarantees a fresh mount for every ticker.
+
+---
+
 ## Lesson: 2026-04-11 — EDGAR CGI (www.sec.gov/cgi-bin) is IP-blocked from cloud providers
 
 **Mistake:** Used `www.sec.gov/cgi-bin/browse-edgar` EDGAR company search endpoint from server-side.
