@@ -394,25 +394,13 @@ export default function FundsPage() {
   const [largeOnly, setLargeOnly] = useState(false);
   const navigate = useNavigate();
 
-  const [optionsFilter, setOptionsFilter] = useState<'all' | 'call' | 'put'>('all');
-
-  const { data: recentFilersData } = useQuery({
-    queryKey: ['13f-recent-filers'],
+  const { data: recentFilingsData } = useQuery({
+    queryKey: ['13f-recent-filings'],
     queryFn: async () => {
-      const res = await fetch('/api/13f/recent-filers');
-      return res.json() as Promise<{ funds: (FundResult & { category: string })[] }>;
+      const res = await fetch('/api/13f/recent-filings');
+      return res.json() as Promise<{ filings: { name: string; cik: string; filedDate: string }[] }>;
     },
-    staleTime: 60 * 60 * 1000,
-  });
-
-  const { data: optionsScanData } = useQuery({
-    queryKey: ['13f-options-scan'],
-    queryFn: async () => {
-      const res = await fetch('/api/13f/options-scan');
-      return res.json() as Promise<{ positions: Array<{ fund: string; fundCik: string; name: string; cusip: string; putCall: string; value: number; shares: number; sector: string }>; loading: boolean }>;
-    },
-    staleTime: 60 * 60 * 1000,
-    refetchInterval: (query) => (query.state.data?.loading ? 30_000 : false),
+    staleTime: 24 * 60 * 60 * 1000,
   });
 
   useEffect(() => {
@@ -644,164 +632,62 @@ export default function FundsPage() {
           </>
         )}
 
-        {/* Cross-fund options scan — shown on landing page */}
-        {!selectedFund && !debouncedQuery && (
-          <div style={{ marginTop: 24, marginBottom: 32 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-              <div>
-                <p style={{ margin: '0 0 2px', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.01em' }}>
-                  Options Activity — All Curated Funds
-                </p>
-                <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-                  Calls &amp; puts across {optionsScanData?.positions.length ? `${[...new Set(optionsScanData.positions.map(p => p.fund))].length} funds` : 'curated hedge funds'} · latest 13F filings
-                  {optionsScanData?.loading && <span style={{ marginLeft: 6, color: 'var(--accent-blue-light)' }}>· scanning…</span>}
-                </p>
-              </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {(['all', 'call', 'put'] as const).map(f => (
-                  <button key={f} onClick={() => setOptionsFilter(f)} style={{
-                    padding: '5px 14px', borderRadius: 20, fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                    background: optionsFilter === f ? (f === 'put' ? '#F6465D' : f === 'call' ? '#05B169' : 'var(--accent-blue)') : 'var(--bg-elevated)',
-                    color: optionsFilter === f ? '#fff' : 'var(--text-secondary)',
-                    border: `1px solid ${optionsFilter === f ? 'transparent' : 'var(--border-default)'}`,
-                    transition: 'all 120ms', textTransform: 'uppercase',
-                  }}>{f === 'all' ? 'All' : f === 'call' ? 'Calls' : 'Puts'}</button>
-                ))}
-              </div>
-            </div>
-
-            {/* Loading skeleton */}
-            {(!optionsScanData || (optionsScanData.loading && optionsScanData.positions.length === 0)) && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="animate-pulse" style={{ height: 44, borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', opacity: 0.7 - i * 0.1 }} />
-                ))}
-                <p style={{ fontSize: 12, color: 'var(--text-tertiary)', textAlign: 'center', marginTop: 4 }}>
-                  Scanning {optionsScanData?.loading ? 'funds' : '35 funds'} for options positions — this takes ~60s on first load…
-                </p>
-              </div>
-            )}
-
-            {optionsScanData && optionsScanData.positions.length > 0 && (() => {
-              const visible = optionsScanData.positions.filter(p =>
-                optionsFilter === 'all' ? true : p.putCall?.toLowerCase() === optionsFilter
-              );
-              // Group by company name to surface "multiple funds hold same option"
-              const grouped = new Map<string, typeof visible>();
-              for (const p of visible) {
-                const key = p.name;
-                if (!grouped.has(key)) grouped.set(key, []);
-                grouped.get(key)!.push(p);
-              }
-              // Sort groups by total value desc
-              const sorted = [...grouped.entries()].sort((a, b) =>
-                b[1].reduce((s, x) => s + x.value, 0) - a[1].reduce((s, x) => s + x.value, 0)
-              ).slice(0, 60);
-
-              return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  {sorted.map(([name, positions]) => {
-                    const totalVal = positions.reduce((s, p) => s + p.value, 0);
-                    const isCall = positions[0].putCall?.toLowerCase() === 'call';
-                    const mixedTypes = new Set(positions.map(p => p.putCall?.toLowerCase())).size > 1;
-                    const typeColor = mixedTypes ? 'var(--text-secondary)' : isCall ? '#05B169' : '#F6465D';
-                    const typeBg = mixedTypes ? 'var(--bg-hover)' : isCall ? 'rgba(5,177,105,0.1)' : 'rgba(246,70,93,0.1)';
-                    const typeLabel = mixedTypes ? 'MIXED' : positions[0].putCall?.toUpperCase();
-                    return (
-                      <div key={name} onClick={() => { setSelectedFund({ cik: positions[0].fundCik, name: positions[0].fund, lastFiled: '' }); setQuery(positions[0].fund); setTab('options'); }}
-                        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', cursor: 'pointer', transition: 'border-color 120ms' }}
-                        onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
-                        onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                      >
-                        <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: typeBg, color: typeColor, border: `1px solid ${typeColor}30`, flexShrink: 0, fontFamily: "'Roboto Mono', monospace" }}>
-                          {typeLabel}
-                        </span>
-                        <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-                        {positions.length > 1 && (
-                          <span style={{ fontSize: 10, color: 'var(--accent-blue-light)', fontWeight: 700, fontFamily: "'Roboto Mono', monospace", flexShrink: 0 }}>
-                            {positions.length} funds
-                          </span>
-                        )}
-                        <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {positions.length === 1 ? positions[0].fund.split(' ').slice(0, 2).join(' ') : positions.map(p => p.fund.split(' ')[0]).join(', ')}
-                        </span>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: typeColor, fontFamily: "'Roboto Mono', monospace", flexShrink: 0, minWidth: 60, textAlign: 'right' }}>
-                          {fmt(totalVal)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
-                    Showing top 60 · click any row to open that fund's full options tab
-                  </p>
-                </div>
-              );
-            })()}
-          </div>
-        )}
-
-        {/* Recent filers grid — shown when no query and no fund selected */}
+        {/* Recent 13F filings — landing page (no fund selected, no query) */}
         {!selectedFund && !debouncedQuery && (
           <div style={{ marginTop: 24 }}>
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 14 }}>
               <p style={{ margin: '0 0 2px', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.01em' }}>
-                Recent 13F Filers
+                Recent 13F Filings
               </p>
               <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-                Latest institutional fund disclosures · SEC EDGAR
+                Latest institutional disclosures · SEC EDGAR · click any fund to load holdings
               </p>
             </div>
 
             {/* Skeleton while loading */}
-            {!recentFilersData && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
-                {[0, 1, 2].map(i => (
-                  <div key={i} className="animate-pulse" style={{ padding: 12, borderRadius: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
-                    <div style={{ width: '70%', height: 14, borderRadius: 4, background: 'var(--bg-hover)', marginBottom: 8 }} />
-                    <div style={{ width: '40%', height: 10, borderRadius: 4, background: 'var(--bg-hover)', marginBottom: 6 }} />
-                    <div style={{ width: '55%', height: 10, borderRadius: 4, background: 'var(--bg-hover)' }} />
-                  </div>
+            {!recentFilingsData && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div key={i} className="animate-pulse" style={{ height: 44, borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', opacity: 0.8 - i * 0.08 }} />
                 ))}
               </div>
             )}
 
-            {recentFilersData && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
-                {recentFilersData.funds.map(f => (
+            {recentFilingsData && recentFilingsData.filings.length === 0 && (
+              <p style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '20px 0' }}>
+                No recent 13F filings found — EDGAR index may not yet have today's entries.
+              </p>
+            )}
+
+            {recentFilingsData && recentFilingsData.filings.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {recentFilingsData.filings.map(f => (
                   <button
                     key={f.cik}
-                    onClick={() => { setSelectedFund(f); setQuery(f.name); setTab('all'); }}
+                    onClick={() => { setSelectedFund({ cik: f.cik, name: f.name, lastFiled: f.filedDate }); setQuery(f.name); setTab('all'); }}
                     style={{
-                      padding: 12, borderRadius: 12, textAlign: 'left', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      padding: '10px 14px', borderRadius: 10, textAlign: 'left', cursor: 'pointer',
                       background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                      transition: 'border-color 150ms',
+                      transition: 'border-color 120ms', width: '100%',
                     }}
                     onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
                     onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
                   >
-                    <p style={{
-                      margin: '0 0 6px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
+                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {f.name}
-                    </p>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
-                        background: 'rgba(45,107,255,0.12)', color: 'var(--accent-blue-light)',
-                        border: '1px solid rgba(45,107,255,0.25)',
-                        fontFamily: "'Inter', sans-serif", letterSpacing: '0.03em',
-                      }}>
-                        {f.category}
-                      </span>
-                      {f.lastFiled && (
-                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0 }}>
-                          Last filed: {f.lastFiled}
-                        </span>
-                      )}
-                    </div>
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0 }}>
+                      {f.filedDate}
+                    </span>
+                    <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0, opacity: 0.6 }}>
+                      CIK {f.cik}
+                    </span>
                   </button>
                 ))}
+                <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                  {recentFilingsData.filings.length} filers · last 60 days · holdings load on demand
+                </p>
               </div>
             )}
           </div>

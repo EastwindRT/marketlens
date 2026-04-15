@@ -1199,6 +1199,62 @@ app.get('/api/13f/recent-filers', async (req, res) => {
   }
 });
 
+// ── Recent 13F-HR filings via EDGAR daily index (cloud-safe) ─────────────────
+// Scans last 60 days of daily-index .idx files for 13F-HR entries.
+// Deduplicates by CIK so each fund appears once (most recent filing).
+let recent13FCache = null;
+let recent13FFetchTime = 0;
+const RECENT_13F_TTL = 24 * 60 * 60 * 1000; // 24h
+
+async function fetchRecent13FFilings(daysBack = 60) {
+  const entries = [];
+  const seenCik = new Set();
+
+  for (let i = 0; i < daysBack; i++) {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() - i);
+    const { y, ymd, qtr } = formatIndexDate(date);
+    const url = `https://www.sec.gov/Archives/edgar/daily-index/${y}/QTR${qtr}/company.${ymd}.idx`;
+
+    try {
+      const idx = await httpsGet(url, { 'User-Agent': SEC_UA, Accept: 'text/plain' });
+      const lines = idx.split(/\r?\n/);
+      for (const line of lines) {
+        if (line.length < 100) continue;
+        const m = line.match(/^(.{62})(.*?)\s+(\d{6,10})\s+(\d{8})\s+(edgar\/\S+)/);
+        if (!m) continue;
+        const companyName = m[1].trim();
+        const formType = m[2].trim();
+        const cik = m[3];
+        const dateRaw = m[4];
+        if (formType !== '13F-HR' && formType !== '13F-HR/A') continue;
+        if (seenCik.has(cik)) continue; // keep only most recent per fund
+        seenCik.add(cik);
+        const filedDate = `${dateRaw.slice(0, 4)}-${dateRaw.slice(4, 6)}-${dateRaw.slice(6, 8)}`;
+        entries.push({ name: companyName, cik, filedDate });
+      }
+    } catch {
+      // Non-trading days simply won't have an index file.
+    }
+  }
+
+  return entries;
+}
+
+app.get('/api/13f/recent-filings', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (!recent13FCache || now - recent13FFetchTime > RECENT_13F_TTL) {
+      recent13FCache = await fetchRecent13FFilings(60);
+      recent13FFetchTime = now;
+    }
+    res.json({ filings: recent13FCache });
+  } catch (err) {
+    console.error('[13f/recent-filings]', err.message);
+    res.status(502).json({ error: err.message, filings: [] });
+  }
+});
+
 app.get('/api/13f/search', async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q || q.length < 2) return res.json({ funds: [] });
