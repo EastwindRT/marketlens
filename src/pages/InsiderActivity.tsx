@@ -9,17 +9,21 @@ import { formatLargeNumber, formatPrice } from '../utils/formatters';
 type SortMode = 'value' | 'date';
 type FilterMode = 'all' | 'buy' | 'sell';
 type PeriodMode = '7d' | '14d' | '30d';
+type MarketTab = 'us' | 'ca-insiders' | 'ca-filings';
 
 export default function InsiderActivityPage() {
   const navigate = useNavigate();
+  const [marketTab, setMarketTab] = useState<MarketTab>('us');
   const [sortMode, setSortMode] = useState<SortMode>('value');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [periodMode, setPeriodMode] = useState<PeriodMode>('7d');
   const watchlistSymbols = useWatchlistStore((state) => state.items.map((item) => item.symbol));
 
   const days = periodMode === '7d' ? 7 : periodMode === '14d' ? 14 : 30;
+  const caMode = marketTab === 'ca-filings' ? 'filings' : 'insiders';
 
-  const { data, isLoading, error } = useQuery({
+  // US feed — EDGAR Form 4
+  const { data: usData, isLoading: usLoading, error: usError } = useQuery({
     queryKey: ['insider-activity-feed', days],
     queryFn: async (): Promise<{ trades: InsiderFeedItem[] }> => {
       const res = await fetch(`/api/insider-activity?days=${days}`);
@@ -28,52 +32,100 @@ export default function InsiderActivityPage() {
     },
     staleTime: 10 * 60 * 1000,
     retry: 1,
+    enabled: marketTab === 'us',
   });
 
+  // CA feed — TMX / SEDI
+  const { data: caData, isLoading: caLoading, error: caError } = useQuery({
+    queryKey: ['ca-insider-activity', days, caMode],
+    queryFn: async (): Promise<{ trades: InsiderFeedItem[] }> => {
+      const res = await fetch(`/api/ca-insider-activity?days=${days}&mode=${caMode}`);
+      if (!res.ok) throw new Error(`CA feed error ${res.status}`);
+      return res.json();
+    },
+    staleTime: 30 * 60 * 1000,
+    retry: 1,
+    enabled: marketTab !== 'us',
+  });
+
+  const rawTrades = marketTab === 'us' ? (usData?.trades ?? []) : (caData?.trades ?? []);
+  const isLoading = marketTab === 'us' ? usLoading : caLoading;
+  const error = marketTab === 'us' ? usError : caError;
+
   const trades = useMemo(() => {
-    const base = (data?.trades ?? []).filter((trade) => {
+    const base = rawTrades.filter((trade) => {
       if (filterMode === 'buy') return trade.type === 'BUY';
       if (filterMode === 'sell') return trade.type === 'SELL';
       return true;
     });
-
     return [...base].sort((a, b) => {
-      if (sortMode === 'date') return b.transactionDate.localeCompare(a.transactionDate);
+      if (sortMode === 'date') return (b.transactionDate || '').localeCompare(a.transactionDate || '');
       return b.totalValue - a.totalValue;
     });
-  }, [data?.trades, filterMode, sortMode]);
+  }, [rawTrades, filterMode, sortMode]);
+
+  const tabLabel = {
+    'us': 'US · SEC Form 4',
+    'ca-insiders': 'CA · SEDI open-market',
+    'ca-filings': 'CA · all SEDI filings',
+  }[marketTab];
 
   return (
     <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 40px' }}>
       <div style={{ maxWidth: 860, margin: '0 auto' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 24 }}>
-          <div>
-            <h1 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>
-              Insider $
-            </h1>
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-              Market-wide insider buys and sells, ranked by dollar activity or freshness.
-            </p>
-          </div>
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <SegmentedControl<PeriodMode>
-              value={periodMode}
-              onChange={setPeriodMode}
-              options={[
-                { id: '7d', label: '7D' },
-                { id: '14d', label: '14D' },
-                { id: '30d', label: '30D' },
-              ]}
-            />
-            <SegmentedControl<SortMode>
-              value={sortMode}
-              onChange={setSortMode}
-              options={[
-                { id: 'value', label: 'Largest $' },
-                { id: 'date', label: 'Newest' },
-              ]}
-            />
+        {/* Header */}
+        <div style={{ marginBottom: 20 }}>
+          <h1 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>
+            Insider $
+          </h1>
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
+            Market-wide insider activity ranked by dollar value or freshness.
+          </p>
+        </div>
+
+        {/* Market tabs */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+          {([
+            { id: 'us',         label: '🇺🇸 US Insiders' },
+            { id: 'ca-insiders', label: '🇨🇦 CA Insiders' },
+            { id: 'ca-filings', label: '🇨🇦 CA Filings' },
+          ] as const).map(t => (
+            <button
+              key={t.id}
+              onClick={() => setMarketTab(t.id)}
+              style={{
+                padding: '7px 16px', borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                background: marketTab === t.id ? 'var(--accent-blue)' : 'var(--bg-elevated)',
+                color: marketTab === t.id ? '#fff' : 'var(--text-secondary)',
+                border: `1px solid ${marketTab === t.id ? 'var(--accent-blue)' : 'var(--border-default)'}`,
+                transition: 'all 120ms',
+              }}
+            >{t.label}</button>
+          ))}
+        </div>
+
+        {/* Controls — shared across all tabs */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+          <SegmentedControl<PeriodMode>
+            value={periodMode}
+            onChange={setPeriodMode}
+            options={[
+              { id: '7d', label: '7D' },
+              { id: '14d', label: '14D' },
+              { id: '30d', label: '30D' },
+            ]}
+          />
+          <SegmentedControl<SortMode>
+            value={sortMode}
+            onChange={setSortMode}
+            options={[
+              { id: 'value', label: 'Largest $' },
+              { id: 'date', label: 'Newest' },
+            ]}
+          />
+          {/* Buy/Sell filter — only meaningful for insiders tabs (not all-filings) */}
+          {marketTab !== 'ca-filings' && (
             <SegmentedControl<FilterMode>
               value={filterMode}
               onChange={setFilterMode}
@@ -83,10 +135,17 @@ export default function InsiderActivityPage() {
                 { id: 'sell', label: 'Sells' },
               ]}
             />
-          </div>
+          )}
         </div>
 
         {isLoading && <FeedSkeleton />}
+
+        {/* CA tabs loading note */}
+        {marketTab !== 'us' && isLoading && (
+          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: -12, marginBottom: 16 }}>
+            Querying ~45 TSX stocks via SEDI — may take 15–30s on first load…
+          </p>
+        )}
 
         {error && (
           <div style={{ padding: 16, borderRadius: 12, background: 'rgba(246,70,93,0.08)', border: '1px solid rgba(246,70,93,0.2)' }}>
@@ -109,9 +168,10 @@ export default function InsiderActivityPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {trades.map((trade) => {
                 const isBuy = trade.type === 'BUY';
+                const isOther = trade.type === 'OTHER';
                 const inWatchlist = watchlistSymbols.includes(trade.symbol);
-                const accentColor = isBuy ? 'var(--color-up)' : 'var(--color-down)';
-                const accentBg = isBuy ? 'rgba(5,177,105,0.1)' : 'rgba(246,70,93,0.1)';
+                const accentColor = isBuy ? 'var(--color-up)' : isOther ? 'var(--text-tertiary)' : 'var(--color-down)';
+                const accentBg = isBuy ? 'rgba(5,177,105,0.1)' : isOther ? 'var(--bg-hover)' : 'rgba(246,70,93,0.1)';
 
                 return (
                   <button
@@ -132,32 +192,18 @@ export default function InsiderActivityPage() {
                   >
                     <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start', flexShrink: 0 }}>
-                        <span
-                          style={{
-                            fontSize: 10,
-                            fontWeight: 700,
-                            padding: '3px 8px',
-                            borderRadius: 6,
-                            background: accentBg,
-                            color: accentColor,
-                            border: `1px solid ${accentColor}`,
-                            fontFamily: "'Roboto Mono', monospace",
-                          }}
-                        >
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6,
+                          background: accentBg, color: accentColor, border: `1px solid ${accentColor}`,
+                          fontFamily: "'Roboto Mono', monospace",
+                        }}>
                           {trade.type}
                         </span>
-                        <span
-                          style={{
-                            fontSize: 10,
-                            fontWeight: 700,
-                            padding: '3px 8px',
-                            borderRadius: 6,
-                            background: 'var(--bg-hover)',
-                            color: 'var(--text-secondary)',
-                            border: '1px solid var(--border-default)',
-                            fontFamily: "'Roboto Mono', monospace",
-                          }}
-                        >
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6,
+                          background: 'var(--bg-hover)', color: 'var(--text-secondary)',
+                          border: '1px solid var(--border-default)', fontFamily: "'Roboto Mono', monospace",
+                        }}>
                           {trade.exchange}
                         </span>
                       </div>
@@ -189,13 +235,9 @@ export default function InsiderActivityPage() {
                       </div>
 
                       {trade.filingUrl ? (
-                        <a
-                          href={trade.filingUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(event) => event.stopPropagation()}
-                          style={{ color: 'var(--text-tertiary)', flexShrink: 0, alignSelf: 'center' }}
-                        >
+                        <a href={trade.filingUrl} target="_blank" rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ color: 'var(--text-tertiary)', flexShrink: 0, alignSelf: 'center' }}>
                           <ExternalLink size={14} />
                         </a>
                       ) : null}
@@ -206,7 +248,7 @@ export default function InsiderActivityPage() {
             </div>
 
             <p style={{ marginTop: 14, fontSize: 11, color: 'var(--text-tertiary)' }}>
-              Current feed uses the SEC Form 4 current filings stream and normalizes open-market insider activity into a sortable tape.
+              {tabLabel} · {trades.length} transactions · {days}D window
             </p>
           </>
         )}

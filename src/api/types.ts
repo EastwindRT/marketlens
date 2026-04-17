@@ -128,7 +128,7 @@ export interface InsiderFeedItem {
   companyName: string;
   insiderName: string;
   title?: string;
-  type: 'BUY' | 'SELL';
+  type: 'BUY' | 'SELL' | 'OTHER';
   transactionDate: string;
   filingDate?: string;
   shares: number;

@@ -79,6 +79,37 @@ function httpsGet(url, headers = {}) {
   });
 }
 
+function httpsPost(url, body, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const bodyStr = JSON.stringify(body);
+    const opts = {
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Content-Length': Buffer.byteLength(bodyStr),
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        ...headers,
+      },
+    };
+    const req = https.request(opts, (res) => {
+      let data = '';
+      res.on('data', c => (data += c));
+      res.on('end', () => {
+        if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode}`));
+        resolve(data);
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(20000, () => { req.destroy(); reject(new Error('Timeout')); });
+    req.write(bodyStr);
+    req.end();
+  });
+}
+
 // In-memory cache
 let congressCache = null;
 let congressLastFetch = 0;
@@ -180,6 +211,156 @@ app.get('/api/latest-insiders', async (req, res) => {
     console.error('[latest-insiders]', err.message);
     res.status(502).json({ error: err.message, filings: [] });
   }
+});
+
+// ── Canadian insider activity via TMX / SEDI ──────────────────────────────────
+// Queries TMX GraphQL server-side for a curated list of top TSX stocks.
+// Two modes: insiders (open-market buys/sells only) and filings (all SEDI types).
+
+const CA_TSX_STOCKS = [
+  // Banks
+  { sym: 'RY', name: 'Royal Bank of Canada' },
+  { sym: 'TD', name: 'TD Bank' },
+  { sym: 'BNS', name: 'Bank of Nova Scotia' },
+  { sym: 'BMO', name: 'Bank of Montreal' },
+  { sym: 'CM', name: 'CIBC' },
+  { sym: 'NA', name: 'National Bank' },
+  // Insurance / Financial
+  { sym: 'SLF', name: 'Sun Life Financial' },
+  { sym: 'MFC', name: 'Manulife Financial' },
+  { sym: 'IFC', name: 'Intact Financial' },
+  { sym: 'POW', name: 'Power Corporation' },
+  { sym: 'GWO', name: 'Great-West Lifeco' },
+  // Energy
+  { sym: 'CNQ', name: 'Canadian Natural Resources' },
+  { sym: 'SU', name: 'Suncor Energy' },
+  { sym: 'CVE', name: 'Cenovus Energy' },
+  { sym: 'TRP', name: 'TC Energy' },
+  { sym: 'ENB', name: 'Enbridge' },
+  { sym: 'PPL', name: 'Pembina Pipeline' },
+  { sym: 'IMO', name: 'Imperial Oil' },
+  { sym: 'ARC', name: 'ARC Resources' },
+  // Mining
+  { sym: 'ABX', name: 'Barrick Gold' },
+  { sym: 'WPM', name: 'Wheaton Precious Metals' },
+  { sym: 'FM', name: 'First Quantum Minerals' },
+  { sym: 'LUN', name: 'Lundin Mining' },
+  { sym: 'AGI', name: 'Alamos Gold' },
+  // Technology
+  { sym: 'SHOP', name: 'Shopify' },
+  { sym: 'CSU', name: 'Constellation Software' },
+  { sym: 'OTEX', name: 'Open Text' },
+  { sym: 'DSG', name: 'Descartes Systems' },
+  { sym: 'KXS', name: 'Kinaxis' },
+  // Utilities
+  { sym: 'FTS', name: 'Fortis' },
+  { sym: 'AQN', name: 'Algonquin Power' },
+  { sym: 'EMA', name: 'Emera' },
+  // Consumer / Retail
+  { sym: 'L', name: 'Loblaw' },
+  { sym: 'MRU', name: 'Metro Inc' },
+  { sym: 'DOL', name: 'Dollarama' },
+  { sym: 'EMP', name: 'Empire Company' },
+  // Transportation / Industrial
+  { sym: 'CP', name: 'Canadian Pacific' },
+  { sym: 'CNR', name: 'Canadian National Railway' },
+  { sym: 'TFII', name: 'TFI International' },
+  { sym: 'CAE', name: 'CAE Inc' },
+  { sym: 'WSP', name: 'WSP Global' },
+  // Telecom
+  { sym: 'T', name: 'TELUS' },
+  { sym: 'BCE', name: 'BCE Inc' },
+  // Other
+  { sym: 'GFL', name: 'GFL Environmental' },
+  { sym: 'DOO', name: 'BRP Inc' },
+  { sym: 'BRP', name: 'BRP Inc' },
+];
+
+const TMX_GQL_URL = 'https://app-money.tmx.com/graphql';
+const TMX_HEADERS = {
+  'Origin': 'https://money.tmx.com',
+  'Referer': 'https://money.tmx.com/',
+};
+
+const caInsiderCaches = { 7: null, 14: null, 30: null };
+const caInsiderLastFetch = { 7: 0, 14: 0, 30: 0 };
+const CA_INSIDER_TTL = 30 * 60 * 1000;
+
+app.get('/api/ca-insider-activity', async (req, res) => {
+  const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+  const mode = req.query.mode === 'filings' ? 'filings' : 'insiders'; // insiders=open-market only, filings=all types
+  const cacheKey = `${days}-${mode}`;
+
+  // Simple per-mode cache (reuse insiders cache, key by days+mode)
+  if (!caInsiderCaches[days] || Date.now() - caInsiderLastFetch[days] > CA_INSIDER_TTL || caInsiderCaches[days]._mode !== mode) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+    const allTrades = [];
+    const batchSize = 5;
+
+    for (let i = 0; i < CA_TSX_STOCKS.length; i += batchSize) {
+      const batch = CA_TSX_STOCKS.slice(i, i + batchSize);
+      const results = await Promise.allSettled(
+        batch.map(async ({ sym, name }) => {
+          try {
+            const body = { query: `{ getInsiderTransactions(symbol: "${sym}") { date datefrom filingdate filer relationship transactionTypeCode amount pricefrom marketvalue pricefromcurrency securitydesignation transactionid type form } }` };
+            const raw = await httpsPost(TMX_GQL_URL, body, TMX_HEADERS);
+            const json = JSON.parse(raw);
+            const txns = json.data?.getInsiderTransactions ?? [];
+            return { sym, name, txns };
+          } catch {
+            return { sym, name, txns: [] };
+          }
+        })
+      );
+
+      for (const r of results) {
+        if (r.status !== 'fulfilled') continue;
+        const { sym, name, txns } = r.value;
+        for (const t of txns) {
+          const txDate = (t.filingdate || t.datefrom || t.date || '').slice(0, 10);
+          if (!txDate || txDate < cutoffStr) continue;
+
+          const isOpenMarket = t.transactionTypeCode === 1 || t.transactionTypeCode === 2;
+          if (mode === 'insiders' && !isOpenMarket) continue;
+
+          const totalValue = t.marketvalue > 0 ? t.marketvalue : (t.amount * t.pricefrom);
+          if (t.amount <= 0 || t.pricefrom <= 0 || totalValue <= 0) continue;
+
+          const parts = (t.filer || '').split(',').map(s => s.trim());
+          const insiderName = parts.length === 2 ? `${parts[1]} ${parts[0]}` : t.filer;
+          const title = (t.relationship || '').replace(/\s+of\s+(the\s+)?Issuer$/i, '').trim();
+          const txType = t.transactionTypeCode === 1 ? 'BUY' : t.transactionTypeCode === 2 ? 'SELL' : 'OTHER';
+
+          allTrades.push({
+            id: `ca-${t.transactionid || `${sym}-${txDate}-${t.amount}`}`,
+            symbol: `${sym}.TO`,
+            companyName: name,
+            insiderName,
+            title,
+            type: txType,
+            transactionDate: (t.datefrom || t.date || '').slice(0, 10),
+            filingDate: (t.filingdate || '').slice(0, 10),
+            shares: Math.abs(t.amount),
+            pricePerShare: t.pricefrom,
+            totalValue,
+            market: 'CA',
+            exchange: 'TSX',
+            source: 'TMX/SEDI',
+            filingUrl: null,
+          });
+        }
+      }
+    }
+
+    allTrades.sort((a, b) => b.totalValue - a.totalValue);
+    caInsiderCaches[days] = { trades: allTrades, _mode: mode };
+    caInsiderLastFetch[days] = Date.now();
+  }
+
+  res.json({ trades: caInsiderCaches[days].trades });
 });
 
 const insiderActivityCaches = { 7: null, 14: null, 30: null };
