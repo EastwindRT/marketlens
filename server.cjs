@@ -305,7 +305,7 @@ app.get('/api/ca-insider-activity', async (req, res) => {
       const results = await Promise.allSettled(
         batch.map(async ({ sym, name }) => {
           try {
-            const body = { query: `{ getInsiderTransactions(symbol: "${sym}") { date datefrom filingdate filer relationship transactionTypeCode amount pricefrom marketvalue pricefromcurrency securitydesignation transactionid type form } }` };
+            const body = { query: `{ getInsiderTransactions(symbol: "${sym}") }` };
             const raw = await httpsPost(TMX_GQL_URL, body, TMX_HEADERS);
             const json = JSON.parse(raw);
             const txns = json.data?.getInsiderTransactions ?? [];
@@ -327,7 +327,7 @@ app.get('/api/ca-insider-activity', async (req, res) => {
           if (mode === 'insiders' && !isOpenMarket) continue;
 
           const totalValue = t.marketvalue > 0 ? t.marketvalue : (t.amount * t.pricefrom);
-          if (t.amount <= 0 || t.pricefrom <= 0 || totalValue <= 0) continue;
+          if (t.amount === 0 || t.pricefrom <= 0 || totalValue <= 0) continue;
 
           const parts = (t.filer || '').split(',').map(s => s.trim());
           const insiderName = parts.length === 2 ? `${parts[1]} ${parts[0]}` : t.filer;
