@@ -54,18 +54,15 @@ export function useStockCandles(symbol: string, range: TimeRange) {
   return useQuery({
     queryKey: ['candles', symbol, range],
     queryFn: async (): Promise<OHLCVBar[]> => {
+      // Demo mode (no API key) — return deterministic mock data
       if (!hasApiKey()) return generateMockCandles(symbol, range);
 
       // ── Canadian stocks → Yahoo Finance ──────────────────────────────────
       if (isTSXTicker(symbol)) {
-        try {
-          const { range: yahooRange, interval } = getYahooParams(range);
-          const { bars } = await fetchYahooCandles(symbol, yahooRange as any, interval as any);
-          if (bars.length > 0) return bars;
-        } catch {
-          // fall through to mock
-        }
-        return generateMockCandles(symbol, range);
+        const { range: yahooRange, interval } = getYahooParams(range);
+        const { bars } = await fetchYahooCandles(symbol, yahooRange as any, interval as any);
+        // Empty array means no data for this range — caller shows empty state
+        return bars;
       }
 
       // ── US stocks → Finnhub ───────────────────────────────────────────────
@@ -74,22 +71,19 @@ export function useStockCandles(symbol: string, range: TimeRange) {
       const resolution = getFinnhubResolution(range);
       const isIntraday = resolution === '5' || resolution === '30';
 
-      try {
-        const data = await finnhub.getCandles(symbol, from, to, resolution);
-        if (data.s === 'no_data' || !data.t || data.t.length === 0) {
-          return generateMockCandles(symbol, range);
-        }
-        return data.t.map((time: number, i: number) => ({
-          time: isIntraday ? time : format(new Date(time * 1000), 'yyyy-MM-dd'),
-          open:   data.o[i],
-          high:   data.h[i],
-          low:    data.l[i],
-          close:  data.c[i],
-          volume: data.v[i],
-        }));
-      } catch {
-        return generateMockCandles(symbol, range);
-      }
+      const data = await finnhub.getCandles(symbol, from, to, resolution);
+
+      // Finnhub explicitly reports no data for this symbol/range — return empty
+      if (data.s === 'no_data' || !data.t || data.t.length === 0) return [];
+
+      return data.t.map((time: number, i: number) => ({
+        time: isIntraday ? time : format(new Date(time * 1000), 'yyyy-MM-dd'),
+        open:   data.o[i],
+        high:   data.h[i],
+        low:    data.l[i],
+        close:  data.c[i],
+        volume: data.v[i],
+      }));
     },
     staleTime: 5 * 60 * 1000,
   });

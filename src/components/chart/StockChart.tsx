@@ -341,6 +341,20 @@ export function StockChart({
 
   if (loading) return <ChartSkeleton />;
 
+  if (!loading && data.length === 0) return (
+    <div style={{
+      height,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'var(--bg-primary)',
+      color: 'var(--text-tertiary)',
+      fontSize: 13,
+    }}>
+      No chart data available for this range
+    </div>
+  );
+
   return (
     <div
       ref={containerRef}
