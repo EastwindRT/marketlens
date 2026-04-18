@@ -273,7 +273,74 @@ const CA_TSX_STOCKS = [
   // Other
   { sym: 'GFL', name: 'GFL Environmental' },
   { sym: 'DOO', name: 'BRP Inc' },
-  { sym: 'BRP', name: 'BRP Inc' },
+  // Mid-cap / sector diversity — more insider activity than large-caps
+  { sym: 'NTR', name: 'Nutrien' },
+  { sym: 'ATD', name: 'Alimentation Couche-Tard' },
+  { sym: 'CCO', name: 'Cameco' },
+  { sym: 'BAM', name: 'Brookfield Asset Management' },
+  { sym: 'BIP', name: 'Brookfield Infrastructure' },
+  { sym: 'BEP', name: 'Brookfield Renewable' },
+  { sym: 'AEM', name: 'Agnico Eagle Mines' },
+  { sym: 'K', name: 'Kinross Gold' },
+  { sym: 'IMG', name: 'IAMGOLD' },
+  { sym: 'PVG', name: 'Pretium Resources' },
+  { sym: 'ERO', name: 'Ero Copper' },
+  { sym: 'OR', name: 'Osisko Royalties' },
+  { sym: 'FR', name: 'First Majestic Silver' },
+  { sym: 'MAG', name: 'MAG Silver' },
+  { sym: 'WRN', name: 'Western Copper and Gold' },
+  { sym: 'HBM', name: 'Hudbay Minerals' },
+  { sym: 'CS', name: 'Capstone Copper' },
+  { sym: 'TECK.B', name: 'Teck Resources' },
+  { sym: 'IVN', name: 'Ivanhoe Mines' },
+  { sym: 'SVM', name: 'Silvercorp Metals' },
+  { sym: 'PEY', name: 'Peyto Exploration' },
+  { sym: 'BTE', name: 'Baytex Energy' },
+  { sym: 'MEG', name: 'MEG Energy' },
+  { sym: 'WCP', name: 'Whitecap Resources' },
+  { sym: 'TVE', name: 'Tamarack Valley Energy' },
+  { sym: 'VET', name: 'Vermilion Energy' },
+  { sym: 'CPG', name: 'Crescent Point Energy' },
+  { sym: 'TOU', name: 'Tourmaline Oil' },
+  { sym: 'AAV', name: 'Advantage Energy' },
+  { sym: 'SES', name: 'Secure Energy Services' },
+  { sym: 'XI', name: 'Maxim Power' },
+  { sym: 'PBH', name: 'Premium Brands Holdings' },
+  { sym: 'QBR.B', name: 'Quebecor' },
+  { sym: 'CCA', name: 'Cogeco Communications' },
+  { sym: 'CJR.B', name: 'Corus Entertainment' },
+  { sym: 'FSZ', name: 'Fiera Capital' },
+  { sym: 'EFN', name: 'Element Fleet Management' },
+  { sym: 'ECN', name: 'ECN Capital' },
+  { sym: 'GS', name: 'Goeasy' },
+  { sym: 'EQB', name: 'EQB Inc' },
+  { sym: 'LB', name: 'Laurentian Bank' },
+  { sym: 'CWB', name: 'Canadian Western Bank' },
+  { sym: 'HCG', name: 'Home Capital Group' },
+  { sym: 'ACM', name: 'Acumine Capital' },
+  { sym: 'CIGI', name: 'Colliers International' },
+  { sym: 'BPF.UN', name: 'Boston Pizza Royalties' },
+  { sym: 'SRU.UN', name: 'SmartCentres REIT' },
+  { sym: 'REI.UN', name: 'RioCan REIT' },
+  { sym: 'AP.UN', name: 'Allied Properties REIT' },
+  { sym: 'CRT.UN', name: 'CT REIT' },
+  { sym: 'PLZ.UN', name: 'Plaza Retail REIT' },
+  { sym: 'MRC', name: 'Morguard' },
+  { sym: 'NWC', name: 'North West Company' },
+  { sym: 'STN', name: 'Stantec' },
+  { sym: 'BYD', name: 'Boyd Group Services' },
+  { sym: 'CLS', name: 'Celestica' },
+  { sym: 'MG', name: 'Magna International' },
+  { sym: 'MDA', name: 'MDA Space' },
+  { sym: 'LSPD', name: 'Lightspeed Commerce' },
+  { sym: 'DCBO', name: 'Docebo' },
+  { sym: 'DND', name: 'Dye & Durham' },
+  { sym: 'TCS', name: 'Topicus.com' },
+  { sym: 'NVEI', name: 'Nuvei' },
+  { sym: 'CTRE', name: 'CareTrust REIT' },
+  { sym: 'WELL', name: 'WELL Health Technologies' },
+  { sym: 'GUD', name: 'Knight Therapeutics' },
+  { sym: 'DRX', name: 'ADF Group' },
 ];
 
 const TMX_GQL_URL = 'https://app-money.tmx.com/graphql';
@@ -323,16 +390,21 @@ app.get('/api/ca-insider-activity', async (req, res) => {
           const txDate = (t.filingdate || t.datefrom || t.date || '').slice(0, 10);
           if (!txDate || txDate < cutoffStr) continue;
 
-          const isOpenMarket = t.transactionTypeCode === 1 || t.transactionTypeCode === 2;
+          // SEDI code 1 = open-market transaction (buy or sell based on amount sign)
+          // code 2 = rare private placement; others = grants, options, buybacks, etc.
+          const isOpenMarket = t.transactionTypeCode === 1;
           if (mode === 'insiders' && !isOpenMarket) continue;
 
-          const totalValue = t.marketvalue > 0 ? t.marketvalue : (t.amount * t.pricefrom);
-          if (t.amount === 0 || t.pricefrom <= 0 || totalValue <= 0) continue;
+          const totalValue = t.marketvalue > 0 ? t.marketvalue : (Math.abs(t.amount) * t.pricefrom);
+          if (!t.amount || t.pricefrom <= 0 || totalValue <= 0) continue;
 
           const parts = (t.filer || '').split(',').map(s => s.trim());
           const insiderName = parts.length === 2 ? `${parts[1]} ${parts[0]}` : t.filer;
           const title = (t.relationship || '').replace(/\s+of\s+(the\s+)?Issuer$/i, '').trim();
-          const txType = t.transactionTypeCode === 1 ? 'BUY' : t.transactionTypeCode === 2 ? 'SELL' : 'OTHER';
+          // Sign of amount determines direction: positive = buy, negative = sell
+          const txType = isOpenMarket
+            ? (t.amount > 0 ? 'BUY' : 'SELL')
+            : 'OTHER';
 
           allTrades.push({
             id: `ca-${t.transactionid || `${sym}-${txDate}-${t.amount}`}`,

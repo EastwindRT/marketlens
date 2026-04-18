@@ -143,7 +143,7 @@ export default function InsiderActivityPage() {
         {/* CA tabs loading note */}
         {marketTab !== 'us' && isLoading && (
           <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: -12, marginBottom: 16 }}>
-            Querying ~45 TSX stocks via SEDI — may take 15–30s on first load…
+            Querying ~110 TSX stocks via SEDI — may take 20–40s on first load…
           </p>
         )}
 
