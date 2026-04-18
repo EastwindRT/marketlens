@@ -5,6 +5,7 @@ import { useStockCandles, useStockQuote, useStockProfile } from '../hooks/useSto
 import { useInsiderData } from '../hooks/useInsiderData';
 import { useRealTimeQuote } from '../hooks/useRealTimeQuote';
 import { useStockNews } from '../hooks/useStockNews';
+import { useStockAIContext } from '../hooks/useStockAIContext';
 import { useChartStore } from '../store/chartStore';
 import { useWatchlistStore } from '../store/watchlistStore';
 import { useLeagueStore } from '../store/leagueStore';
@@ -39,6 +40,8 @@ export default function StockDetail() {
   const { data: profile, isLoading: profileLoading } = useStockProfile(symbol);
   const { data: insiders, isLoading: insidersLoading } = useInsiderData(symbol);
   const { data: news } = useStockNews(symbol);
+  // Fundamentals + analyst context for Ask AI chat (US stocks only)
+  const { data: aiFundamentals } = useStockAIContext(symbol);
   const liveQuote = useRealTimeQuote(symbol);
 
   const inWatchlist = hasItem(symbol);
@@ -260,6 +263,7 @@ export default function StockDetail() {
           symbol={symbol}
           context={{
             price: quote?.c ? `${currency === 'CAD' ? 'CA$' : 'US$'}${quote.c}` : undefined,
+            priceRaw: quote?.c,
             change: quote?.dp != null ? `${quote.dp >= 0 ? '+' : ''}${quote.dp.toFixed(2)}%` : undefined,
             marketCap,
             volume: volumeDisplay,
@@ -267,6 +271,7 @@ export default function StockDetail() {
             insiders: insiders || [],
             candles: (candles || []).slice(-90),
             news: (news || []).slice(0, 6),
+            fundamentals: aiFundamentals ? { ...aiFundamentals, currentPrice: quote?.c } : undefined,
           }}
         />
       </div>
@@ -358,10 +363,11 @@ function renderMarkdown(text: string): string {
 function StockAIChat({ symbol, context }: {
   symbol: string;
   context: {
-    price?: string; change?: string; marketCap?: string;
+    price?: string; priceRaw?: number; change?: string; marketCap?: string;
     volume?: string; exchange?: string; insiders?: InsiderTransaction[];
     candles?: OHLCVBar[];
     news?: NewsItem[];
+    fundamentals?: Record<string, unknown>;
   };
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);

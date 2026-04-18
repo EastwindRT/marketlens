@@ -1098,57 +1098,224 @@ function summarizeTechnicals(candles) {
     }))
     .filter((c) => Number.isFinite(c.close) && Number.isFinite(c.high) && Number.isFinite(c.low));
 
-  if (clean.length < 25) {
-    return 'Technical context unavailable: not enough candle history.';
-  }
+  if (clean.length < 25) return 'Technical context unavailable: not enough candle history.';
 
-  const closes = clean.map((c) => c.close);
-  const recent20 = lastN(clean, 20);
-  const recent10 = lastN(clean, 10);
-  const recent60 = lastN(clean, 60);
   const last = clean[clean.length - 1];
   const prev = clean[clean.length - 2];
+  const recent5  = lastN(clean, 5);
+  const recent10 = lastN(clean, 10);
+  const recent20 = lastN(clean, 20);
+  const recent30 = lastN(clean, 30);
+  const recent50 = lastN(clean, 50);
+  const recent60 = lastN(clean, 60);
+  const recent90 = lastN(clean, 90);
 
+  // Moving averages
   const sma20 = average(recent20.map((c) => c.close));
-  const bandStd = stddev(recent20.map((c) => c.close), sma20);
+  const sma50 = recent50.length >= 50 ? average(recent50.map((c) => c.close)) : null;
+
+  // Bollinger (20,2)
+  const bandStd   = stddev(recent20.map((c) => c.close), sma20);
   const upperBand = sma20 + (2 * bandStd);
   const lowerBand = sma20 - (2 * bandStd);
-  const support20 = Math.min(...recent20.map((c) => c.low));
-  const resistance20 = Math.max(...recent20.map((c) => c.high));
-  const support60 = recent60.length ? Math.min(...recent60.map((c) => c.low)) : support20;
-  const resistance60 = recent60.length ? Math.max(...recent60.map((c) => c.high)) : resistance20;
-  const trend10 = recent10.length >= 2 ? ((recent10[recent10.length - 1].close / recent10[0].close) - 1) * 100 : 0;
   const bandWidthPct = sma20 ? ((upperBand - lowerBand) / sma20) * 100 : 0;
 
+  // Support / resistance at multiple horizons
+  const support20    = Math.min(...recent20.map((c) => c.low));
+  const resistance20 = Math.max(...recent20.map((c) => c.high));
+  const support60    = recent60.length ? Math.min(...recent60.map((c) => c.low)) : support20;
+  const resistance60 = recent60.length ? Math.max(...recent60.map((c) => c.high)) : resistance20;
+  const support90    = recent90.length ? Math.min(...recent90.map((c) => c.low)) : support60;
+  const resistance90 = recent90.length ? Math.max(...recent90.map((c) => c.high)) : resistance60;
+
+  // Returns at multiple timeframes
+  const ret = (arr) => arr.length >= 2 ? ((arr[arr.length - 1].close / arr[0].close) - 1) * 100 : 0;
+  const trend10 = ret(recent10);
+  const trend30 = ret(recent30);
+  const trend60 = ret(recent60);
+  const trend90 = ret(recent90);
+
+  // Volume context
+  const vol5Avg  = average(recent5.map(c => c.volume).filter(Number.isFinite));
+  const vol30Avg = average(recent30.map(c => c.volume).filter(Number.isFinite));
+  const volRatio = vol30Avg > 0 ? (vol5Avg / vol30Avg) : 1;
+
+  // Pattern detection
   let pattern = 'Range-bound';
   if (last.close > upperBand) pattern = 'Breakout above upper Bollinger band';
   else if (last.close < lowerBand) pattern = 'Breakdown below lower Bollinger band';
+  else if (trend30 > 10 && last.close > sma20 && (sma50 && last.close > sma50)) pattern = 'Sustained uptrend — price above both 20/50 MA';
+  else if (trend30 < -10 && last.close < sma20 && (sma50 && last.close < sma50)) pattern = 'Sustained downtrend — price below both 20/50 MA';
   else if (trend10 > 5 && last.close > sma20) pattern = 'Short-term uptrend with higher closes';
   else if (trend10 < -5 && last.close < sma20) pattern = 'Short-term downtrend with lower closes';
-  else if (bandWidthPct < 8) pattern = 'Volatility squeeze';
+  else if (bandWidthPct < 8) pattern = 'Volatility squeeze — coiling for move';
   else if (prev.low <= lowerBand && last.close > prev.close) pattern = 'Rebound from lower band support';
 
-  const thresholdRead =
-    last.close >= resistance20 * 0.98 ? 'Testing recent breakout threshold'
-    : last.close <= support20 * 1.02 ? 'Testing near-term floor'
-    : 'Trading inside the recent range';
+  const regime =
+    last.close >= resistance20 * 0.98 ? 'Testing 20-bar breakout threshold'
+    : last.close <= support20 * 1.02  ? 'Testing 20-bar floor'
+    : last.close >= resistance90 * 0.97 ? 'Near 90-bar highs'
+    : last.close <= support90 * 1.03  ? 'Near 90-bar lows'
+    : 'Mid-range within recent swing';
 
-  return [
-    `Latest close: $${last.close.toFixed(2)} on ${String(last.time).slice(0, 10)}`,
-    `SMA20: $${sma20.toFixed(2)} | Bollinger: lower $${lowerBand.toFixed(2)}, upper $${upperBand.toFixed(2)} | bandwidth ${bandWidthPct.toFixed(1)}%`,
-    `Near-term floor / support: $${support20.toFixed(2)} | Near-term threshold / resistance: $${resistance20.toFixed(2)}`,
-    `Intermediate floor / support: $${support60.toFixed(2)} | Intermediate threshold / resistance: $${resistance60.toFixed(2)}`,
-    `10-bar trend: ${trend10 >= 0 ? '+' : ''}${trend10.toFixed(1)}%`,
-    `Detected pattern: ${pattern}`,
-    `Regime read: ${thresholdRead}`,
-  ].join('\n');
+  // Price vs key MAs
+  const vsSma20 = sma20 ? ((last.close / sma20) - 1) * 100 : 0;
+  const vsSma50 = sma50 ? ((last.close / sma50) - 1) * 100 : null;
+
+  const lines = [
+    `Latest close: $${last.close.toFixed(2)} on ${String(last.time).slice(0, 10)} (1-bar change: ${prev ? (((last.close/prev.close) - 1) * 100).toFixed(2) : 'n/a'}%)`,
+    `Moving averages — SMA20: $${sma20.toFixed(2)} (price ${vsSma20 >= 0 ? '+' : ''}${vsSma20.toFixed(1)}% vs MA)${sma50 ? ` · SMA50: $${sma50.toFixed(2)} (price ${vsSma50 >= 0 ? '+' : ''}${vsSma50.toFixed(1)}% vs MA)` : ''}`,
+    `Bollinger (20,2): lower $${lowerBand.toFixed(2)} · upper $${upperBand.toFixed(2)} · bandwidth ${bandWidthPct.toFixed(1)}%${bandWidthPct < 8 ? ' (tight — squeeze)' : bandWidthPct > 20 ? ' (wide — elevated vol)' : ''}`,
+    `Support / Resistance — 20bar: $${support20.toFixed(2)} / $${resistance20.toFixed(2)} · 60bar: $${support60.toFixed(2)} / $${resistance60.toFixed(2)} · 90bar: $${support90.toFixed(2)} / $${resistance90.toFixed(2)}`,
+    `Returns — 10bar: ${trend10 >= 0 ? '+' : ''}${trend10.toFixed(1)}% · 30bar: ${trend30 >= 0 ? '+' : ''}${trend30.toFixed(1)}% · 60bar: ${trend60 >= 0 ? '+' : ''}${trend60.toFixed(1)}% · 90bar: ${trend90 >= 0 ? '+' : ''}${trend90.toFixed(1)}%`,
+    `Volume — 5-day avg vs 30-day avg: ${(volRatio * 100).toFixed(0)}% ${volRatio > 1.3 ? '(heavy — conviction)' : volRatio < 0.7 ? '(light — drying up)' : '(normal)'}`,
+    `Pattern: ${pattern}`,
+    `Regime: ${regime}`,
+  ];
+
+  return lines.join('\n');
+}
+
+// ── Fundamentals summary — fed from Finnhub client-side fetches ──────────────
+function summarizeFundamentals(fund) {
+  if (!fund || typeof fund !== 'object') return '';
+  const lines = [];
+
+  // Valuation / growth / margins
+  const vals = [];
+  if (Number.isFinite(fund.peRatio))     vals.push(`P/E ${fund.peRatio.toFixed(1)}`);
+  if (Number.isFinite(fund.pegRatio))    vals.push(`PEG ${fund.pegRatio.toFixed(2)}`);
+  if (Number.isFinite(fund.psRatio))     vals.push(`P/S ${fund.psRatio.toFixed(1)}`);
+  if (Number.isFinite(fund.epsTTM))      vals.push(`EPS TTM $${fund.epsTTM.toFixed(2)}`);
+  if (vals.length) lines.push(`Valuation: ${vals.join(' · ')}`);
+
+  const growth = [];
+  if (Number.isFinite(fund.revenueGrowthYoy)) growth.push(`Revenue YoY ${fund.revenueGrowthYoy >= 0 ? '+' : ''}${fund.revenueGrowthYoy.toFixed(1)}%`);
+  if (Number.isFinite(fund.epsGrowthYoy))     growth.push(`EPS YoY ${fund.epsGrowthYoy >= 0 ? '+' : ''}${fund.epsGrowthYoy.toFixed(1)}%`);
+  if (growth.length) lines.push(`Growth: ${growth.join(' · ')}`);
+
+  const margins = [];
+  if (Number.isFinite(fund.grossMargin))     margins.push(`Gross ${fund.grossMargin.toFixed(1)}%`);
+  if (Number.isFinite(fund.operatingMargin)) margins.push(`Op ${fund.operatingMargin.toFixed(1)}%`);
+  if (Number.isFinite(fund.netMargin))       margins.push(`Net ${fund.netMargin.toFixed(1)}%`);
+  if (Number.isFinite(fund.roe))             margins.push(`ROE ${fund.roe.toFixed(1)}%`);
+  if (margins.length) lines.push(`Margins: ${margins.join(' · ')}`);
+
+  // 52-week context
+  if (Number.isFinite(fund.weeks52high) && Number.isFinite(fund.weeks52low)) {
+    const pctFromHigh = Number.isFinite(fund.currentPrice) ? ((fund.currentPrice / fund.weeks52high - 1) * 100) : null;
+    const pctFromLow  = Number.isFinite(fund.currentPrice) ? ((fund.currentPrice / fund.weeks52low  - 1) * 100) : null;
+    let line = `52-week range: $${fund.weeks52low.toFixed(2)} — $${fund.weeks52high.toFixed(2)}`;
+    if (pctFromHigh !== null && pctFromLow !== null) {
+      line += ` (price ${pctFromHigh.toFixed(1)}% from high, ${pctFromLow >= 0 ? '+' : ''}${pctFromLow.toFixed(1)}% from low)`;
+    }
+    lines.push(line);
+  }
+
+  // Analyst consensus
+  if (fund.analystRec && (fund.analystRec.buy || fund.analystRec.hold || fund.analystRec.sell)) {
+    const r = fund.analystRec;
+    const total = (r.strongBuy || 0) + (r.buy || 0) + (r.hold || 0) + (r.sell || 0) + (r.strongSell || 0);
+    lines.push(`Analyst consensus: ${r.strongBuy || 0} strong buy · ${r.buy || 0} buy · ${r.hold || 0} hold · ${r.sell || 0} sell · ${r.strongSell || 0} strong sell (n=${total})`);
+  }
+
+  if (Number.isFinite(fund.priceTargetMean)) {
+    const upside = Number.isFinite(fund.currentPrice) ? ((fund.priceTargetMean / fund.currentPrice - 1) * 100) : null;
+    let line = `Price target: $${fund.priceTargetMean.toFixed(2)} mean`;
+    if (Number.isFinite(fund.priceTargetHigh) && Number.isFinite(fund.priceTargetLow)) {
+      line += ` (range $${fund.priceTargetLow.toFixed(2)} — $${fund.priceTargetHigh.toFixed(2)})`;
+    }
+    if (upside !== null) line += ` · ${upside >= 0 ? '+' : ''}${upside.toFixed(1)}% implied upside`;
+    lines.push(line);
+  }
+
+  // Upcoming earnings
+  if (fund.upcomingEarningsDate) {
+    const d = new Date(fund.upcomingEarningsDate);
+    const now = new Date();
+    const days = Math.round((d - now) / (1000 * 60 * 60 * 24));
+    lines.push(`Next earnings: ${fund.upcomingEarningsDate}${days >= 0 ? ` (in ${days} days)` : ''}`);
+  }
+
+  return lines.length ? lines.join('\n') : '';
 }
 
 function summarizeNews(news) {
   if (!Array.isArray(news) || news.length === 0) return 'No recent company news available.';
-  return news.slice(0, 5).map((item, index) =>
-    `${index + 1}. ${item.headline} (${item.source || 'Unknown source'})`
-  ).join('\n');
+  const now = Date.now();
+  return news.slice(0, 6).map((item, index) => {
+    // Finnhub datetime is Unix seconds
+    const ts = typeof item.datetime === 'number' ? item.datetime * 1000 : (item.datetime ? Date.parse(item.datetime) : 0);
+    const ageLabel = ts > 0 ? (() => {
+      const days = Math.round((now - ts) / (1000 * 60 * 60 * 24));
+      if (days <= 0) return 'today';
+      if (days === 1) return '1d ago';
+      if (days < 14) return `${days}d ago`;
+      if (days < 60) return `${Math.round(days / 7)}w ago`;
+      return `${Math.round(days / 30)}mo ago`;
+    })() : '';
+    return `${index + 1}. ${item.headline} — ${item.source || 'Unknown'}${ageLabel ? ` (${ageLabel})` : ''}`;
+  }).join('\n');
+}
+
+// Insider summary: windowed counts, net dollar flow, biggest trades, recent
+function summarizeInsiders(insiders) {
+  if (!Array.isArray(insiders) || insiders.length === 0) return 'No recent insider transactions.';
+
+  const now = new Date();
+  const msPerDay = 1000 * 60 * 60 * 24;
+  const clean = insiders.filter(t => t.transactionDate && t.transactionPrice > 0).map(t => ({
+    ...t,
+    dateMs: Date.parse(t.transactionDate),
+    isBuy: t.transactionCode === 'P',
+    isSell: t.transactionCode === 'S' || t.transactionCode === 'S-',
+    value: Math.abs(t.share || 0) * (t.transactionPrice || 0),
+  }));
+
+  const windows = { '30d': 30, '90d': 90, '1y': 365, '2y': 730 };
+  const countsByWindow = {};
+  for (const [label, days] of Object.entries(windows)) {
+    const cutoff = now.getTime() - days * msPerDay;
+    const win = clean.filter(t => t.dateMs >= cutoff);
+    const buys  = win.filter(t => t.isBuy);
+    const sells = win.filter(t => t.isSell);
+    const netUsd = buys.reduce((s, t) => s + t.value, 0) - sells.reduce((s, t) => s + t.value, 0);
+    countsByWindow[label] = {
+      buys: buys.length, sells: sells.length,
+      netUsd,
+      uniqueBuyers: new Set(buys.map(t => t.name)).size,
+      uniqueSellers: new Set(sells.map(t => t.name)).size,
+    };
+  }
+
+  const allBuys  = clean.filter(t => t.isBuy).sort((a, b) => b.value - a.value);
+  const allSells = clean.filter(t => t.isSell).sort((a, b) => b.value - a.value);
+  const recent   = [...clean].sort((a, b) => b.dateMs - a.dateMs).slice(0, 5);
+
+  const lines = ['Insider transaction windows:'];
+  for (const [label, w] of Object.entries(countsByWindow)) {
+    const netLabel = w.netUsd >= 0 ? `+$${(w.netUsd / 1000).toFixed(0)}k net buy` : `-$${(Math.abs(w.netUsd) / 1000).toFixed(0)}k net sell`;
+    lines.push(`  ${label}: ${w.buys} buys / ${w.sells} sells · ${w.uniqueBuyers} unique buyers · ${netLabel}`);
+  }
+
+  if (allBuys[0]) {
+    const t = allBuys[0];
+    lines.push(`Biggest buy: ${t.name} (${t.title || 'insider'}) — ${Math.abs(t.share).toLocaleString()} sh @ $${t.transactionPrice} = $${(t.value / 1000).toFixed(0)}k on ${t.transactionDate.slice(0, 10)}`);
+  }
+  if (allSells[0]) {
+    const t = allSells[0];
+    lines.push(`Biggest sell: ${t.name} (${t.title || 'insider'}) — ${Math.abs(t.share).toLocaleString()} sh @ $${t.transactionPrice} = $${(t.value / 1000).toFixed(0)}k on ${t.transactionDate.slice(0, 10)}`);
+  }
+
+  if (recent.length) {
+    lines.push('Most recent 5:');
+    for (const t of recent) {
+      const action = t.isBuy ? 'BOUGHT' : t.isSell ? 'SOLD' : (t.transactionCode || '?');
+      lines.push(`  ${t.transactionDate.slice(0, 10)} · ${t.name} ${action} ${Math.abs(t.share).toLocaleString()} sh @ $${t.transactionPrice}`);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 // ── Stock Q&A Chat ────────────────────────────────────────────────────────────
@@ -1161,56 +1328,72 @@ app.post('/api/ask-stock', async (req, res) => {
 
   // Build context block from what the client sends
   const ctx = [];
-  if (context?.price)       ctx.push(`Current price: ${context.price}`);
-  if (context?.change)      ctx.push(`Day change: ${context.change}`);
-  if (context?.marketCap)   ctx.push(`Market cap: ${context.marketCap}`);
-  if (context?.volume)      ctx.push(`Volume: ${context.volume}`);
-  if (context?.exchange)    ctx.push(`Exchange: ${context.exchange}`);
+  const quick = [];
+  if (context?.price)       quick.push(`Price ${context.price}`);
+  if (context?.change)      quick.push(`Day change ${context.change}`);
+  if (context?.marketCap)   quick.push(`Mkt Cap ${context.marketCap}`);
+  if (context?.volume)      quick.push(`Volume ${context.volume}`);
+  if (context?.exchange)    quick.push(`Exchange ${context.exchange}`);
+  if (quick.length) ctx.push(`Market snapshot: ${quick.join(' · ')}`);
+
   if (context?.candles?.length) {
-    ctx.push('Technical snapshot:');
+    ctx.push('--- TECHNICAL READ ---');
     ctx.push(summarizeTechnicals(context.candles));
   }
-  if (context?.insiders?.length) {
-    const buys  = context.insiders.filter(t => t.transactionCode === 'P');
-    const sells = context.insiders.filter(t => t.transactionCode === 'S' || t.transactionCode === 'S-');
-    ctx.push(`Recent insider activity: ${buys.length} buys, ${sells.length} sells in last 2 years`);
-    const top = context.insiders.slice(0, 5).map(t =>
-      `${t.name} (${t.title || 'insider'}) ${t.transactionCode === 'P' ? 'BOUGHT' : 'SOLD'} ${Math.abs(t.share).toLocaleString()} shares @ $${t.transactionPrice} on ${t.transactionDate}`
-    );
-    ctx.push('Recent insider trades:\n' + top.join('\n'));
+
+  // Fundamentals + analyst block (client fetches from Finnhub and passes here)
+  if (context?.fundamentals) {
+    // Ensure current price is set for % calculations
+    const fundWithPrice = { ...context.fundamentals };
+    if (!Number.isFinite(fundWithPrice.currentPrice) && context?.priceRaw) {
+      fundWithPrice.currentPrice = Number(context.priceRaw);
+    }
+    const fundBlock = summarizeFundamentals(fundWithPrice);
+    if (fundBlock) {
+      ctx.push('--- FUNDAMENTALS & ANALYST VIEW ---');
+      ctx.push(fundBlock);
+    }
   }
+
+  if (context?.insiders?.length) {
+    ctx.push('--- INSIDER FLOW ---');
+    ctx.push(summarizeInsiders(context.insiders));
+  }
+
   if (context?.news?.length) {
-    ctx.push('Recent news headlines:');
+    ctx.push('--- RECENT NEWS ---');
     ctx.push(summarizeNews(context.news));
   }
 
-  const systemPrompt = `You are a sharp Wall Street equity analyst covering ${symbol}. Answer like a senior analyst briefing a PM - direct, specific, data-driven.
+  const systemPrompt = `You are a sharp Wall Street equity analyst covering ${symbol}. Answer like a senior analyst briefing a PM — direct, specific, data-driven.
 
-RESPONSE FORMAT RULES:
-- Lead with a one-line verdict first
-- Use compact markdown sections in this order when the question is analytical:
+RESPONSE FORMAT:
+- Lead with a one-line verdict
+- For analytical questions, use compact markdown sections in this order (skip any section with no supporting data):
   **Trend / Regime**
   **Key Levels**
   **Indicator Read**
+  **Valuation & Analyst View**
   **Insider / News Read**
   **Bullish Case**
   **Bearish Case**
   **Bottom line**
 - Use bullet points (-) when listing 3+ items
 - Bold key numbers and names with **markdown**
-- Keep it under 260 words unless the question clearly needs more
+- Cite specific numbers from the context (price levels, P/E, insider $ flow, target upside %) rather than vague language
+- Keep response under 400 words unless the question genuinely needs more
 - Never use generic disclaimers ("consult a financial advisor", "past performance", etc.)
-- If you don't know a specific fact, say so briefly and pivot to what the data does show
-- Explicitly mention price floors, thresholds, Bollinger context, and pattern read when technical data is available
-- Explicitly comment on insider buy/sell balance and how the news flow supports or conflicts with the chart
+- If a specific fact isn't in the context and you don't know it, say so briefly and pivot to what the data does show
+- Tie the technical read to the fundamental read when both are present — do they agree or conflict?
+- Comment explicitly on whether insider flow confirms or contradicts the price action
 
 STOCK CONTEXT (live data as of today):
-${ctx.join('\n') || 'No live context - rely on your training knowledge about this company.'}`;
+${ctx.join('\n') || 'No live context — rely on your training knowledge about this company.'}`;
 
   try {
     const body = JSON.stringify({
       model: 'llama-3.3-70b-versatile',
-      max_tokens: 512,
+      max_tokens: 1500,
       temperature: 0.4,
       messages: [
         { role: 'system', content: systemPrompt },

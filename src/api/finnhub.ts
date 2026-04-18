@@ -57,6 +57,18 @@ export const finnhub = {
 
   getMarketNews: (category: 'general' | 'merger' = 'general') =>
     request<NewsItem[]>(`${BASE}/news?category=${category}&token=${KEY}`),
+
+  // Basic financials — P/E, 52W high/low, margins, growth, ROE etc.
+  getBasicFinancials: (symbol: string) =>
+    request<{ metric?: Record<string, number>; series?: Record<string, unknown> }>(
+      `${BASE}/stock/metric?symbol=${symbol}&metric=all&token=${KEY}`
+    ),
+
+  // Upcoming earnings calendar for a single symbol
+  getEarningsCalendar: (symbol: string, from: string, to: string) =>
+    request<{ earningsCalendar?: Array<{ date: string; symbol: string; epsEstimate?: number; revenueEstimate?: number; hour?: string }> }>(
+      `${BASE}/calendar/earnings?symbol=${symbol}&from=${from}&to=${to}&token=${KEY}`
+    ),
 };
 
 export function formatTickerForFinnhub(ticker: string, exchange?: string): string {
