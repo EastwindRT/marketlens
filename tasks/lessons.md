@@ -1,3 +1,28 @@
+## Lesson: 2026-04-16 — AI answer quality is a context problem more than a model problem
+
+**Observation:** Ask AI chat was producing generic, shallow answers. First instinct was "upgrade the model." Audit revealed the real cause: the AI was only seeing ~20 days of technical data, 5 news headlines with no dates, 5 raw insider trades, no fundamentals, no analyst data, no earnings calendar — and a 512 max_tokens cap that forced compressed answers.
+**Root cause:** The `summarizeTechnicals` server helper only used the last 20 candles even though the client was sending 90. No fundamentals pipeline existed. Insider context was a raw dump of 5 trades, not a windowed statistical read.
+**Rule:** Before blaming the model, print the actual prompt being sent. If the context is thin, enriching it gives a larger quality lift than any model swap — and it's free (no extra cost, no latency). Enrich first, swap models only if still below bar.
+**Enrichment pattern:** Multi-timeframe summaries (not just "last 20"). Windowed counts for insider flow (30d / 90d / 1y / 2y with net $ direction). News with recency labels. Fundamentals as a separate context section. Raise max_tokens to at least 1500 for analytical answers.
+
+---
+
+## Lesson: 2026-04-16 — TMX GraphQL `getInsiderTransactions` is a scalar JSON type
+
+**Mistake:** Wrote a GraphQL query with subfield selection: `{ getInsiderTransactions(symbol: "RY") { date datefrom filingdate ... } }`.
+**Root cause:** TMX defines `getInsiderTransactions` as a plain `JSON` scalar, not a typed object. Any subfield selection causes a schema error: `"Field \"getInsiderTransactions\" must not have a selection since type \"JSON\" has no subfields."` The error response has no `data.getInsiderTransactions` field, so `json.data?.getInsiderTransactions ?? []` silently returned empty for every symbol. Endpoint shipped returning zero trades and looked like a coverage problem.
+**Rule:** Query TMX GraphQL JSON-scalar resolvers without any subfield selection: `{ getInsiderTransactions(symbol: "RY") }` returns the full JSON blob as `data.getInsiderTransactions`. The same rule applies to any TMX resolver whose GraphQL schema type is `JSON` rather than a typed object — always test with a simple no-selection query first.
+
+---
+
+## Lesson: 2026-04-16 — SEDI code 1 is both buys and sells; sign of amount matters
+
+**Mistake:** Mapped `transactionTypeCode === 1` to BUY and `transactionTypeCode === 2` to SELL.
+**Root cause:** SEDI code 1 means "Acquisition or disposition in the public market" — it's a single code for both directions. The sign of the `amount` field determines whether it's a buy (positive) or a sell (negative). Code 2 exists but is rare. Treating all code 1 as BUY mislabeled every executive open-market sell as a buy in our CA Insiders tab.
+**Rule:** For SEDI data, the transaction type is determined by `transactionTypeCode === 1 && amount > 0 → BUY` vs `transactionTypeCode === 1 && amount < 0 → SELL`. Don't filter on `amount > 0` alone either — it drops legitimate sells. Filter on `amount !== 0` and use the sign for direction.
+
+---
+
 ## Lesson: 2026-04-11 — EDGAR index.json does not exist for all filings
 
 **Mistake:** Used `{accession}-index.json` URL pattern to discover XML files within an EDGAR 13F filing.

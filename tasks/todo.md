@@ -1,3 +1,77 @@
+## Plan: Ask AI Context Enrichment — SHIPPED 2026-04-16 (commit 1fe3d03)
+
+### Diagnosis
+- User reported Ask AI chat on stock detail was producing generic, shallow answers
+- Audit revealed the model (Llama 3.3 70B via Groq) was not the issue — the **context** was
+- Only ~20 days of technical data, 5 news headlines (no dates), 5 raw insider trades, no fundamentals, no analyst data, no earnings calendar, max_tokens capped at 512
+
+### Features (Option B from AI audit)
+- [x] Rewrote `summarizeTechnicals` in `server.cjs` to use full 90-bar window:
+  - SMA20 + SMA50 with price-vs-MA % for each
+  - Bollinger (20,2) with tight/wide flags
+  - 20/60/90-bar support and resistance tiers
+  - 10/30/60/90-bar return percentages
+  - 5d-vs-30d volume trend ratio
+  - Expanded pattern detection (sustained up/down, squeeze, rebound)
+  - Regime read across multiple timeframes
+- [x] New `summarizeFundamentals` helper:
+  - Valuation: P/E, PEG, P/S, EPS TTM
+  - Growth: revenue YoY, EPS YoY
+  - Margins: gross/op/net, ROE
+  - 52-week range with price % from high and low
+  - Analyst consensus (strong buy/buy/hold/sell/strong sell distribution)
+  - Price target with mean/high/low and implied upside %
+  - Next earnings date with days-until countdown
+- [x] New `summarizeInsiders` helper:
+  - Windowed counts (30d / 90d / 1y / 2y) each with net $ flow and unique-buyer count
+  - Biggest single buy + biggest single sell
+  - Top 5 most recent transactions
+- [x] `summarizeNews` now adds recency label (today/Nd ago/Nw ago/Nmo ago)
+- [x] `max_tokens` 512 → 1500; system prompt updated to reference new sections and tie technical to fundamental reads
+- [x] Client: `finnhub.getBasicFinancials` + `getEarningsCalendar` helpers
+- [x] Client: new `useStockAIContext(symbol)` hook — parallel-fetches Finnhub basics, recommendations, price target, and earnings calendar (US only; 1h stale time)
+- [x] `StockDetail` passes fundamentals + `priceRaw` into the AI chat context
+- [x] Build clean; pushed to Render (commit 1fe3d03)
+
+### Open items (deferred)
+- [ ] Ask AI manual QA on the new rich context (verify answers are actually more specific)
+- [ ] Consider upgrading the model itself to Claude Sonnet 4.5 if quality is still below bar (Option A from audit)
+- [ ] Canadian stock fundamentals (Finnhub `stock/metric` is US-only; TSX AI chat runs with just candles + insiders + news)
+- [ ] Watchlist E2E (requires live Supabase auth login)
+
+---
+
+## Plan: Canadian Insider Endpoint Fixes — SHIPPED 2026-04-16 (commits 65935e7 + 5c5cb57)
+
+### Bugs fixed
+- [x] TMX GraphQL query was including subfields, but `getInsiderTransactions` returns a scalar `JSON` type — every request errored out server-side, `json.data?.getInsiderTransactions` was `undefined`, `?? []` silently returned empty. Removed subfield selection.
+- [x] BUY/SELL classification was wrong: SEDI code 1 means "open-market transaction" for BOTH buys and sells. Sign of `amount` determines direction (positive = buy, negative = sell). Previous code mapped code 1 → BUY and code 2 → SELL; code 2 barely appears in practice, so sells were mislabeled as buys.
+- [x] Filter `t.amount <= 0` was dropping legitimate sells (negative amounts). Changed to `t.amount === 0`.
+
+### Coverage
+- [x] Expanded `CA_TSX_STOCKS` from ~45 large-caps to ~110 stocks — added mid-caps, miners, energy, REITs, tech names where executive open-market activity is more common
+- [x] Updated UI loading note: "Querying ~110 TSX stocks via SEDI — may take 20–40s on first load"
+- [x] Build clean; pushed to Render
+
+---
+
+## Plan: Canadian Insider Tabs — SHIPPED 2026-04-16 (commit 01a46e6)
+
+### Features
+- [x] Added `httpsPost` helper to `server.cjs` for TMX GraphQL calls
+- [x] New `/api/ca-insider-activity?days=N&mode=insiders|filings` endpoint — queries ~45 major TSX stocks via TMX GraphQL in batches of 5; `mode=insiders` returns only open-market buys/sells (transactionTypeCode 1 or 2); `mode=filings` returns all SEDI types; 30min TTL cache keyed by days+mode
+- [x] `InsiderActivity.tsx` refactored with three-tab market switcher: 🇺🇸 US (SEC Form 4) | 🇨🇦 CA Insiders (SEDI open-market) | 🇨🇦 CA Filings (all SEDI types)
+- [x] Shared period (7D/14D/30D), sort (value/date), buy/sell filter controls across all tabs; buy/sell filter hidden on CA Filings tab
+- [x] `InsiderFeedItem.type` extended to `'BUY' | 'SELL' | 'OTHER'` for SEDI grants and options
+- [x] Build clean; pushed to Render (commit 01a46e6)
+
+### Open items (deferred)
+- [ ] Watchlist E2E (requires live Supabase auth login)
+- [ ] Ask AI manual QA (multi-question flow and fallback states)
+- [ ] CA insider coverage beyond curated 45-stock list
+
+---
+
 ## Plan: Funds Holdings Simplification — SHIPPED 2026-04-14 (commit 7be0224)
 
 ### Features
