@@ -58,7 +58,7 @@ export default function CongressPage() {
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
-  const { data: allTrades, isLoading } = useLatestCongressTrades(200);
+  const { data: allTrades, isLoading, isError } = useLatestCongressTrades(200);
 
   const trades = useMemo(() => {
     const filtered = (allTrades ?? []).filter(t => {
@@ -184,7 +184,14 @@ export default function CongressPage() {
             </div>
           )}
 
-          {!isLoading && trades.length === 0 && (
+          {!isLoading && isError && (
+            <div style={{ padding: '20px 16px', borderRadius: 10, background: 'rgba(246,70,93,0.08)', border: '1px solid rgba(246,70,93,0.25)', textAlign: 'center' }}>
+              <p style={{ color: '#F6465D', fontSize: 13, marginBottom: 4 }}>⚠ Congress data unavailable</p>
+              <p style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>Quiver Quant may be temporarily down. Data refreshes every 30 minutes — try again shortly.</p>
+            </div>
+          )}
+
+          {!isLoading && !isError && trades.length === 0 && (
             <div style={{ padding: '32px 0', textAlign: 'center' }}>
               <p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
                 {tickerFilter ? `No congress trades found for ${tickerFilter}` : 'No trades available'}
@@ -192,7 +199,7 @@ export default function CongressPage() {
             </div>
           )}
 
-          {!isLoading && trades.length > 0 && (
+          {!isLoading && !isError && trades.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {trades.map((t, i) => {
                 const isBuy      = t.type === 'purchase';

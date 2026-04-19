@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search as SearchIcon } from 'lucide-react';
+import { Search as SearchIcon, AlertCircle } from 'lucide-react';
 import { finnhub } from '../api/finnhub';
 import { Skeleton } from '../components/ui/LoadingSkeleton';
 
@@ -9,11 +9,13 @@ export default function Search() {
   const [query, setQuery] = useState(searchParams.get('q') || '');
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!query) { setResults([]); return; }
+    if (!query) { setResults([]); setError(null); return; }
     setLoading(true);
+    setError(null);
     const timeout = setTimeout(async () => {
       try {
         if (!import.meta.env.VITE_FINNHUB_API_KEY) {
@@ -28,7 +30,10 @@ export default function Search() {
           const res = await finnhub.search(query);
           setResults(res.result?.slice(0, 20) || []);
         }
-      } catch { setResults([]); }
+      } catch (err: any) {
+        setError(err?.message || 'Search failed');
+        setResults([]);
+      }
       finally { setLoading(false); }
     }, 300);
     return () => clearTimeout(timeout);
@@ -92,7 +97,17 @@ export default function Search() {
         </div>
       )}
 
-      {!loading && query && results.length === 0 && (
+      {!loading && error && (
+        <div
+          className="flex items-center gap-2 p-4 rounded-xl text-sm"
+          style={{ background: 'var(--bg-surface)', border: '1px solid var(--color-down)', color: 'var(--color-down)' }}
+        >
+          <AlertCircle size={15} />
+          <span>Search unavailable — {error}. Try again in a moment.</span>
+        </div>
+      )}
+
+      {!loading && !error && query && results.length === 0 && (
         <div className="text-center py-12" style={{ color: 'var(--text-secondary)' }}>
           No results found for "{query}"
         </div>

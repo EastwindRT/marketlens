@@ -69,6 +69,9 @@ export const finnhub = {
     request<{ earningsCalendar?: Array<{ date: string; symbol: string; epsEstimate?: number; revenueEstimate?: number; hour?: string }> }>(
       `${BASE}/calendar/earnings?symbol=${symbol}&from=${from}&to=${to}&token=${KEY}`
     ),
+
+  getPeers: (symbol: string) =>
+    request<string[]>(`${BASE}/stock/peers?symbol=${symbol}&token=${KEY}`),
 };
 
 export function formatTickerForFinnhub(ticker: string, exchange?: string): string {

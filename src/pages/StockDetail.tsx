@@ -15,6 +15,7 @@ import { PriceDisplay } from '../components/ui/PriceDisplay';
 import { TimeRangePicker } from '../components/ui/TimeRangePicker';
 import { InsiderPanel } from '../components/insider/InsiderPanel';
 import { NewsSection } from '../components/news/NewsSection';
+import { PeerComparison } from '../components/stock/PeerComparison';
 import { TrendLinesLegend } from '../components/chart/TrendLines';
 import { PriceHeaderSkeleton } from '../components/ui/LoadingSkeleton';
 import TradeModal from '../components/trade/TradeModal';
@@ -275,6 +276,13 @@ export default function StockDetail() {
           }}
         />
       </div>
+
+      {/* ── Peer Comparison ── */}
+      {!isCanadian && (
+        <div className="px-4 md:px-8 pb-2">
+          <PeerComparison symbol={symbol} />
+        </div>
+      )}
 
       {/* ── Market Signals (News / Analyst / 13D Filings) ── */}
       <div className="px-4 md:px-8 pb-10">

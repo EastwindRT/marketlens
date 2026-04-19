@@ -392,15 +392,16 @@ export default function FundsPage() {
   const [tab, setTab] = useState<'all' | 'long' | 'options' | 'new' | 'exited'>('all');
   const [navigatingIdx, setNavigatingIdx] = useState<number | null>(null);
   const [largeOnly, setLargeOnly] = useState(false);
+  const [filingDays, setFilingDays] = useState(14);
   const navigate = useNavigate();
 
   const { data: recentFilingsData } = useQuery({
-    queryKey: ['13f-recent-filings'],
+    queryKey: ['13f-recent-filings', filingDays],
     queryFn: async () => {
-      const res = await fetch('/api/13f/recent-filings');
+      const res = await fetch(`/api/13f/recent-filings?days=${filingDays}`);
       return res.json() as Promise<{ filings: { name: string; cik: string; filedDate: string }[] }>;
     },
-    staleTime: 24 * 60 * 60 * 1000,
+    staleTime: 6 * 60 * 60 * 1000, // 6h — same as server TTL
   });
 
   useEffect(() => {
@@ -546,12 +547,32 @@ export default function FundsPage() {
             )}
 
             {holdingsError && (
-              <p style={{ color: '#F6465D', fontSize: 13, padding: '24px 0' }}>
-                Failed to load holdings — EDGAR may be temporarily unavailable.
-              </p>
+              <div style={{ padding: '20px 16px', borderRadius: 10, background: 'rgba(246,70,93,0.08)', border: '1px solid rgba(246,70,93,0.25)', marginTop: 16 }}>
+                <p style={{ color: '#F6465D', fontSize: 13, margin: '0 0 4px' }}>⚠ Holdings unavailable</p>
+                <p style={{ color: 'var(--text-tertiary)', fontSize: 12, margin: 0 }}>EDGAR may be temporarily unavailable. Try again or search for another fund.</p>
+              </div>
             )}
 
-            {!holdingsLoading && holdingsData && (
+            {!holdingsLoading && holdingsData && holdingsData.current.length === 0 && !holdingsError && (
+              <div style={{ padding: '28px 0', textAlign: 'center' }}>
+                <p style={{ color: 'var(--text-secondary)', fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
+                  No holdings data available
+                </p>
+                <p style={{ color: 'var(--text-tertiary)', fontSize: 13, marginBottom: 14 }}>
+                  This fund may use a non-standard filing format or the data wasn't parseable from EDGAR.
+                </p>
+                <a
+                  href={`https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${selectedFund?.cik}&type=13F&dateb=&owner=include&count=5`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: 'var(--accent-blue-light)', fontSize: 13 }}
+                >
+                  View this fund on EDGAR →
+                </a>
+              </div>
+            )}
+
+            {!holdingsLoading && holdingsData && holdingsData.current.length > 0 && (
               <>
                 {/* Stat cards */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10, margin: '20px 0 24px' }}>
@@ -654,9 +675,19 @@ export default function FundsPage() {
             )}
 
             {recentFilingsData && recentFilingsData.filings.length === 0 && (
-              <p style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '20px 0' }}>
-                No recent 13F filings found — EDGAR index may not yet have today's entries.
-              </p>
+              <div style={{ padding: '20px 0' }}>
+                <p style={{ fontSize: 13, color: 'var(--text-tertiary)', marginBottom: 8 }}>
+                  No 13F filings found in the last {filingDays} days.
+                </p>
+                {filingDays < 60 && (
+                  <button
+                    onClick={() => setFilingDays(60)}
+                    style={{ fontSize: 13, color: 'var(--accent-blue-light)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                  >
+                    Search last 60 days →
+                  </button>
+                )}
+              </div>
             )}
 
             {recentFilingsData && recentFilingsData.filings.length > 0 && (
@@ -685,9 +716,19 @@ export default function FundsPage() {
                     </span>
                   </button>
                 ))}
-                <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
-                  {recentFilingsData.filings.length} filers · last 60 days · holdings load on demand
-                </p>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: 0 }}>
+                    {recentFilingsData.filings.length} filers · last {filingDays} days · holdings load on demand
+                  </p>
+                  {filingDays < 60 && (
+                    <button
+                      onClick={() => setFilingDays(60)}
+                      style={{ fontSize: 11, color: 'var(--accent-blue-light)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                    >
+                      Show 60 days
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>

@@ -3,11 +3,11 @@ import { useWatchlistStore } from '../store/watchlistStore';
 import { useStockQuote } from '../hooks/useStockData';
 import { formatPrice, formatChange } from '../utils/formatters';
 import { formatTicker, isTSXTicker } from '../utils/marketHours';
-import { TrendingUp, TrendingDown } from 'lucide-react';
+import { TrendingUp, TrendingDown, Search as SearchIcon, AlertCircle } from 'lucide-react';
 
 function DashboardCard({ symbol, name }: { symbol: string; name?: string }) {
   const navigate = useNavigate();
-  const { data: quote, isLoading } = useStockQuote(symbol);
+  const { data: quote, isLoading, isError } = useStockQuote(symbol);
   const isUp = (quote?.dp ?? 0) >= 0;
   const currency = isTSXTicker(symbol) ? 'CAD' : 'USD';
 
@@ -43,19 +43,24 @@ function DashboardCard({ symbol, name }: { symbol: string; name?: string }) {
           <div className="skeleton h-7 w-24 rounded" />
           <div className="skeleton h-4 w-16 rounded" />
         </div>
+      ) : isError || !quote ? (
+        <div className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+          <AlertCircle size={12} />
+          <span>Quote unavailable</span>
+        </div>
       ) : (
         <>
           <div
             className="text-2xl font-semibold mono"
             style={{ color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}
           >
-            {quote ? formatPrice(quote.c, currency) : '—'}
+            {formatPrice(quote.c, currency)}
           </div>
           <div
             className="text-sm font-medium mono mt-1"
             style={{ color: isUp ? 'var(--color-up)' : 'var(--color-down)', fontFamily: "'Roboto Mono', monospace" }}
           >
-            {quote ? formatChange(quote.dp) : '—'}
+            {formatChange(quote.dp)}
           </div>
         </>
       )}
@@ -65,6 +70,7 @@ function DashboardCard({ symbol, name }: { symbol: string; name?: string }) {
 
 export default function Dashboard() {
   const { items } = useWatchlistStore();
+  const navigate = useNavigate();
 
   return (
     <div className="p-6">
@@ -72,11 +78,35 @@ export default function Dashboard() {
         <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>Dashboard</h1>
         <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Your watchlist at a glance</p>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-        {items.map(item => (
-          <DashboardCard key={item.symbol} symbol={item.symbol} name={item.name} />
-        ))}
-      </div>
+      {items.length === 0 ? (
+        <div
+          className="rounded-2xl p-10 text-center"
+          style={{ background: 'var(--bg-surface)', border: '1px dashed var(--border-default)' }}
+        >
+          <div className="flex justify-center mb-3" style={{ color: 'var(--text-tertiary)' }}>
+            <SearchIcon size={32} />
+          </div>
+          <div className="text-base font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+            Your watchlist is empty
+          </div>
+          <div className="text-sm mb-5" style={{ color: 'var(--text-secondary)' }}>
+            Search for a stock and add it to track price, news, and insider activity here.
+          </div>
+          <button
+            onClick={() => navigate('/search')}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            style={{ background: 'var(--accent)', color: 'var(--bg-base)' }}
+          >
+            Search stocks
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {items.map(item => (
+            <DashboardCard key={item.symbol} symbol={item.symbol} name={item.name} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -61,11 +61,31 @@ const https = require('https');
 
 // ── Server-side data fetchers (avoid CORS / 403 from client) ─────────────
 
-function httpsGet(url, headers = {}) {
+// Retry wrapper — retries on transient failures (429, 5xx, timeouts, network errors)
+// with exponential backoff + jitter. Used by httpsGet/httpsPost below.
+async function withRetry(fn, { retries = 2, baseMs = 500, label = 'req' } = {}) {
+  let lastErr;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err?.message || err);
+      const transient = /HTTP (408|425|429|5\d\d)|Timeout|ECONN|socket hang up|ETIMEDOUT|EAI_AGAIN/i.test(msg);
+      if (!transient || i === retries) throw err;
+      const delay = Math.round(baseMs * Math.pow(2, i) + Math.random() * 250);
+      console.log(`[retry:${label}] ${msg} — attempt ${i + 1}/${retries} after ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
+function httpsGetOnce(url, headers = {}) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', ...headers } }, (res) => {
       if (res.statusCode === 301 || res.statusCode === 302) {
-        return httpsGet(res.headers.location, headers).then(resolve).catch(reject);
+        return httpsGetOnce(res.headers.location, headers).then(resolve).catch(reject);
       }
       let body = '';
       res.on('data', c => body += c);
@@ -79,7 +99,11 @@ function httpsGet(url, headers = {}) {
   });
 }
 
-function httpsPost(url, body, headers = {}) {
+function httpsGet(url, headers = {}) {
+  return withRetry(() => httpsGetOnce(url, headers), { label: `GET ${new URL(url).hostname}` });
+}
+
+function httpsPostOnce(url, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const bodyStr = JSON.stringify(body);
@@ -108,6 +132,10 @@ function httpsPost(url, body, headers = {}) {
     req.write(bodyStr);
     req.end();
   });
+}
+
+function httpsPost(url, body, headers = {}) {
+  return withRetry(() => httpsPostOnce(url, body, headers), { label: `POST ${new URL(url).hostname}` });
 }
 
 // In-memory cache
@@ -349,8 +377,10 @@ const TMX_HEADERS = {
   'Referer': 'https://money.tmx.com/',
 };
 
-const caInsiderCaches = { 7: null, 14: null, 30: null };
-const caInsiderLastFetch = { 7: 0, 14: 0, 30: 0 };
+// Cache keyed by `${days}-${mode}` so the insiders and filings tabs don't
+// invalidate each other on switch.
+const caInsiderCaches = {};
+const caInsiderLastFetch = {};
 const CA_INSIDER_TTL = 30 * 60 * 1000;
 
 app.get('/api/ca-insider-activity', async (req, res) => {
@@ -358,8 +388,7 @@ app.get('/api/ca-insider-activity', async (req, res) => {
   const mode = req.query.mode === 'filings' ? 'filings' : 'insiders'; // insiders=open-market only, filings=all types
   const cacheKey = `${days}-${mode}`;
 
-  // Simple per-mode cache (reuse insiders cache, key by days+mode)
-  if (!caInsiderCaches[days] || Date.now() - caInsiderLastFetch[days] > CA_INSIDER_TTL || caInsiderCaches[days]._mode !== mode) {
+  if (!caInsiderCaches[cacheKey] || Date.now() - (caInsiderLastFetch[cacheKey] || 0) > CA_INSIDER_TTL) {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - days);
     const cutoffStr = cutoff.toISOString().slice(0, 10);
@@ -428,11 +457,11 @@ app.get('/api/ca-insider-activity', async (req, res) => {
     }
 
     allTrades.sort((a, b) => b.totalValue - a.totalValue);
-    caInsiderCaches[days] = { trades: allTrades, _mode: mode };
-    caInsiderLastFetch[days] = Date.now();
+    caInsiderCaches[cacheKey] = { trades: allTrades };
+    caInsiderLastFetch[cacheKey] = Date.now();
   }
 
-  res.json({ trades: caInsiderCaches[days].trades });
+  res.json({ trades: caInsiderCaches[cacheKey].trades });
 });
 
 const insiderActivityCaches = { 7: null, 14: null, 30: null };
@@ -637,6 +666,43 @@ app.get('/api/insider-activity', async (req, res) => {
 });
 
 app.use(express.json());
+
+// Structured request logging — attach reqId, log completion with duration + status.
+const crypto = require('crypto');
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  const reqId = crypto.randomBytes(4).toString('hex');
+  const start = Date.now();
+  req.reqId = reqId;
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    const tag = res.statusCode >= 500 ? '🔴' : res.statusCode >= 400 ? '🟡' : '  ';
+    console.log(`${tag} [${reqId}] ${req.method} ${req.path} → ${res.statusCode} ${ms}ms`);
+  });
+  next();
+});
+
+// AI response cache — keyed by hash of (symbol, question, context-summary).
+// Identical repeat questions are common (reloading the tab, etc.) — 15min TTL.
+const AI_CACHE_TTL = 15 * 60 * 1000;
+const aiResponseCache = new Map();
+function aiCacheKey(parts) {
+  return crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex');
+}
+function aiCacheGet(key) {
+  const hit = aiResponseCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > AI_CACHE_TTL) { aiResponseCache.delete(key); return null; }
+  return hit.answer;
+}
+function aiCacheSet(key, answer) {
+  aiResponseCache.set(key, { answer, ts: Date.now() });
+  // Simple bounded size — evict oldest if > 200 entries
+  if (aiResponseCache.size > 200) {
+    const firstKey = aiResponseCache.keys().next().value;
+    aiResponseCache.delete(firstKey);
+  }
+}
 
 async function fetchEdgarFilingText(edgarUrl) {
   const UA = 'TARS admin@tars.app';
@@ -1326,6 +1392,13 @@ app.post('/api/ask-stock', async (req, res) => {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) return res.status(503).json({ error: 'AI not configured' });
 
+  // Cache check — same question on same symbol within 15min returns the cached answer.
+  // Key incorporates price bucket so quote moves still invalidate.
+  const priceBucket = context?.priceRaw ? Math.round(Number(context.priceRaw)) : 0;
+  const cacheKey = aiCacheKey({ route: 'ask-stock', symbol, question, priceBucket });
+  const cached = aiCacheGet(cacheKey);
+  if (cached) return res.json({ answer: cached, cached: true });
+
   // Build context block from what the client sends
   const ctx = [];
   const quick = [];
@@ -1424,6 +1497,7 @@ ${ctx.join('\n') || 'No live context — rely on your training knowledge about t
       req2.end();
     });
 
+    aiCacheSet(cacheKey, answer);
     res.json({ answer });
   } catch (err) {
     console.error('[ask-stock]', err.message);
@@ -1638,8 +1712,7 @@ app.get('/api/13f/recent-filers', async (req, res) => {
 // ── Recent 13F-HR filings via EDGAR daily index (cloud-safe) ─────────────────
 // Scans last 60 days of daily-index .idx files for 13F-HR entries.
 // Deduplicates by CIK so each fund appears once (most recent filing).
-let recent13FCache = null;
-let recent13FFetchTime = 0;
+// recent13FCaches and recent13FFetchTimes declared in the route handler below
 const RECENT_13F_TTL = 24 * 60 * 60 * 1000; // 24h
 
 async function fetchRecent13FFilings(daysBack = 60) {
@@ -1677,14 +1750,18 @@ async function fetchRecent13FFilings(daysBack = 60) {
   return entries;
 }
 
+const recent13FCaches = {};  // keyed by daysBack
+const recent13FFetchTimes = {};
+
 app.get('/api/13f/recent-filings', async (req, res) => {
+  const daysBack = Math.min(60, Math.max(7, Number(req.query.days) || 14));
   try {
     const now = Date.now();
-    if (!recent13FCache || now - recent13FFetchTime > RECENT_13F_TTL) {
-      recent13FCache = await fetchRecent13FFilings(60);
-      recent13FFetchTime = now;
+    if (!recent13FCaches[daysBack] || now - (recent13FFetchTimes[daysBack] || 0) > RECENT_13F_TTL) {
+      recent13FCaches[daysBack] = await fetchRecent13FFilings(daysBack);
+      recent13FFetchTimes[daysBack] = now;
     }
-    res.json({ filings: recent13FCache });
+    res.json({ filings: recent13FCaches[daysBack] });
   } catch (err) {
     console.error('[13f/recent-filings]', err.message);
     res.status(502).json({ error: err.message, filings: [] });
@@ -1868,6 +1945,10 @@ app.post('/api/ask-fund', async (req, res) => {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) return res.status(503).json({ error: 'AI not configured' });
 
+  const cacheKey = aiCacheKey({ route: 'ask-fund', fund, period: meta?.period, positions: meta?.positionCount, question });
+  const cached = aiCacheGet(cacheKey);
+  if (cached) return res.json({ answer: cached, cached: true });
+
   const topH = (holdings || []).slice(0, 30).map((h, i) =>
     `${i + 1}. ${h.name}${h.putCall ? ` (${h.putCall})` : ''}${h.isNew ? ' [NEW]' : ''}: $${(h.value / 1e6).toFixed(1)}M (${(h.pctOfPortfolio || 0).toFixed(1)}%) — ${(h.shares || 0).toLocaleString()} shares`
   ).join('\n');
@@ -1919,6 +2000,7 @@ RESPONSE FORMAT:
       r.write(body);
       r.end();
     });
+    aiCacheSet(cacheKey, answer);
     res.json({ answer });
   } catch (err) {
     console.error('[ask-fund]', err.message);

@@ -133,6 +133,8 @@ function NewsTab({
   isCanadian: boolean;
   symbol: string;
 }) {
+  const [visibleCount, setVisibleCount] = useState(8);
+
   if (isCanadian) {
     const baseTicker = symbol.replace('.TO', '');
     return (
@@ -157,9 +159,12 @@ function NewsTab({
     <p style={{ color: 'var(--text-tertiary)', fontSize: 13, padding: '20px 0' }}>No recent news found.</p>
   );
 
+  const visible = news.slice(0, visibleCount);
+  const hasMore = news.length > visibleCount;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {news.slice(0, 10).map((item, i) => (
+      {visible.map((item, i) => (
         <a
           key={item.id ?? i}
           href={item.url}
@@ -203,6 +208,20 @@ function NewsTab({
           )}
         </a>
       ))}
+      {hasMore && (
+        <button
+          onClick={() => setVisibleCount(c => c + 8)}
+          style={{
+            padding: '9px 0', borderRadius: 10, border: '1px solid var(--border-subtle)',
+            background: 'var(--bg-elevated)', color: 'var(--text-secondary)',
+            fontSize: 13, cursor: 'pointer', width: '100%', transition: 'border-color 150ms',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
+          onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
+        >
+          Load {Math.min(8, news.length - visibleCount)} more articles ({news.length - visibleCount} remaining)
+        </button>
+      )}
     </div>
   );
 }
