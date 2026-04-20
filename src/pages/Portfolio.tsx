@@ -116,7 +116,9 @@ export default function Portfolio() {
   const [showAddPosition, setShowAddPosition] = useState(false);
 
   useEffect(() => {
-    if (!player) { navigate('/'); return; }
+    // Don't redirect — App.tsx handles the login wall for unauthenticated users.
+    // Just wait for the player to be set after the session resolves.
+    if (!player) return;
 
     async function load() {
       try {
@@ -140,7 +142,16 @@ export default function Portfolio() {
     return () => { supabase.removeChannel(sub); };
   }, [player]);
 
-  if (!player) return null;
+  // Show skeleton while session/player is still loading
+  if (!player) return (
+    <div className="max-w-2xl mx-auto px-4 md:px-6 py-6">
+      <div className="h-10 w-48 rounded-2xl animate-pulse mb-6" style={{ background: 'var(--bg-surface)' }} />
+      <div className="h-36 rounded-2xl animate-pulse mb-6" style={{ background: 'var(--bg-surface)' }} />
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} className="h-16 rounded-2xl animate-pulse mb-2" style={{ background: 'var(--bg-surface)' }} />
+      ))}
+    </div>
+  );
 
   return (
     <div className="max-w-2xl mx-auto px-4 md:px-6 py-6">
