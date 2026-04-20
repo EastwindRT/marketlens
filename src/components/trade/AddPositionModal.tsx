@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, Search } from 'lucide-react';
 import { useStockQuote } from '../../hooks/useStockData';
 import { isTSXTicker } from '../../utils/marketHours';
@@ -17,6 +17,7 @@ interface AddPositionModalProps {
 export default function AddPositionModal({ onClose, onSuccess }: AddPositionModalProps) {
   const [symbolInput, setSymbolInput] = useState('');
   const [confirmedSymbol, setConfirmedSymbol] = useState<string | null>(null);
+  const [timedOut, setTimedOut] = useState(false);
 
   const normalizedSymbol = symbolInput.trim().toUpperCase();
   const isCanadian = normalizedSymbol ? isTSXTicker(normalizedSymbol) : false;
@@ -26,9 +27,16 @@ export default function AddPositionModal({ onClose, onSuccess }: AddPositionModa
     confirmedSymbol ?? ''
   );
 
+  // Bail out after 10 s so it never stays stuck on "Looking up…" forever
+  useEffect(() => {
+    if (!confirmedSymbol || !quoteLoading) { setTimedOut(false); return; }
+    const t = setTimeout(() => setTimedOut(true), 10_000);
+    return () => clearTimeout(t);
+  }, [confirmedSymbol, quoteLoading]);
+
   // Step 2: symbol confirmed & quote loaded → hand off to TradeModal
   if (confirmedSymbol) {
-    if (quoteLoading) {
+    if (quoteLoading && !timedOut) {
       return (
         <Overlay onClose={onClose}>
           <div style={{ padding: '32px 16px', textAlign: 'center' }}>
@@ -39,7 +47,7 @@ export default function AddPositionModal({ onClose, onSuccess }: AddPositionModa
         </Overlay>
       );
     }
-    if (quoteError || !quote?.c) {
+    if (timedOut || quoteError || !quote?.c) {
       return (
         <Overlay onClose={onClose}>
           <div style={{ padding: '24px 16px' }}>

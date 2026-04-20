@@ -139,6 +139,7 @@ export function useStockQuote(symbol: string) {
         return generateMockQuote(symbol);
       }
     },
+    enabled: !!symbol,
     staleTime: 60 * 1000,
     refetchInterval: 60 * 1000,
   });
