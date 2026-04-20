@@ -57,34 +57,13 @@ export function useStockCandles(symbol: string, range: TimeRange) {
       // Demo mode (no API key) — return deterministic mock data
       if (!hasApiKey()) return generateMockCandles(symbol, range);
 
-      // ── Canadian stocks → Yahoo Finance ──────────────────────────────────
-      if (isTSXTicker(symbol)) {
+      // ── All stocks → Yahoo Finance (US + CA) ─────────────────────────────
+      // Yahoo Finance supports all timeframes including intraday, no rate limits.
+      // Finnhub free tier blocks most intraday resolutions — avoid it for candles.
+      try {
         const { range: yahooRange, interval } = getYahooParams(range);
         const { bars } = await fetchYahooCandles(symbol, yahooRange as any, interval as any);
-        // Empty array means no data for this range — caller shows empty state
         return bars;
-      }
-
-      // ── US stocks → Finnhub ───────────────────────────────────────────────
-      try {
-        const from = getUnixTime(getFromDate(range));
-        const to   = getUnixTime(new Date());
-        const resolution = getFinnhubResolution(range);
-        const isIntraday = resolution === '5' || resolution === '30';
-
-        const data = await finnhub.getCandles(symbol, from, to, resolution);
-
-        // Finnhub explicitly reports no data for this symbol/range — return empty
-        if (data.s === 'no_data' || !data.t || data.t.length === 0) return [];
-
-        return data.t.map((time: number, i: number) => ({
-          time: isIntraday ? time : format(new Date(time * 1000), 'yyyy-MM-dd'),
-          open:   data.o[i],
-          high:   data.h[i],
-          low:    data.l[i],
-          close:  data.c[i],
-          volume: data.v[i],
-        }));
       } catch {
         return [];
       }
