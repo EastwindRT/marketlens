@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowUpRight, ArrowDownRight, LogOut, Briefcase, Plus } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, LogOut, Briefcase, Plus, Star } from 'lucide-react';
 import { getHoldings, supabase } from '../api/supabase';
 import { useLeagueStore } from '../store/leagueStore';
 import { useStockQuote } from '../hooks/useStockData';
 import type { Holding, Player } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
 import AddPositionModal from '../components/trade/AddPositionModal';
+import { useWatchlistStore } from '../store/watchlistStore';
 
 function HoldingRow({ holding }: { holding: Holding }) {
   const { data: quote } = useStockQuote(holding.symbol);
@@ -60,8 +61,54 @@ function HoldingRow({ holding }: { holding: Holding }) {
   );
 }
 
+function WatchRow({ symbol, name }: { symbol: string; name?: string }) {
+  const { data: quote } = useStockQuote(symbol);
+  const price = quote?.c;
+  const changePct = quote?.dp ?? 0;
+  const isUp = changePct >= 0;
+
+  return (
+    <Link
+      to={`/stock/${symbol}`}
+      className="flex items-center gap-3 px-4 py-4 rounded-2xl no-underline"
+      style={{
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-subtle)',
+        marginBottom: 8,
+        display: 'flex',
+      }}
+    >
+      <div
+        className="w-10 h-10 rounded-xl flex items-center justify-center text-xs font-bold flex-shrink-0"
+        style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}
+      >
+        {symbol.replace('.TO', '').slice(0, 4)}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>{symbol}</div>
+        {name && <div className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-tertiary)' }}>{name}</div>}
+      </div>
+      <div className="text-right flex-shrink-0">
+        <div className="font-mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
+          {price ? formatPrice(price) : '—'}
+        </div>
+        {price != null && (
+          <div
+            className="flex items-center justify-end gap-0.5 text-xs font-medium mt-0.5"
+            style={{ color: isUp ? 'var(--color-up)' : 'var(--color-down)' }}
+          >
+            {isUp ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
+            {isUp ? '+' : ''}{changePct.toFixed(2)}%
+          </div>
+        )}
+      </div>
+    </Link>
+  );
+}
+
 export default function Portfolio() {
   const { player, logout } = useLeagueStore();
+  const { items: watchlist } = useWatchlistStore();
   const navigate = useNavigate();
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [loading, setLoading] = useState(true);
@@ -177,6 +224,21 @@ export default function Portfolio() {
           holdings.map(h => <HoldingRow key={h.id} holding={h} />)
         )}
       </div>
+
+      {/* ── Watchlist ── */}
+      {watchlist.length > 0 && (
+        <div className="mt-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Star size={14} style={{ color: 'var(--text-tertiary)' }} />
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
+              Watchlist
+            </span>
+          </div>
+          {watchlist.map(item => (
+            <WatchRow key={item.symbol} symbol={item.symbol} name={item.name} />
+          ))}
+        </div>
+      )}
 
       {showAddPosition && (
         <AddPositionModal onClose={() => setShowAddPosition(false)} />

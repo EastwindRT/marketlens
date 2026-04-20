@@ -66,25 +66,30 @@ export function useStockCandles(symbol: string, range: TimeRange) {
       }
 
       // ── US stocks → Finnhub ───────────────────────────────────────────────
-      const from = getUnixTime(getFromDate(range));
-      const to   = getUnixTime(new Date());
-      const resolution = getFinnhubResolution(range);
-      const isIntraday = resolution === '5' || resolution === '30';
+      try {
+        const from = getUnixTime(getFromDate(range));
+        const to   = getUnixTime(new Date());
+        const resolution = getFinnhubResolution(range);
+        const isIntraday = resolution === '5' || resolution === '30';
 
-      const data = await finnhub.getCandles(symbol, from, to, resolution);
+        const data = await finnhub.getCandles(symbol, from, to, resolution);
 
-      // Finnhub explicitly reports no data for this symbol/range — return empty
-      if (data.s === 'no_data' || !data.t || data.t.length === 0) return [];
+        // Finnhub explicitly reports no data for this symbol/range — return empty
+        if (data.s === 'no_data' || !data.t || data.t.length === 0) return [];
 
-      return data.t.map((time: number, i: number) => ({
-        time: isIntraday ? time : format(new Date(time * 1000), 'yyyy-MM-dd'),
-        open:   data.o[i],
-        high:   data.h[i],
-        low:    data.l[i],
-        close:  data.c[i],
-        volume: data.v[i],
-      }));
+        return data.t.map((time: number, i: number) => ({
+          time: isIntraday ? time : format(new Date(time * 1000), 'yyyy-MM-dd'),
+          open:   data.o[i],
+          high:   data.h[i],
+          low:    data.l[i],
+          close:  data.c[i],
+          volume: data.v[i],
+        }));
+      } catch {
+        return [];
+      }
     },
+    enabled: !!symbol,
     staleTime: 5 * 60 * 1000,
   });
 }
