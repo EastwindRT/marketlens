@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, TrendingUp, TrendingDown } from 'lucide-react';
-import { executeBuy, executeSell, getHoldings } from '../../api/supabase';
+import { executeBuy, executeSell } from '../../api/supabase';
 import { useLeagueStore } from '../../store/leagueStore';
 import { formatPrice } from '../../utils/formatters';
 
@@ -17,9 +17,13 @@ interface TradeModalProps {
 export default function TradeModal({
   symbol, exchange, companyName, currentPrice, currency = 'USD', onClose, onSuccess,
 }: TradeModalProps) {
-  const { player, updateCash } = useLeagueStore();
+  const { player } = useLeagueStore();
   const [mode, setMode] = useState<'BUY' | 'SELL'>('BUY');
+  const [priceMode, setPriceMode] = useState<'MARKET' | 'CUSTOM'>('MARKET');
   const [sharesInput, setSharesInput] = useState('');
+  const [customPriceInput, setCustomPriceInput] = useState('');
+  const [customDateInput, setCustomDateInput] = useState(''); // YYYY-MM-DD
+  const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
@@ -27,17 +31,29 @@ export default function TradeModal({
   if (!player) return null;
 
   const shares = parseFloat(sharesInput) || 0;
-  const total = shares * currentPrice;
-  const maxBuyShares = Math.floor((player.cash / currentPrice) * 100) / 100;
+  const customPrice = parseFloat(customPriceInput) || 0;
+  const effectivePrice = priceMode === 'CUSTOM' ? customPrice : currentPrice;
+  const total = shares * effectivePrice;
 
   async function handleTrade() {
     if (!shares || shares <= 0) { setError('Enter a valid number of shares'); return; }
+    if (priceMode === 'CUSTOM' && (!customPrice || customPrice <= 0)) {
+      setError('Enter a valid custom price'); return;
+    }
+
+    let tradedAt: string | undefined;
+    if (priceMode === 'CUSTOM' && customDateInput) {
+      const d = new Date(customDateInput);
+      if (isNaN(d.getTime())) { setError('Invalid date'); return; }
+      tradedAt = d.toISOString();
+    }
+
     setLoading(true);
     setError('');
 
     const result = mode === 'BUY'
-      ? await executeBuy(player!, symbol, exchange, shares, currentPrice)
-      : await executeSell(player!, symbol, exchange, shares, currentPrice);
+      ? await executeBuy(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)
+      : await executeSell(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined);
 
     setLoading(false);
     if (!result.success) {
@@ -45,9 +61,6 @@ export default function TradeModal({
       return;
     }
 
-    // Optimistically update local cash
-    const newCash = mode === 'BUY' ? player!.cash - total : player!.cash + total;
-    updateCash(newCash);
     setDone(true);
     setTimeout(() => { onSuccess?.(); onClose(); }, 1200);
   }
@@ -69,7 +82,7 @@ export default function TradeModal({
             {mode === 'BUY' ? 'Bought' : 'Sold'} {shares} {symbol}
           </p>
           <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-            {formatPrice(total, currency)} {mode === 'BUY' ? 'spent' : 'received'}
+            @ {formatPrice(effectivePrice, currency)}
           </p>
         </div>
       </Overlay>
@@ -95,10 +108,7 @@ export default function TradeModal({
       </div>
 
       {/* Buy / Sell toggle */}
-      <div
-        className="flex rounded-xl p-1 mb-5"
-        style={{ background: 'var(--bg-elevated)' }}
-      >
+      <div className="flex rounded-xl p-1 mb-4" style={{ background: 'var(--bg-elevated)' }}>
         {(['BUY', 'SELL'] as const).map((m) => (
           <button
             key={m}
@@ -107,8 +117,7 @@ export default function TradeModal({
             style={{
               background: mode === m ? (m === 'BUY' ? 'var(--color-up)' : 'var(--color-down)') : 'transparent',
               color: mode === m ? '#fff' : 'var(--text-secondary)',
-              border: 'none',
-              cursor: 'pointer',
+              border: 'none', cursor: 'pointer',
             }}
           >
             {m}
@@ -116,25 +125,67 @@ export default function TradeModal({
         ))}
       </div>
 
-      {/* Price info */}
-      <div className="flex justify-between items-center mb-4">
-        <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Current Price</span>
-        <span className="font-mono font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-          {formatPrice(currentPrice, currency)}
-        </span>
+      {/* Market / Custom price toggle */}
+      <div className="flex rounded-xl p-1 mb-4" style={{ background: 'var(--bg-elevated)' }}>
+        {(['MARKET', 'CUSTOM'] as const).map((pm) => (
+          <button
+            key={pm}
+            onClick={() => { setPriceMode(pm); setError(''); }}
+            className="flex-1 py-2 rounded-lg text-xs font-semibold transition-all"
+            style={{
+              background: priceMode === pm ? 'var(--accent-blue)' : 'transparent',
+              color: priceMode === pm ? '#fff' : 'var(--text-secondary)',
+              border: 'none', cursor: 'pointer',
+            }}
+          >
+            {pm === 'MARKET' ? 'Market price' : 'Custom entry'}
+          </button>
+        ))}
       </div>
 
-      <div className="flex justify-between items-center mb-5">
-        <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-          {mode === 'BUY' ? 'Available Cash' : 'Cash Balance'}
-        </span>
-        <span className="font-mono font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-          {formatPrice(player.cash)}
-        </span>
-      </div>
+      {/* Price info */}
+      {priceMode === 'MARKET' ? (
+        <div className="flex justify-between items-center mb-4">
+          <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Current Price</span>
+          <span className="font-mono font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+            {formatPrice(currentPrice, currency)}
+          </span>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2 mb-4">
+          <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>CUSTOM PRICE</label>
+          <input
+            type="number"
+            min="0"
+            step="0.0001"
+            value={customPriceInput}
+            onChange={(e) => { setCustomPriceInput(e.target.value); setError(''); }}
+            placeholder={String(currentPrice)}
+            className="px-4 rounded-xl outline-none text-base font-mono"
+            style={{
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-default)',
+              height: 44, color: 'var(--text-primary)',
+            }}
+          />
+          <label className="text-xs font-medium mt-1" style={{ color: 'var(--text-secondary)' }}>DATE (optional)</label>
+          <input
+            type="date"
+            value={customDateInput}
+            onChange={(e) => setCustomDateInput(e.target.value)}
+            max={new Date().toISOString().slice(0, 10)}
+            className="px-4 rounded-xl outline-none text-sm font-mono"
+            style={{
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-default)',
+              height: 44, color: 'var(--text-primary)',
+            }}
+          />
+        </div>
+      )}
 
       {/* Shares input */}
-      <div className="flex flex-col gap-2 mb-2">
+      <div className="flex flex-col gap-2 mb-4">
         <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>SHARES</label>
         <div
           className="flex items-center gap-3 px-4 rounded-xl"
@@ -155,20 +206,29 @@ export default function TradeModal({
             className="flex-1 bg-transparent outline-none text-base font-mono"
             style={{ color: 'var(--text-primary)' }}
           />
-          {mode === 'BUY' && (
-            <button
-              onClick={() => setSharesInput(String(maxBuyShares))}
-              className="text-xs font-medium px-2 py-1 rounded-lg"
-              style={{ background: 'var(--bg-hover)', color: 'var(--accent-blue-light)', border: 'none', cursor: 'pointer' }}
-            >
-              MAX
-            </button>
-          )}
         </div>
       </div>
 
+      {/* Note */}
+      <div className="flex flex-col gap-2 mb-4">
+        <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>NOTE (optional)</label>
+        <input
+          type="text"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Why this trade?"
+          maxLength={120}
+          className="px-4 rounded-xl outline-none text-sm"
+          style={{
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-default)',
+            height: 44, color: 'var(--text-primary)',
+          }}
+        />
+      </div>
+
       {/* Total */}
-      {shares > 0 && (
+      {shares > 0 && effectivePrice > 0 && (
         <div
           className="flex justify-between items-center px-4 py-3 rounded-xl mb-4"
           style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}
@@ -211,7 +271,7 @@ function Overlay({ children, onClose }: { children: React.ReactNode; onClose: ()
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
-        className="w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-6"
+        className="w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-6 max-h-[90vh] overflow-y-auto"
         style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
       >
         {children}

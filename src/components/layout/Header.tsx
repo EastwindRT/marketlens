@@ -138,7 +138,7 @@ export function Header({ onMenuClick }: HeaderProps) {
                   onClick={() => setShowLogin(true)}
                   className="flex items-center justify-center rounded-xl flex-shrink-0"
                   style={{ width: 44, height: 44, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
-                  title="Join the league"
+                  title="Sign in"
                 >
                   <User size={19} />
                 </button>
@@ -177,7 +177,7 @@ export function Header({ onMenuClick }: HeaderProps) {
                 onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
               >
                 <Trophy size={15} />
-                League
+                Portfolios
               </Link>
 
               {player ? (
@@ -227,13 +227,13 @@ export function Header({ onMenuClick }: HeaderProps) {
                   className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold"
                   style={{ background: 'var(--accent-blue)', color: '#fff', border: 'none', cursor: 'pointer' }}
                 >
-                  Join League
+                  Sign in
                 </button>
               )}
             </div>
           )}
 
-          {/* Spacer when no league nav */}
+          {/* Spacer when Supabase not configured */}
           {!SUPABASE_CONFIGURED && <div style={{ width: 140, flexShrink: 0 }} />}
         </div>
 

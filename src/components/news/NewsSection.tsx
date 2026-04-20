@@ -10,6 +10,8 @@ import type { NewsItem, AnalystRecommendation, PriceTarget, EarningsSurprise, Ed
 import type { CongressTrade } from '../../api/congress';
 import { FilingSheet } from '../ui/FilingSheet';
 import type { MarketFiling } from '../../api/edgar';
+import { DeepAnalyzeDrawer, type DeepAnalyzeTarget } from '../ai/DeepAnalyzeDrawer';
+import { DeepAnalyzeButton } from '../ai/DeepAnalyzeButton';
 
 interface Props {
   symbol: string;
@@ -23,6 +25,7 @@ type Tab = 'news' | 'analyst' | 'filings' | 'congress';
 export function NewsSection({ symbol, isCanadian, currentPrice, currency = 'USD' }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('news');
   const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
+  const [deepTarget, setDeepTarget] = useState<DeepAnalyzeTarget | null>(null);
   const { data: news, isLoading: newsLoading } = useStockNews(symbol);
   const { recs, target, earnings } = useAnalystData(symbol);
   const { data: filings, isLoading: filingsLoading } = useEdgarFilings(symbol, isCanadian);
@@ -85,6 +88,7 @@ export function NewsSection({ symbol, isCanadian, currentPrice, currency = 'USD'
           loading={newsLoading}
           isCanadian={isCanadian}
           symbol={symbol}
+          onDeepAnalyze={(item) => setDeepTarget({ type: 'news', symbol, news: item })}
         />
       )}
       {activeTab === 'analyst' && (
@@ -116,6 +120,11 @@ export function NewsSection({ symbol, isCanadian, currentPrice, currency = 'USD'
       )}
 
       <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
+      <DeepAnalyzeDrawer
+        open={deepTarget !== null}
+        onClose={() => setDeepTarget(null)}
+        target={deepTarget}
+      />
     </div>
   );
 }
@@ -127,11 +136,13 @@ function NewsTab({
   loading,
   isCanadian,
   symbol,
+  onDeepAnalyze,
 }: {
   news: NewsItem[];
   loading: boolean;
   isCanadian: boolean;
   symbol: string;
+  onDeepAnalyze: (item: NewsItem) => void;
 }) {
   const [visibleCount, setVisibleCount] = useState(8);
 
@@ -165,48 +176,61 @@ function NewsTab({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {visible.map((item, i) => (
-        <a
+        <div
           key={item.id ?? i}
-          href={item.url}
-          target="_blank"
-          rel="noopener noreferrer"
           style={{
-            display: 'flex', gap: 12, padding: 14, borderRadius: 12, textDecoration: 'none',
+            display: 'flex', gap: 12, padding: 14, borderRadius: 12,
             background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
             transition: 'border-color 150ms',
           }}
           onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
           onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
         >
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-              <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                {item.source}
-              </span>
-              <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0, marginLeft: 8 }}>
-                {format(fromUnixTime(item.datetime), 'MMM d')}
-              </span>
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'flex', gap: 12, flex: 1, minWidth: 0, textDecoration: 'none',
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {item.source}
+                </span>
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0, marginLeft: 8 }}>
+                  {format(fromUnixTime(item.datetime), 'MMM d')}
+                </span>
+              </div>
+              <p style={{
+                fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.45,
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+                marginBottom: 0,
+              }}>
+                {item.headline}
+              </p>
             </div>
-            <p style={{
-              fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.45,
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-              marginBottom: 0,
-            }}>
-              {item.headline}
-            </p>
-          </div>
-          {item.image && (
-            <img
-              src={item.image}
-              alt=""
-              style={{ width: 56, height: 56, borderRadius: 8, objectFit: 'cover', flexShrink: 0, background: 'var(--bg-surface)' }}
-              onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            {item.image && (
+              <img
+                src={item.image}
+                alt=""
+                style={{ width: 56, height: 56, borderRadius: 8, objectFit: 'cover', flexShrink: 0, background: 'var(--bg-surface)' }}
+                onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+            )}
+          </a>
+          <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+            <DeepAnalyzeButton
+              variant="icon"
+              onClick={() => onDeepAnalyze(item)}
+              title="Deep analyze this story with Claude"
             />
-          )}
-        </a>
+          </div>
+        </div>
       ))}
       {hasMore && (
         <button
@@ -431,16 +455,20 @@ function FilingsTab({
 
   if (loading) return <FilingsSkeleton />;
 
-  const formColor = (form: string): { bg: string; color: string; border: string } => {
-    if (form.startsWith('13D') || form.startsWith('SC 13D') || form.startsWith('SCHEDULE 13D')) {
+  const formColor = (form: string | undefined | null): { bg: string; color: string; border: string } => {
+    const f = form ?? '';
+    if (f.startsWith('13D') || f.startsWith('SC 13D') || f.startsWith('SCHEDULE 13D')) {
       return { bg: 'rgba(247,147,26,0.12)', color: '#F7931A', border: 'rgba(247,147,26,0.25)' };
     }
     return { bg: 'rgba(45,107,255,0.12)', color: 'var(--accent-blue-light)', border: 'rgba(45,107,255,0.25)' };
   };
 
+  // Defensive: filter out any malformed entries before rendering
+  const safeFilings = (filings ?? []).filter(f => f && typeof f === 'object');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {filings.length === 0 ? (
+      {safeFilings.length === 0 ? (
         <div style={{ padding: '20px 0' }}>
           <p style={{ color: 'var(--text-tertiary)', fontSize: 13, marginBottom: 8 }}>No 13D/13G filings found in the past 2 years.</p>
           <a
@@ -453,7 +481,7 @@ function FilingsTab({
           </a>
         </div>
       ) : (
-        filings.map((f, i) => {
+        safeFilings.map((f, i) => {
           const fc = formColor(f.formType);
           return (
             <button
@@ -473,11 +501,11 @@ function FilingsTab({
                 background: fc.bg, color: fc.color, border: `1px solid ${fc.border}`,
                 fontFamily: "'Roboto Mono', monospace",
               }}>
-                {f.formType}
+                {f.formType || '—'}
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {f.filerName}
+                  {f.filerName || 'Unknown filer'}
                 </p>
                 <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '2px 0 0', fontFamily: "'Roboto Mono', monospace" }}>
                   Filed {f.filedDate}

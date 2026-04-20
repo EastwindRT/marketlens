@@ -10,10 +10,11 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 export interface Player {
   id: string;
   name: string;
-  pin: string;
-  google_email?: string;
+  pin?: string | null;            // legacy — unused for new accounts
+  google_email?: string | null;
+  display_name?: string | null;   // preferred display name (defaults to name)
   avatar_color: string;
-  cash: number;
+  cash?: number | null;           // legacy — ignored; unlimited theoretical dollars
   created_at: string;
 }
 
@@ -78,6 +79,49 @@ export async function signOutGoogle(): Promise<void> {
   await supabase.auth.signOut();
 }
 
+// Auto-create a player row for a newly authenticated Google user.
+// Idempotent — safe to call on every session restore.
+const AVATAR_PALETTE = ['#1652F0', '#05B169', '#F6465D', '#F0A716', '#9B59B6', '#E67E22', '#1ABC9C', '#E74C3C', '#6366F1', '#14B8A6'];
+
+export async function ensurePlayerForSession(session: {
+  user: { email?: string | null; user_metadata?: Record<string, unknown> };
+}): Promise<Player | null> {
+  const email = session.user.email?.toLowerCase();
+  if (!email) return null;
+
+  // Existing?
+  const existing = await getPlayerByGoogleEmail(email);
+  if (existing) return existing;
+
+  // Derive a name from Google metadata; fall back to email local-part.
+  const meta = session.user.user_metadata ?? {};
+  const metaName = (meta.full_name ?? meta.name ?? meta.user_name ?? '') as string;
+  const localPart = email.split('@')[0];
+  const displayName = (metaName || localPart).trim() || 'Trader';
+
+  // Deterministic avatar colour from email hash for visual continuity.
+  let hash = 0;
+  for (let i = 0; i < email.length; i++) hash = (hash * 31 + email.charCodeAt(i)) | 0;
+  const avatarColor = AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
+
+  const { data, error } = await supabase
+    .from('players')
+    .insert({
+      name: displayName,
+      display_name: displayName,
+      google_email: email,
+      avatar_color: avatarColor,
+    })
+    .select('*')
+    .single();
+
+  if (error) {
+    // Race condition — another tab created it. Fetch again.
+    return getPlayerByGoogleEmail(email);
+  }
+  return data;
+}
+
 // ── Player queries ────────────────────────────────────────────────────────────
 
 export async function getAllPlayers(): Promise<Player[]> {
@@ -89,12 +133,11 @@ export async function getAllPlayers(): Promise<Player[]> {
   return data ?? [];
 }
 
-export async function loginPlayer(name: string, pin: string): Promise<Player | null> {
+export async function getPlayerById(playerId: string): Promise<Player | null> {
   const { data, error } = await supabase
     .from('players')
     .select('*')
-    .eq('name', name)
-    .eq('pin', pin)
+    .eq('id', playerId)
     .single();
   if (error) return null;
   return data;
@@ -184,32 +227,30 @@ export async function replaceWatchlist(playerId: string, items: WatchlistInput[]
 
 // ── Trade execution ───────────────────────────────────────────────────────────
 
+// Trade execution — unlimited theoretical dollars, no cash balance concept.
+// `tradedAt` is optional and lets users backfill historical positions.
+
 export async function executeBuy(
   player: Player,
   symbol: string,
   exchange: string,
   shares: number,
-  price: number
+  price: number,
+  tradedAt?: string | null,
+  note?: string | null,
 ): Promise<{ success: boolean; error?: string }> {
-  const total = shares * price;
-  if (total > player.cash) {
-    return { success: false, error: `Insufficient funds. Need $${total.toFixed(2)}, have $${player.cash.toFixed(2)}` };
+  if (!(shares > 0) || !(price > 0)) {
+    return { success: false, error: 'Shares and price must be greater than zero.' };
   }
+  const total = shares * price;
 
-  // Deduct cash
-  const { error: cashError } = await supabase
-    .from('players')
-    .update({ cash: player.cash - total })
-    .eq('id', player.id);
-  if (cashError) return { success: false, error: cashError.message };
-
-  // Upsert holding (merge with existing)
+  // Upsert holding (merge with existing — weighted-average cost basis)
   const { data: existing } = await supabase
     .from('holdings')
     .select('*')
     .eq('player_id', player.id)
     .eq('symbol', symbol)
-    .single();
+    .maybeSingle();
 
   if (existing) {
     const newShares = existing.shares + shares;
@@ -226,11 +267,15 @@ export async function executeBuy(
     if (error) return { success: false, error: error.message };
   }
 
-  // Log trade
-  await supabase.from('trades').insert({
+  // Log trade (respect optional traded_at and note)
+  const tradeRow: Record<string, unknown> = {
     player_id: player.id, symbol, exchange,
     trade_type: 'BUY', shares, price, total,
-  });
+  };
+  if (tradedAt) tradeRow.traded_at = tradedAt;
+  if (note)     tradeRow.note = note;
+  const { error: tradeError } = await supabase.from('trades').insert(tradeRow);
+  if (tradeError) return { success: false, error: tradeError.message };
 
   return { success: true };
 }
@@ -240,27 +285,26 @@ export async function executeSell(
   symbol: string,
   exchange: string,
   shares: number,
-  price: number
+  price: number,
+  tradedAt?: string | null,
+  note?: string | null,
 ): Promise<{ success: boolean; error?: string }> {
+  if (!(shares > 0) || !(price > 0)) {
+    return { success: false, error: 'Shares and price must be greater than zero.' };
+  }
+
   const { data: existing } = await supabase
     .from('holdings')
     .select('*')
     .eq('player_id', player.id)
     .eq('symbol', symbol)
-    .single();
+    .maybeSingle();
 
   if (!existing || existing.shares < shares) {
     return { success: false, error: `Not enough shares. Have ${existing?.shares ?? 0}, trying to sell ${shares}` };
   }
 
   const total = shares * price;
-
-  // Add cash back
-  const { error: cashError } = await supabase
-    .from('players')
-    .update({ cash: player.cash + total })
-    .eq('id', player.id);
-  if (cashError) return { success: false, error: cashError.message };
 
   // Update or delete holding
   const newShares = existing.shares - shares;
@@ -274,10 +318,14 @@ export async function executeSell(
   }
 
   // Log trade
-  await supabase.from('trades').insert({
+  const tradeRow: Record<string, unknown> = {
     player_id: player.id, symbol, exchange,
     trade_type: 'SELL', shares, price, total,
-  });
+  };
+  if (tradedAt) tradeRow.traded_at = tradedAt;
+  if (note)     tradeRow.note = note;
+  const { error: tradeError } = await supabase.from('trades').insert(tradeRow);
+  if (tradeError) return { success: false, error: tradeError.message };
 
   return { success: true };
 }
@@ -295,39 +343,21 @@ export async function getPlayerTrades(playerId: string): Promise<Trade[]> {
 }
 
 export async function adminResetPlayer(playerId: string): Promise<void> {
-  // Delete trades and holdings, reset cash to starting amount
+  // Wipe trades + holdings — player row stays so they can continue.
   await supabase.from('trades').delete().eq('player_id', playerId);
   await supabase.from('holdings').delete().eq('player_id', playerId);
-  const { error } = await supabase
-    .from('players')
-    .update({ cash: 1000 })
-    .eq('id', playerId);
-  if (error) throw error;
 }
 
 export async function adminResetAll(): Promise<void> {
   await supabase.from('trades').delete().neq('id', '00000000-0000-0000-0000-000000000000');
   await supabase.from('holdings').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  const { error } = await supabase
-    .from('players')
-    .update({ cash: 1000 })
-    .neq('id', '00000000-0000-0000-0000-000000000000');
-  if (error) throw error;
 }
 
 export async function adminUndoTrade(trade: Trade): Promise<void> {
-  // Fetch current player cash
-  const { data: player, error: playerErr } = await supabase
-    .from('players').select('cash').eq('id', trade.player_id).single();
-  if (playerErr || !player) throw playerErr ?? new Error('Player not found');
-
+  // With unlimited theoretical dollars, undoing only touches the holding row.
   if (trade.trade_type === 'BUY') {
-    // Reverse a buy: refund cash, reduce shares
-    const newCash = player.cash + trade.total;
-    await supabase.from('players').update({ cash: newCash }).eq('id', trade.player_id);
-
     const { data: holding } = await supabase
-      .from('holdings').select('*').eq('player_id', trade.player_id).eq('symbol', trade.symbol).single();
+      .from('holdings').select('*').eq('player_id', trade.player_id).eq('symbol', trade.symbol).maybeSingle();
     if (holding) {
       const newShares = holding.shares - trade.shares;
       if (newShares < 0.0001) {
@@ -337,12 +367,9 @@ export async function adminUndoTrade(trade: Trade): Promise<void> {
       }
     }
   } else {
-    // Reverse a sell: deduct cash, restore shares
-    const newCash = player.cash - trade.total;
-    await supabase.from('players').update({ cash: newCash }).eq('id', trade.player_id);
-
+    // Reverse a sell: restore shares.
     const { data: holding } = await supabase
-      .from('holdings').select('*').eq('player_id', trade.player_id).eq('symbol', trade.symbol).single();
+      .from('holdings').select('*').eq('player_id', trade.player_id).eq('symbol', trade.symbol).maybeSingle();
     if (holding) {
       await supabase.from('holdings').update({ shares: holding.shares + trade.shares }).eq('id', holding.id);
     } else {
@@ -364,13 +391,8 @@ export async function adminDeletePlayer(playerId: string): Promise<void> {
   if (error) throw error;
 }
 
-export async function adminSetCash(playerId: string, amount: number): Promise<void> {
-  const { error } = await supabase
-    .from('players')
-    .update({ cash: amount })
-    .eq('id', playerId);
-  if (error) throw error;
-}
+// adminSetCash removed — cash balance is no longer a concept. Keeping the export
+// would only invite reintroduction. Callers should be deleted along with this.
 
 // ── Recent trades (activity feed) ────────────────────────────────────────────
 

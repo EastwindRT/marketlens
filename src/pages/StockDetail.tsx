@@ -16,6 +16,8 @@ import { TimeRangePicker } from '../components/ui/TimeRangePicker';
 import { InsiderPanel } from '../components/insider/InsiderPanel';
 import { NewsSection } from '../components/news/NewsSection';
 import { PeerComparison } from '../components/stock/PeerComparison';
+import { DeepAnalyzeDrawer, type DeepAnalyzeTarget } from '../components/ai/DeepAnalyzeDrawer';
+import { DeepAnalyzeButton } from '../components/ai/DeepAnalyzeButton';
 import { TrendLinesLegend } from '../components/chart/TrendLines';
 import { PriceHeaderSkeleton } from '../components/ui/LoadingSkeleton';
 import TradeModal from '../components/trade/TradeModal';
@@ -35,6 +37,7 @@ export default function StockDetail() {
   const { hasItem, addItem, removeItem } = useWatchlistStore();
   const { player } = useLeagueStore();
   const [showTradeModal, setShowTradeModal] = useState(false);
+  const [deepTarget, setDeepTarget] = useState<DeepAnalyzeTarget | null>(null);
 
   const { data: candles, isLoading: candlesLoading, error: candlesError, refetch: refetchCandles } = useStockCandles(symbol, timeRange);
   const { data: quote, isLoading: quoteLoading } = useStockQuote(symbol);
@@ -275,6 +278,27 @@ export default function StockDetail() {
             fundamentals: aiFundamentals ? { ...aiFundamentals, currentPrice: quote?.c } : undefined,
           }}
         />
+        <div style={{ marginTop: 12 }}>
+          <DeepAnalyzeButton
+            variant="full"
+            onClick={() => setDeepTarget({
+              type: 'stock',
+              symbol,
+              context: {
+                price: quote?.c ? `${currency === 'CAD' ? 'CA$' : 'US$'}${quote.c}` : undefined,
+                priceRaw: quote?.c,
+                change: quote?.dp != null ? `${quote.dp >= 0 ? '+' : ''}${quote.dp.toFixed(2)}%` : undefined,
+                marketCap,
+                volume: volumeDisplay,
+                exchange: isCanadian ? (quote?._exchange || 'TSX') : (profile?.exchange || 'NASDAQ'),
+                insiders: insiders || [],
+                candles: (candles || []).slice(-90),
+                news: (news || []).slice(0, 8),
+                fundamentals: aiFundamentals ? { ...aiFundamentals, currentPrice: quote?.c } : undefined,
+              },
+            })}
+          />
+        </div>
       </div>
 
       {/* ── Peer Comparison ── */}
@@ -295,6 +319,12 @@ export default function StockDetail() {
       </div>
 
       {/* Trade modal */}
+      <DeepAnalyzeDrawer
+        open={deepTarget !== null}
+        onClose={() => setDeepTarget(null)}
+        target={deepTarget}
+      />
+
       {showTradeModal && quote?.c && (
         <TradeModal
           symbol={symbol}

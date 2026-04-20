@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
-import { Minus, Star, X, Trophy, Users, TrendingUp, TrendingDown, Shield, User, Newspaper, Building2, Briefcase, CircleDollarSign } from 'lucide-react';
+import { Minus, Star, X, Trophy, Users, TrendingUp, TrendingDown, Shield, User, Newspaper, Building2, Briefcase, CircleDollarSign, Plus } from 'lucide-react';
+import AddPositionModal from '../trade/AddPositionModal';
 import { useWatchlistStore } from '../../store/watchlistStore';
 import { useLeagueStore } from '../../store/leagueStore';
 import { useStockQuote } from '../../hooks/useStockData';
@@ -12,8 +13,8 @@ import type { Player, Holding } from '../../api/supabase';
 const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-const ADMIN_PIN = import.meta.env.VITE_ADMIN_PIN ?? 'eastwind2025';
-const STARTING_CASH = 1000;
+const ADMIN_EMAILS: string[] = (import.meta.env.VITE_ADMIN_EMAILS ?? 'renjith914@gmail.com')
+  .split(',').map((e: string) => e.trim().toLowerCase()).filter(Boolean);
 
 // Curated S&P 500 movers list — well-known, high-volume stocks
 const SP_SYMBOLS = ['NVDA', 'TSLA', 'META', 'AMZN', 'GOOGL', 'AAPL', 'MSFT', 'AMD', 'JPM', 'BAC'];
@@ -133,11 +134,10 @@ function NavLink({ to, icon, label, onClose }: { to: string; icon: React.ReactNo
 }
 
 // ── Player row ────────────────────────────────────────────────────────────────
-function PlayerRow({ player, rank, gainPct, isMe, onClose }: {
-  player: Player; rank: number; gainPct: number; isMe: boolean; onClose?: () => void;
+function PlayerRow({ player, rank, positions, isMe, onClose }: {
+  player: Player; rank: number; positions: number; isMe: boolean; onClose?: () => void;
 }) {
   const navigate = useNavigate();
-  const isUp = gainPct >= 0;
   const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : null;
 
   return (
@@ -168,8 +168,8 @@ function PlayerRow({ player, rank, gainPct, isMe, onClose }: {
         {player.name}
         {isMe && <span style={{ marginLeft: 4, fontSize: 9, background: 'var(--accent-blue)', color: '#fff', padding: '1px 4px', borderRadius: 99 }}>you</span>}
       </span>
-      <span style={{ fontSize: 11, fontWeight: 600, fontFamily: 'Roboto Mono, monospace', color: isUp ? 'var(--color-up)' : 'var(--color-down)', flexShrink: 0 }}>
-        {isUp ? '+' : ''}{gainPct.toFixed(1)}%
+      <span style={{ fontSize: 11, fontWeight: 600, fontFamily: 'Roboto Mono, monospace', color: 'var(--text-tertiary)', flexShrink: 0 }}>
+        {positions} pos
       </span>
     </div>
   );
@@ -253,9 +253,10 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
   const [players, setPlayers] = useState<Player[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [topMovers, setTopMovers] = useState<string[]>([]);
+  const [showAddPosition, setShowAddPosition] = useState(false);
 
   // Check admin — player name matches 'eastwind' (case-insensitive)
-  const isAdmin = !!me && me.name.toLowerCase() === 'eastwind';
+  const isAdmin = !!me?.google_email && ADMIN_EMAILS.includes(me.google_email.toLowerCase());
 
   useEffect(() => {
     if (!SUPABASE_CONFIGURED) return;
@@ -264,16 +265,14 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
       .catch(() => {});
   }, [me]);
 
-  // Build ranked player list (no live prices for sidebar — use avg_cost as proxy)
+  // Players list (no live prices in sidebar — rank by # positions as proxy)
   const rankedPlayers = players
     .map(p => {
       const myH = holdings.filter(h => h.player_id === p.id);
-      const invested = myH.reduce((s, h) => s + h.shares * h.avg_cost, 0);
-      const total = p.cash + invested;
-      const gainPct = ((total - STARTING_CASH) / STARTING_CASH) * 100;
-      return { player: p, gainPct };
+      const positions = myH.length;
+      return { player: p, gainPct: 0, positions };
     })
-    .sort((a, b) => b.gainPct - a.gainPct);
+    .sort((a, b) => b.positions - a.positions);
 
   return (
     <aside style={{
@@ -295,18 +294,29 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
 
       <Divider />
 
-      {/* ── League nav (hidden, admin only) ── */}
-      {SUPABASE_CONFIGURED && isAdmin && (
+      {/* ── Portfolio nav ── */}
+      {SUPABASE_CONFIGURED && (
         <>
-          <NavLink to="/leaderboard" icon={<Trophy size={14} />} label="League" onClose={onClose} />
-          {me && <NavLink to="/portfolio" icon={<User size={14} />} label="My Portfolio" onClose={onClose} />}
-          <NavLink to="/admin" icon={<Shield size={14} />} label="Admin" onClose={onClose} />
-          <Divider />
-        </>
-      )}
-      {SUPABASE_CONFIGURED && !isAdmin && me && (
-        <>
-          <NavLink to="/portfolio" icon={<User size={14} />} label="My Portfolio" onClose={onClose} />
+          <NavLink to="/leaderboard" icon={<Trophy size={14} />} label="Portfolios" onClose={onClose} />
+          {me && (
+            <>
+              <NavLink to="/portfolio" icon={<User size={14} />} label="My Portfolio" onClose={onClose} />
+              <div style={{ padding: '2px 8px 8px' }}>
+                <button
+                  onClick={() => setShowAddPosition(true)}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '7px 12px', borderRadius: 10, cursor: 'pointer',
+                    background: 'var(--accent-blue)', color: '#fff',
+                    border: 'none', fontSize: 12, fontWeight: 600,
+                  }}
+                >
+                  <Plus size={13} /> Add Position
+                </button>
+              </div>
+            </>
+          )}
+          {isAdmin && <NavLink to="/admin" icon={<Shield size={14} />} label="Admin" onClose={onClose} />}
           <Divider />
         </>
       )}
@@ -344,13 +354,13 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
       {/* ── Players ── */}
       {SUPABASE_CONFIGURED && rankedPlayers.length > 0 && (
         <>
-          <SectionHeader icon={<Users size={11} />} label="Players" />
-          {rankedPlayers.map(({ player, gainPct }, i) => (
+          <SectionHeader icon={<Users size={11} />} label="Members" />
+          {rankedPlayers.map(({ player, positions }, i) => (
             <PlayerRow
               key={player.id}
               player={player}
               rank={i + 1}
-              gainPct={gainPct}
+              positions={positions}
               isMe={player.id === me?.id}
               onClose={onClose}
             />
@@ -372,6 +382,10 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
       </div>
 
       <div style={{ height: 24 }} />
+
+      {showAddPosition && (
+        <AddPositionModal onClose={() => setShowAddPosition(false)} />
+      )}
     </aside>
   );
 }

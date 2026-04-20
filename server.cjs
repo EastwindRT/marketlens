@@ -932,6 +932,257 @@ async function callAI(provider, apiKey, filingText) {
   throw new Error(`Unknown provider: ${provider}`);
 }
 
+// ── Deep Analyze (Claude Sonnet) ─────────────────────────────────────────────
+// Dedicated long-form analysis endpoint. Uses Anthropic Claude Sonnet 4.5
+// (override via CLAUDE_MODEL env var). Returns markdown text rather than JSON
+// so the client can render a long structured briefing.
+
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
+
+async function callClaude(systemPrompt, userPrompt, { maxTokens = 2500, temperature = 0.4 } = {}) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('Deep analysis not configured — ANTHROPIC_API_KEY missing.');
+
+  const body = JSON.stringify({
+    model: CLAUDE_MODEL,
+    max_tokens: maxTokens,
+    temperature,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }],
+  });
+
+  return withRetry(() => new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'api.anthropic.com',
+        path: '/v1/messages',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (c) => (data += c));
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'error' || parsed.error) {
+              return reject(new Error(parsed.error?.message ?? 'Claude API error'));
+            }
+            const text = parsed.content?.[0]?.text;
+            if (!text) return reject(new Error('Empty Claude response'));
+            resolve(text);
+          } catch {
+            reject(new Error('Invalid Claude response'));
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.setTimeout(90000, () => { req.destroy(); reject(new Error('Claude API timeout')); });
+    req.write(body);
+    req.end();
+  }), { retries: 1, baseMs: 1000, label: 'claude' });
+}
+
+const DEEP_ANALYZE_STOCK_PROMPT = `You are a senior buy-side equity analyst writing a long-form deep dive for a portfolio manager. You have access to live market, technical, fundamental, insider, and news context for the stock below. Produce a thorough, specific, actionable briefing.
+
+STRUCTURE (use these markdown headers exactly, in this order — skip a section only if the context truly has no data for it):
+
+## Thesis
+Two or three sentences. The single strongest read on this stock right now. Name the setup, the driver, and the edge.
+
+## What the Data Says
+Walk through the live context: price action and trend, key technical levels, valuation vs peers/history, insider flow, recent news catalysts. Cite specific numbers. Call out where the data agrees and where it conflicts.
+
+## Bull Case
+3-5 bullets. Each bullet leads with the catalyst or lever, then explains the mechanism and the specific evidence from the context.
+
+## Bear Case
+3-5 bullets. Same structure — be equally rigorous. Name what breaks the thesis.
+
+## Key Levels & Triggers
+Bulleted list. Support, resistance, technical triggers, upcoming dates (earnings, filings, guidance), and the price points where the thesis is proven or invalidated.
+
+## Bottom Line
+One or two sentences — direction, conviction, and the single thing to watch next.
+
+RULES:
+- Use **bold** for key numbers, names, and levels.
+- Never include generic disclaimers ("consult a financial advisor", "past performance", "do your own research").
+- If a section has no supporting data, write a single italic line ("_No supporting data in context._") rather than fabricating.
+- Keep total length 500-900 words.
+- Write like a sharp hedge-fund morning note — dense, specific, no filler.`;
+
+const DEEP_ANALYZE_FILING_PROMPT = `You are a senior event-driven equity analyst. A 13D/13G filing just landed. Produce a thorough deep dive for a portfolio manager who needs to decide whether to act.
+
+STRUCTURE (use these markdown headers exactly, skip if no data):
+
+## What Just Happened
+Two or three sentences. Plain-English read of who filed what, the stake size, and the immediate implication.
+
+## Filer Profile
+Who is the filer — activist, passive, strategic, known history? What does this filer typically do after a 5%+ filing?
+
+## Likely Playbook
+3-5 bullets. The most plausible scenarios: board seats, buyback push, sale of the company, spinoff, cost cuts, strategic review. Rank by likelihood and cite specific clues from the filing text or filer history.
+
+## Market Reaction Read
+How does the stock typically react to this filer / this form type? What's the usual timeline from filing to the inflection point?
+
+## Risks & Counter-Scenarios
+3-5 bullets. What could make this a false signal (passive rebalance, tax-driven, index-driven)? How to tell fast?
+
+## Bottom Line
+One or two sentences — is this tradable, and what's the setup.
+
+RULES:
+- Use **bold** for key numbers, filer names, and stake sizes.
+- Quote the filing directly if you see a revealing phrase.
+- Never include generic disclaimers.
+- Keep total length 400-700 words.
+- If a section has no supporting data, write a single italic line ("_No supporting data in context._") rather than guessing.`;
+
+const DEEP_ANALYZE_NEWS_PROMPT = `You are a senior sell-side analyst writing a same-day reaction note to a news headline. A PM has flagged this story and wants a sharp deep-dive in under 90 seconds of reading.
+
+STRUCTURE (use these markdown headers exactly):
+
+## The Story
+One or two sentences. What actually happened in plain English — strip the headline hype.
+
+## Why It Matters
+3-5 bullets. The specific mechanisms by which this moves the stock or sector. Name the second-order effects.
+
+## Reading Between the Lines
+What is the market likely to miss or mis-price? Where's the edge — is this bigger, smaller, or different than the headline implies?
+
+## Trade Implications
+Bulleted list. Direct beneficiaries, direct losers, pair-trade ideas, options setups if relevant. Be specific with tickers.
+
+## Risks to the Read
+2-3 bullets. What would invalidate this take?
+
+## Bottom Line
+One sentence — direction and conviction.
+
+RULES:
+- Use **bold** for tickers, numbers, and names.
+- Never include generic disclaimers.
+- Keep total length 300-600 words.
+- If a section has no supporting data, write a single italic line ("_No supporting data in context._") rather than guessing.`;
+
+function buildDeepStockContext(symbol, context) {
+  const lines = [`SYMBOL: ${symbol}`];
+  const quick = [];
+  if (context?.price)     quick.push(`Price ${context.price}`);
+  if (context?.change)    quick.push(`Day change ${context.change}`);
+  if (context?.marketCap) quick.push(`Market Cap ${context.marketCap}`);
+  if (context?.volume)    quick.push(`Volume ${context.volume}`);
+  if (context?.exchange)  quick.push(`Exchange ${context.exchange}`);
+  if (quick.length) lines.push(`MARKET SNAPSHOT: ${quick.join(' · ')}`);
+
+  if (context?.candles?.length) {
+    lines.push('\n--- TECHNICAL READ ---');
+    lines.push(summarizeTechnicals(context.candles));
+  }
+  if (context?.fundamentals) {
+    const f = { ...context.fundamentals };
+    if (!Number.isFinite(f.currentPrice) && context?.priceRaw) {
+      f.currentPrice = Number(context.priceRaw);
+    }
+    const block = summarizeFundamentals(f);
+    if (block) {
+      lines.push('\n--- FUNDAMENTALS & ANALYST VIEW ---');
+      lines.push(block);
+    }
+  }
+  if (context?.insiders?.length) {
+    lines.push('\n--- INSIDER FLOW ---');
+    lines.push(summarizeInsiders(context.insiders));
+  }
+  if (context?.news?.length) {
+    lines.push('\n--- RECENT NEWS ---');
+    lines.push(summarizeNews(context.news));
+  }
+  return lines.join('\n');
+}
+
+function buildDeepFilingContext(filing) {
+  const parts = [];
+  parts.push(`FORM TYPE: ${filing?.formType || 'unknown'}`);
+  if (filing?.filedDate) parts.push(`FILED: ${filing.filedDate}`);
+  if (filing?.filerName) parts.push(`FILER: ${filing.filerName}`);
+  if (filing?.subjectCompany) parts.push(`TARGET COMPANY: ${filing.subjectCompany}`);
+  if (filing?.accessionNo) parts.push(`ACCESSION: ${filing.accessionNo}`);
+  if (filing?.edgarUrl) parts.push(`EDGAR URL: ${filing.edgarUrl}`);
+  return parts.join('\n');
+}
+
+function buildDeepNewsContext(news, symbol) {
+  const parts = [];
+  if (symbol) parts.push(`RELATED SYMBOL: ${symbol}`);
+  if (news?.source) parts.push(`SOURCE: ${news.source}`);
+  if (news?.datetime) {
+    const d = new Date(news.datetime * 1000);
+    parts.push(`PUBLISHED: ${d.toISOString().slice(0, 10)}`);
+  }
+  if (news?.headline) parts.push(`HEADLINE: ${news.headline}`);
+  if (news?.summary)  parts.push(`\nSUMMARY:\n${news.summary}`);
+  if (news?.url)      parts.push(`\nURL: ${news.url}`);
+  return parts.join('\n');
+}
+
+app.post('/api/deep-analyze', async (req, res) => {
+  const { type, symbol, context, filing, news } = req.body ?? {};
+
+  if (!type || !['stock', 'filing', 'news'].includes(type)) {
+    return res.status(400).json({ error: 'type must be "stock" | "filing" | "news"' });
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(503).json({ error: 'Deep analysis not configured — ask your admin to set ANTHROPIC_API_KEY.' });
+  }
+
+  try {
+    let systemPrompt;
+    let userPrompt;
+    let cacheParts;
+
+    if (type === 'stock') {
+      if (!symbol) return res.status(400).json({ error: 'Missing symbol' });
+      systemPrompt = DEEP_ANALYZE_STOCK_PROMPT;
+      userPrompt = `Deep dive on ${symbol}.\n\nLIVE CONTEXT:\n${buildDeepStockContext(symbol, context || {})}`;
+      const priceBucket = context?.priceRaw ? Math.round(Number(context.priceRaw)) : 0;
+      cacheParts = { route: 'deep-stock', symbol, priceBucket };
+    } else if (type === 'filing') {
+      if (!filing) return res.status(400).json({ error: 'Missing filing' });
+      systemPrompt = DEEP_ANALYZE_FILING_PROMPT;
+      userPrompt = `Deep dive on this filing.\n\nFILING CONTEXT:\n${buildDeepFilingContext(filing)}`;
+      cacheParts = { route: 'deep-filing', accession: filing.accessionNo, form: filing.formType };
+    } else { // news
+      if (!news) return res.status(400).json({ error: 'Missing news' });
+      systemPrompt = DEEP_ANALYZE_NEWS_PROMPT;
+      userPrompt = `Deep dive on this news story.\n\nNEWS CONTEXT:\n${buildDeepNewsContext(news, symbol)}`;
+      cacheParts = { route: 'deep-news', id: news.id || news.url || news.headline, symbol: symbol || '' };
+    }
+
+    const cacheKey = aiCacheKey(cacheParts);
+    const cached = aiCacheGet(cacheKey);
+    if (cached) return res.json({ analysis: cached, cached: true, model: CLAUDE_MODEL });
+
+    const analysis = await callClaude(systemPrompt, userPrompt, { maxTokens: 2500, temperature: 0.4 });
+    aiCacheSet(cacheKey, analysis);
+    res.json({ analysis, cached: false, model: CLAUDE_MODEL });
+  } catch (err) {
+    console.error('[deep-analyze]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 app.post('/api/analyze-filing', async (req, res) => {
   const { edgarUrl } = req.body ?? {};
 

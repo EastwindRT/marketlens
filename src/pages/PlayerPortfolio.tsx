@@ -1,13 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowUpRight, ArrowDownRight, Briefcase } from 'lucide-react';
-import { getHoldings, getAllPlayers, supabase } from '../api/supabase';
-import { useLeagueStore } from '../store/leagueStore';
+import { ArrowLeft, ArrowUpRight, ArrowDownRight, Briefcase, Eye } from 'lucide-react';
+import { getHoldings, getPlayerById, getWatchlist, supabase } from '../api/supabase';
 import { useStockQuote } from '../hooks/useStockData';
-import type { Holding, Player } from '../api/supabase';
+import type { Holding, Player, WatchlistInput } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
-
-const STARTING_CASH = 1000;
 
 function HoldingRow({ holding }: { holding: Holding }) {
   const { data: quote } = useStockQuote(holding.symbol);
@@ -15,7 +12,7 @@ function HoldingRow({ holding }: { holding: Holding }) {
   const currentValue = currentPrice * holding.shares;
   const costBasis = holding.avg_cost * holding.shares;
   const gainLoss = currentValue - costBasis;
-  const gainPct = ((currentValue - costBasis) / costBasis) * 100;
+  const gainPct = costBasis > 0 ? ((currentValue - costBasis) / costBasis) * 100 : 0;
   const isUp = gainLoss >= 0;
 
   return (
@@ -59,6 +56,58 @@ function HoldingRow({ holding }: { holding: Holding }) {
   );
 }
 
+function WatchRow({ item }: { item: WatchlistInput }) {
+  const { data: quote } = useStockQuote(item.symbol);
+  const price = quote?.c;
+  const change = quote?.d ?? 0;
+  const changePct = quote?.dp ?? 0;
+  const isUp = change >= 0;
+
+  return (
+    <Link
+      to={`/stock/${item.symbol}`}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '12px 16px',
+        borderBottom: '1px solid var(--border-subtle)',
+        textDecoration: 'none',
+      }}
+    >
+      <div style={{
+        width: 36, height: 36, borderRadius: 10, flexShrink: 0,
+        background: 'var(--bg-elevated)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)',
+      }}>
+        {item.symbol.replace('.TO', '').slice(0, 4)}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{item.symbol}</div>
+        {item.name && (
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {item.name}
+          </div>
+        )}
+      </div>
+      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+        <div style={{ fontFamily: 'Roboto Mono, monospace', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+          {price ? formatPrice(price) : '—'}
+        </div>
+        {price != null && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 3,
+            fontSize: 11, fontWeight: 600, marginTop: 2,
+            color: isUp ? 'var(--color-up)' : 'var(--color-down)',
+          }}>
+            {isUp ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
+            {isUp ? '+' : ''}{changePct.toFixed(2)}%
+          </div>
+        )}
+      </div>
+    </Link>
+  );
+}
+
 function SymbolPrice({ symbol, onPrice }: { symbol: string; onPrice: (p: number) => void }) {
   const { data } = useStockQuote(symbol);
   useEffect(() => {
@@ -70,33 +119,27 @@ function SymbolPrice({ symbol, onPrice }: { symbol: string; onPrice: (p: number)
 export default function PlayerPortfolio() {
   const { playerId } = useParams<{ playerId: string }>();
   const navigate = useNavigate();
-  const { player: me } = useLeagueStore();
 
   const [player, setPlayer] = useState<Player | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [watchlist, setWatchlist] = useState<WatchlistInput[]>([]);
   const [priceMap, setPriceMap] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-
-  // If viewing own portfolio, redirect to /portfolio
-  useEffect(() => {
-    if (me && playerId === me.id) {
-      navigate('/portfolio', { replace: true });
-    }
-  }, [me, playerId]);
 
   useEffect(() => {
     if (!playerId) return;
     async function load() {
       try {
-        const [allPlayers, h] = await Promise.all([
-          getAllPlayers(),
+        const [p, h, w] = await Promise.all([
+          getPlayerById(playerId!),
           getHoldings(playerId!),
+          getWatchlist(playerId!),
         ]);
-        const found = allPlayers.find(p => p.id === playerId);
-        if (!found) { setError('Player not found.'); return; }
-        setPlayer(found);
+        if (!p) { setError('Player not found.'); return; }
+        setPlayer(p);
         setHoldings(h);
+        setWatchlist(w);
       } catch {
         setError('Could not load portfolio.');
       } finally {
@@ -105,10 +148,11 @@ export default function PlayerPortfolio() {
     }
     load();
 
-    // Real-time
     const sub = supabase
       .channel(`player-portfolio-${playerId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'holdings',
+        filter: `player_id=eq.${playerId}` }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlists',
         filter: `player_id=eq.${playerId}` }, load)
       .subscribe();
     return () => { supabase.removeChannel(sub); };
@@ -118,9 +162,9 @@ export default function PlayerPortfolio() {
   const holdingsValue = holdings.reduce((sum, h) => {
     return sum + h.shares * (priceMap[h.symbol] ?? h.avg_cost);
   }, 0);
-  const total = (player?.cash ?? 0) + holdingsValue;
-  const gain = total - STARTING_CASH;
-  const gainPct = (gain / STARTING_CASH) * 100;
+  const costBasis = holdings.reduce((sum, h) => sum + h.shares * h.avg_cost, 0);
+  const gain = holdingsValue - costBasis;
+  const gainPct = costBasis > 0 ? (gain / costBasis) * 100 : 0;
   const isUp = gain >= 0;
 
   if (loading) {
@@ -146,7 +190,6 @@ export default function PlayerPortfolio() {
 
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', paddingBottom: 32 }}>
-      {/* Price fetchers */}
       {symbols.map(sym => (
         <SymbolPrice key={sym} symbol={sym} onPrice={p => setPriceMap(prev => ({ ...prev, [sym]: p }))} />
       ))}
@@ -172,13 +215,13 @@ export default function PlayerPortfolio() {
             fontSize: 15, fontWeight: 700,
           }}
         >
-          {player.name[0].toUpperCase()}
+          {(player.display_name || player.name)[0].toUpperCase()}
         </div>
         <div>
           <h1 style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', margin: 0, letterSpacing: '-0.02em' }}>
-            {player.name}
+            {player.display_name || player.name}
           </h1>
-          <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '2px 0 0' }}>Portfolio</p>
+          <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '2px 0 0' }}>Public portfolio</p>
         </div>
       </div>
 
@@ -189,10 +232,10 @@ export default function PlayerPortfolio() {
           background: 'var(--bg-surface)', border: '1px solid var(--border-default)',
         }}>
           <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-            Total Portfolio
+            Portfolio Value
           </div>
           <div style={{ fontFamily: 'Roboto Mono, monospace', fontSize: 30, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em', margin: '4px 0 2px' }}>
-            ${total.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            ${holdingsValue.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, fontWeight: 600, color: isUp ? 'var(--color-up)' : 'var(--color-down)' }}>
             {isUp ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
@@ -201,15 +244,15 @@ export default function PlayerPortfolio() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border-subtle)' }}>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Cash</div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Cost Basis</div>
               <div style={{ fontFamily: 'Roboto Mono, monospace', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginTop: 2 }}>
-                {formatPrice(player.cash)}
+                {formatPrice(costBasis)}
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Invested</div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Positions</div>
               <div style={{ fontFamily: 'Roboto Mono, monospace', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginTop: 2 }}>
-                {formatPrice(holdingsValue)}
+                {holdings.length}
               </div>
             </div>
           </div>
@@ -217,7 +260,7 @@ export default function PlayerPortfolio() {
       </div>
 
       {/* Holdings */}
-      <div style={{ margin: '0 16px' }}>
+      <div style={{ margin: '0 16px 20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <Briefcase size={13} style={{ color: 'var(--text-tertiary)' }} />
           <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>
@@ -232,6 +275,25 @@ export default function PlayerPortfolio() {
             </div>
           ) : (
             holdings.map(h => <HoldingRow key={h.id} holding={h} />)
+          )}
+        </div>
+      </div>
+
+      {/* Watchlist */}
+      <div style={{ margin: '0 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <Eye size={13} style={{ color: 'var(--text-tertiary)' }} />
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>
+            Watchlist
+          </span>
+        </div>
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, overflow: 'hidden' }}>
+          {watchlist.length === 0 ? (
+            <div style={{ padding: '24px 20px', textAlign: 'center' }}>
+              <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: 0 }}>Watchlist is empty</p>
+            </div>
+          ) : (
+            watchlist.map(w => <WatchRow key={w.symbol} item={w} />)
           )}
         </div>
       </div>

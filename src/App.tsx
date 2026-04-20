@@ -18,7 +18,7 @@ const CongressPage      = lazy(() => import('./pages/Congress'))
 const FundsPage         = lazy(() => import('./pages/Funds'))
 import { useLeagueStore } from './store/leagueStore'
 import { useWatchlistStore } from './store/watchlistStore'
-import { supabase, getPlayerByGoogleEmail } from './api/supabase'
+import { supabase, ensurePlayerForSession } from './api/supabase'
 
 const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -40,9 +40,10 @@ export default function App() {
         return
       }
 
-      const found = await getPlayerByGoogleEmail(nextSession.user.email)
-      setPlayer(found ?? null)
-      await initializeWatchlist(found?.id ?? null)
+      // Create the player row on first login, return it on subsequent logins.
+      const player = await ensurePlayerForSession(nextSession)
+      setPlayer(player ?? null)
+      await initializeWatchlist(player?.id ?? null)
     }
 
     if (!SUPABASE_CONFIGURED) {
@@ -82,6 +83,7 @@ export default function App() {
           <Route path="/search" element={<Search />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/players" element={<Leaderboard />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
           <Route path="/admin" element={<Admin />} />

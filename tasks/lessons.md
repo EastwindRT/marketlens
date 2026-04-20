@@ -1,3 +1,51 @@
+## Lesson: 2026-04-19 — Auth-as-identity removes the PIN / display-name collision class
+
+**Observation:** The old league flow stored a plaintext PIN per player and treated the name string as the stable key. That meant two players could pick the same name, the PIN was an obvious leak surface, and any "whose portfolio is this?" UI had to carry both name and PIN around.
+**Root cause:** We conflated *identity* (who are you?) with *display* (what should we show?). PINs were standing in for identity because we hadn't wired Supabase Auth as the source of truth.
+**Rule:** When a feature needs public profiles, make the OAuth session the identity and lookup key (`auth.email()` → `players.google_email`). Keep `name`/`display_name` as purely presentational. Row-Level Security policies become trivial one-liners (`google_email = auth.email()`), writes are gated automatically, and the old PIN column can stay nullable for a non-destructive migration.
+
+---
+
+## Lesson: 2026-04-19 — "Unlimited cash" paper trading removes phantom cash bugs
+
+**Observation:** The original league gave each player $1,000 and computed portfolio return as `(cash + holdings − 1000) / 1000`. This silently broke on two axes: (1) admin-resets that didn't touch cash drifted over time, (2) users wanted to backfill "I actually bought this at $X in March" but that implied negative cash.
+**Root cause:** We were simulating a broker (cash ledger) when users actually wanted a *tracker* (here's what I own, show me how it's doing). A cash ledger only makes sense if the game constrains buying power — which we didn't want.
+**Rule:** For a tracking-style portfolio app, compute return as `(holdings value − cost basis) / cost basis` and drop the cash concept entirely. Allow trades to take an optional historical price + date so users can record positions they entered before they started using the app. This also collapses buy/sell code paths (no balance check, no reconciliation).
+
+---
+
+## Lesson: 2026-04-19 — Null-guard atom feed entries before calling string methods
+
+**Observation:** Canadian Filings tab crashed with "Cannot read properties of undefined (reading 'startsWith')". The crash fired inside `formColor(formType)` when SEDAR+ occasionally returned an entry without a `<form_type>` element.
+**Root cause:** Atom-feed entry shapes are provider-defined; assuming every field is populated breaks the first time an edge record ships through. The symptom (tab is blank with a red banner) looked like a server/data outage rather than a client-side TypeError.
+**Rule:** When rendering provider-supplied lists, guard at two layers: (1) filter malformed entries out at the list boundary (`safeFilings = filings.filter(f => f && f.formType)`), and (2) make render-time helpers accept `string | undefined | null` with a visible fallback (`formType ?? '—'`). Either layer alone leaves a gap — the filter can miss, or a render helper can forget the fallback.
+
+---
+
+## Lesson: 2026-04-19 — Two-model AI strategy: fast chat vs deep briefing
+
+**Observation:** Upgrading the existing `/api/ask-stock` endpoint to Claude Sonnet 4.5 would have made quick back-and-forth chat slow (20-40s instead of 3-5s) and expensive for casual questions.
+**Root cause:** "Ask AI" and "Deep Analyze" are different user intents. Ask AI is a conversational probe; Deep Analyze is a one-shot long-form briefing. Forcing both through one endpoint forces a bad trade-off on latency vs depth.
+**Rule:** When AI surfaces serve fundamentally different intents, split endpoints and pick the model per intent. Groq Llama 3.3 70B stays for Ask AI (low latency, conversational). Claude Sonnet 4.5 powers the separate Deep Analyze surface where users have explicit intent to wait 30s for a PM-grade note. This also means you can cache them with different keys and TTLs without cross-contamination.
+
+---
+
+## Lesson: 2026-04-19 — Avoid adding react-markdown for a single render surface
+
+**Observation:** Deep Analyze returns markdown. First instinct was `npm install react-markdown` (+ `remark-gfm` for lists). That adds ~35KB gzip and pulls 20+ transitive deps into the bundle.
+**Root cause:** react-markdown is a fully generic parser built for arbitrary markdown. Our use case is narrow and controlled: we write the prompt, so we know the subset of markdown the model will output (## headers, bullets, **bold**, *italic*, paragraphs, maybe `code`).
+**Rule:** For narrow, controlled markdown (internal or LLM-generated with a defined prompt contract), write an 80-line inline renderer that escapes HTML first, then applies a small allowlist via regex. Ship zero new deps, keep the bundle lean, and avoid a deep transitive tree. Only reach for react-markdown when you need full CommonMark + user-supplied content.
+
+---
+
+## Lesson: 2026-04-19 — Nested interactive elements break news-row layouts
+
+**Observation:** Adding a "Deep Analyze" button to each news item seemed like a 1-line change. But the news card was already an `<a>` wrapping the whole thing, and putting a `<button>` inside an `<a>` is invalid HTML — browsers render it but clicks can fire both handlers, accessibility tools get confused, and some browsers refuse to dispatch click on the inner button.
+**Root cause:** The "everything is a link" pattern only works until you want a second action per row.
+**Rule:** The moment a list-item needs a second interactive target, restructure from `<a>...</a>` to `<div><a>main content</a><button>secondary</button></div>`. The anchor and the button are siblings, each takes its own click, and there's no nested-interactive-element violation. Also works better with keyboard tab order.
+
+---
+
 ## Lesson: 2026-04-16 — AI answer quality is a context problem more than a model problem
 
 **Observation:** Ask AI chat was producing generic, shallow answers. First instinct was "upgrade the model." Audit revealed the real cause: the AI was only seeing ~20 days of technical data, 5 news headlines with no dates, 5 raw insider trades, no fundamentals, no analyst data, no earnings calendar — and a 512 max_tokens cap that forced compressed answers.

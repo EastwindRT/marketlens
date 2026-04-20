@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ExternalLink, X, Sparkles, RotateCcw } from 'lucide-react';
 import type { MarketFiling } from '../../api/edgar';
+import { DeepAnalyzeDrawer, type DeepAnalyzeTarget } from '../ai/DeepAnalyzeDrawer';
+import { DeepAnalyzeButton } from '../ai/DeepAnalyzeButton';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -191,6 +193,7 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<FilingAnalysis | null>(null);
+  const [deepTarget, setDeepTarget] = useState<DeepAnalyzeTarget | null>(null);
 
   // Reset when a new filing is opened
   useEffect(() => {
@@ -397,6 +400,13 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
               </div>
             </div>
           )}
+
+          {/* Deep Analyze (Claude Sonnet) — long-form briefing */}
+          <DeepAnalyzeButton
+            variant="full"
+            label="Deep Analyze this Filing"
+            onClick={() => setDeepTarget({ type: 'filing', filing })}
+          />
         </div>
 
         {/* View on EDGAR */}
@@ -414,6 +424,12 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
           View Full Filing on SEC EDGAR <ExternalLink size={14} />
         </a>
       </div>
+
+      <DeepAnalyzeDrawer
+        open={deepTarget !== null}
+        onClose={() => setDeepTarget(null)}
+        target={deepTarget}
+      />
     </>
   );
 }

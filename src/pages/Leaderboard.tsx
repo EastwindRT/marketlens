@@ -6,7 +6,7 @@ import { useLeagueStore } from '../store/leagueStore';
 import type { Player, Holding, Trade } from '../api/supabase';
 import { useStockQuote } from '../hooks/useStockData';
 
-const STARTING_CASH = 1000;
+// Cash system removed — returns are now computed as (holdings value − cost basis) / cost basis
 
 // ── Time ago ─────────────────────────────────────────────────────────────────
 function getTimeAgo(iso: string): string {
@@ -290,8 +290,9 @@ export default function Leaderboard() {
       const price = priceMap[h.symbol] ?? h.avg_cost;
       return sum + h.shares * price;
     }, 0);
-    const portfolioValue = player.cash + holdingsValue;
-    const gainPct = ((portfolioValue - STARTING_CASH) / STARTING_CASH) * 100;
+    const costBasis = myHoldings.reduce((sum, h) => sum + h.shares * h.avg_cost, 0);
+    const portfolioValue = holdingsValue;
+    const gainPct = costBasis > 0 ? ((portfolioValue - costBasis) / costBasis) * 100 : 0;
     return { player, holdings: myHoldings, portfolioValue, gainPct };
   });
   entries.sort((a, b) => b.portfolioValue - a.portfolioValue);
@@ -334,10 +335,10 @@ export default function Leaderboard() {
             fontSize: 22, fontWeight: 800, color: 'var(--text-primary)',
             letterSpacing: '-0.03em', margin: 0,
           }}>
-            League
+            Portfolios
           </h1>
           <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '2px 0 0' }}>
-            ${STARTING_CASH.toLocaleString()} starting · {players.length} players
+            Public portfolios · {players.length} members
           </p>
         </div>
         <button
