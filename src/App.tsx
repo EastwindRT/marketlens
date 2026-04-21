@@ -4,6 +4,7 @@ import type { Session } from '@supabase/supabase-js'
 import AppShell from './components/layout/AppShell'
 import Dashboard from './pages/Dashboard'
 import LoginModal from './components/auth/LoginModal'
+import ErrorBoundary from './components/ui/ErrorBoundary'
 
 // Lazy-load heavy pages to reduce initial bundle size
 const StockDetail       = lazy(() => import('./pages/StockDetail'))
@@ -41,9 +42,18 @@ export default function App() {
       }
 
       // Create the player row on first login, return it on subsequent logins.
-      const player = await ensurePlayerForSession(nextSession)
-      setPlayer(player ?? null)
-      await initializeWatchlist(player?.id ?? null)
+      // Don't let a failed lookup crash the whole app — log it loudly and
+      // continue with player=null so the session is still usable and the user
+      // sees routes (even if portfolio shows a skeleton) instead of a blank screen.
+      try {
+        const player = await ensurePlayerForSession(nextSession)
+        setPlayer(player ?? null)
+        await initializeWatchlist(player?.id ?? null)
+      } catch (err) {
+        console.error('[App] ensurePlayerForSession failed:', err)
+        setPlayer(null)
+        await initializeWatchlist(null)
+      }
     }
 
     if (!SUPABASE_CONFIGURED) {
@@ -97,27 +107,29 @@ export default function App() {
 
   return (
     <AppShell>
-      <Suspense fallback={
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh' }}>
-          <div style={{ width: 28, height: 28, borderRadius: '50%', border: '3px solid var(--border-default)', borderTopColor: 'var(--accent-blue)', animation: 'spin 0.75s linear infinite' }} />
-        </div>
-      }>
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/stock/:symbol" element={<StockDetail />} />
-          <Route path="/search" element={<Search />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/leaderboard" element={<Leaderboard />} />
-          <Route path="/players" element={<Leaderboard />} />
-          <Route path="/portfolio" element={<Portfolio />} />
-          <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
-          <Route path="/admin" element={<Admin />} />
-          <Route path="/news" element={<NewsPage />} />
-          <Route path="/insiders" element={<InsiderActivityPage />} />
-          <Route path="/congress" element={<CongressPage />} />
-          <Route path="/funds" element={<FundsPage />} />
-        </Routes>
-      </Suspense>
+      <ErrorBoundary label="route">
+        <Suspense fallback={
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh' }}>
+            <div style={{ width: 28, height: 28, borderRadius: '50%', border: '3px solid var(--border-default)', borderTopColor: 'var(--accent-blue)', animation: 'spin 0.75s linear infinite' }} />
+          </div>
+        }>
+          <Routes>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/stock/:symbol" element={<StockDetail />} />
+            <Route path="/search" element={<Search />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/leaderboard" element={<Leaderboard />} />
+            <Route path="/players" element={<Leaderboard />} />
+            <Route path="/portfolio" element={<Portfolio />} />
+            <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
+            <Route path="/admin" element={<Admin />} />
+            <Route path="/news" element={<NewsPage />} />
+            <Route path="/insiders" element={<InsiderActivityPage />} />
+            <Route path="/congress" element={<CongressPage />} />
+            <Route path="/funds" element={<FundsPage />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
     </AppShell>
   )
 }
