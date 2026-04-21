@@ -52,8 +52,14 @@ export default function App() {
       return
     }
 
-    // Restore existing session on load
+    // Restore existing session on load — with a 10-second timeout so a
+    // hung network request on mobile never leaves the app on a blank screen.
+    const sessionTimeout = setTimeout(() => {
+      setSession((prev) => (prev === undefined ? null : prev))
+    }, 10_000)
+
     supabase.auth.getSession().then(({ data }) => {
+      clearTimeout(sessionTimeout)
       void applySession(data.session ?? null)
     })
 
@@ -63,11 +69,26 @@ export default function App() {
       }
     )
 
-    return () => subscription.unsubscribe()
+    return () => { subscription.unsubscribe(); clearTimeout(sessionTimeout) }
   }, [initializeWatchlist, setPlayer])
 
-  // Still loading session
-  if (session === undefined) return null
+  // Still loading session — show spinner instead of blank screen
+  if (session === undefined) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100dvh', background: 'var(--bg-primary)',
+      }}>
+        <div style={{
+          width: 32, height: 32, borderRadius: '50%',
+          border: '3px solid var(--border-default)',
+          borderTopColor: 'var(--accent-blue)',
+          animation: 'spin 0.75s linear infinite',
+        }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
+  }
 
   // Not authenticated — show login wall
   if (!session && SUPABASE_CONFIGURED) {
@@ -76,7 +97,11 @@ export default function App() {
 
   return (
     <AppShell>
-      <Suspense fallback={null}>
+      <Suspense fallback={
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh' }}>
+          <div style={{ width: 28, height: 28, borderRadius: '50%', border: '3px solid var(--border-default)', borderTopColor: 'var(--accent-blue)', animation: 'spin 0.75s linear infinite' }} />
+        </div>
+      }>
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/stock/:symbol" element={<StockDetail />} />

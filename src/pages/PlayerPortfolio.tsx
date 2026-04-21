@@ -131,15 +131,22 @@ export default function PlayerPortfolio() {
     if (!playerId) return;
     async function load() {
       try {
-        const [p, h, w] = await Promise.all([
+        // Use allSettled so a failed watchlist/holdings fetch doesn't kill the whole page
+        const [pRes, hRes, wRes] = await Promise.allSettled([
           getPlayerById(playerId!),
           getHoldings(playerId!),
           getWatchlist(playerId!),
         ]);
-        if (!p) { setError('Player not found.'); return; }
+
+        const p = pRes.status === 'fulfilled' ? pRes.value : null;
+        if (!p) {
+          const reason = pRes.status === 'rejected' ? String(pRes.reason) : 'Player not found.';
+          setError(reason);
+          return;
+        }
         setPlayer(p);
-        setHoldings(h);
-        setWatchlist(w);
+        if (hRes.status === 'fulfilled') setHoldings(hRes.value);
+        if (wRes.status === 'fulfilled') setWatchlist(wRes.value);
       } catch {
         setError('Could not load portfolio.');
       } finally {

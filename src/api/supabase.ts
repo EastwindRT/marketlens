@@ -70,7 +70,7 @@ export async function getPlayerByGoogleEmail(email: string): Promise<Player | nu
     .from('players')
     .select('*')
     .eq('google_email', email.toLowerCase())
-    .single();
+    .maybeSingle();
   if (error) return null;
   return data;
 }
@@ -138,7 +138,7 @@ export async function getPlayerById(playerId: string): Promise<Player | null> {
     .from('players')
     .select('*')
     .eq('id', playerId)
-    .single();
+    .maybeSingle();
   if (error) return null;
   return data;
 }

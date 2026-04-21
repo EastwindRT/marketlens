@@ -51,18 +51,23 @@ export default function TradeModal({
     setLoading(true);
     setError('');
 
-    const result = mode === 'BUY'
-      ? await executeBuy(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)
-      : await executeSell(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined);
+    try {
+      const result = mode === 'BUY'
+        ? await executeBuy(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)
+        : await executeSell(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined);
 
-    setLoading(false);
-    if (!result.success) {
-      setError(result.error ?? 'Trade failed');
-      return;
+      if (!result.success) {
+        setError(result.error ?? 'Trade failed');
+        return;
+      }
+
+      setDone(true);
+      setTimeout(() => { onSuccess?.(); onClose(); }, 1200);
+    } catch {
+      setError('Connection error — check your network and try again');
+    } finally {
+      setLoading(false);
     }
-
-    setDone(true);
-    setTimeout(() => { onSuccess?.(); onClose(); }, 1200);
   }
 
   if (done) {
