@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowUpRight, ArrowDownRight, LogOut, Briefcase, Plus, Star } from 'lucide-react';
 import { getHoldings, supabase } from '../api/supabase';
@@ -9,7 +9,7 @@ import { formatPrice } from '../utils/formatters';
 import AddPositionModal from '../components/trade/AddPositionModal';
 import { useWatchlistStore } from '../store/watchlistStore';
 
-function HoldingRow({ holding }: { holding: Holding }) {
+const HoldingRow = React.memo(function HoldingRow({ holding }: { holding: Holding }) {
   const { data: quote } = useStockQuote(holding.symbol);
   const currentPrice = quote?.c ?? holding.avg_cost;
   const currentValue = currentPrice * holding.shares;
@@ -59,9 +59,9 @@ function HoldingRow({ holding }: { holding: Holding }) {
       </div>
     </Link>
   );
-}
+});
 
-function WatchRow({ symbol, name }: { symbol: string; name?: string }) {
+const WatchRow = React.memo(function WatchRow({ symbol, name }: { symbol: string; name?: string }) {
   const { data: quote } = useStockQuote(symbol);
   const price = quote?.c;
   const changePct = quote?.dp ?? 0;
@@ -104,7 +104,7 @@ function WatchRow({ symbol, name }: { symbol: string; name?: string }) {
       </div>
     </Link>
   );
-}
+});
 
 export default function Portfolio() {
   const { player, logout } = useLeagueStore();

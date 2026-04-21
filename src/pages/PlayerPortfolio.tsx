@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowUpRight, ArrowDownRight, Briefcase, Eye } from 'lucide-react';
 import { getHoldings, getPlayerById, getWatchlist, supabase } from '../api/supabase';
@@ -6,7 +6,7 @@ import { useStockQuote } from '../hooks/useStockData';
 import type { Holding, Player, WatchlistInput } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
 
-function HoldingRow({ holding }: { holding: Holding }) {
+const HoldingRow = React.memo(function HoldingRow({ holding }: { holding: Holding }) {
   const { data: quote } = useStockQuote(holding.symbol);
   const currentPrice = quote?.c ?? holding.avg_cost;
   const currentValue = currentPrice * holding.shares;
@@ -54,9 +54,9 @@ function HoldingRow({ holding }: { holding: Holding }) {
       </div>
     </Link>
   );
-}
+});
 
-function WatchRow({ item }: { item: WatchlistInput }) {
+const WatchRow = React.memo(function WatchRow({ item }: { item: WatchlistInput }) {
   const { data: quote } = useStockQuote(item.symbol);
   const price = quote?.c;
   const change = quote?.d ?? 0;
@@ -106,7 +106,7 @@ function WatchRow({ item }: { item: WatchlistInput }) {
       </div>
     </Link>
   );
-}
+});
 
 function SymbolPrice({ symbol, onPrice }: { symbol: string; onPrice: (p: number) => void }) {
   const { data } = useStockQuote(symbol);

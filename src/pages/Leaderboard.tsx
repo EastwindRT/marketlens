@@ -36,7 +36,7 @@ function Avatar({ name, color, size = 36 }: { name: string; color: string; size?
 }
 
 // ── Podium card (top 3) ───────────────────────────────────────────────────────
-function PodiumCard({
+const PodiumCard = React.memo(function PodiumCard({
   entry, rank, isMe,
 }: { entry: LeaderEntry; rank: 1 | 2 | 3; isMe: boolean }) {
   const { player, portfolioValue, gainPct } = entry;
@@ -126,10 +126,10 @@ function PodiumCard({
       }} />
     </div>
   );
-}
+});
 
 // ── Leaderboard row (rank 4+) ─────────────────────────────────────────────────
-function LeaderRow({ entry, rank, isMe }: { entry: LeaderEntry; rank: number; isMe: boolean }) {
+const LeaderRow = React.memo(function LeaderRow({ entry, rank, isMe }: { entry: LeaderEntry; rank: number; isMe: boolean }) {
   const { player, holdings, portfolioValue, gainPct } = entry;
   const isUp = gainPct >= 0;
   const navigate = useNavigate();
@@ -191,10 +191,10 @@ function LeaderRow({ entry, rank, isMe }: { entry: LeaderEntry; rank: number; is
       </div>
     </div>
   );
-}
+});
 
 // ── Activity item ─────────────────────────────────────────────────────────────
-function ActivityItem({ trade }: { trade: Trade & { player_name: string } }) {
+const ActivityItem = React.memo(function ActivityItem({ trade }: { trade: Trade & { player_name: string } }) {
   const isBuy = trade.trade_type === 'BUY';
   return (
     <div style={{
@@ -225,7 +225,7 @@ function ActivityItem({ trade }: { trade: Trade & { player_name: string } }) {
       </div>
     </div>
   );
-}
+});
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface LeaderEntry {
@@ -274,13 +274,23 @@ export default function Leaderboard() {
 
   useEffect(() => {
     load();
+    // Debounce: when someone makes a trade, Supabase fires events on trades +
+    // holdings + players nearly simultaneously. Collapse them into a single reload.
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleReload = () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(load, 500);
+    };
     const sub = supabase
       .channel('leaderboard')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'holdings' }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, scheduleReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'holdings' }, scheduleReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, scheduleReload)
       .subscribe();
-    return () => { supabase.removeChannel(sub); };
+    return () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      supabase.removeChannel(sub);
+    };
   }, [load]);
 
   // Build and sort entries

@@ -124,8 +124,10 @@ export function useStockQuote(symbol: string) {
       }
     },
     enabled: !!symbol,
-    staleTime: 60 * 1000,
-    refetchInterval: 60 * 1000,
+    staleTime: 2 * 60 * 1000,         // 2 min — quotes don't need sub-minute precision
+    refetchInterval: 2 * 60 * 1000,   // refetch every 2 min instead of every 1 min
+    refetchIntervalInBackground: false, // don't hammer APIs when tab is hidden
+    refetchOnMount: false,             // use cached data if still fresh on re-mount
   });
 }
 
