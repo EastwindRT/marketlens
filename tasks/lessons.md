@@ -140,3 +140,43 @@
 **Mistake:** Used `www.sec.gov/cgi-bin/browse-edgar` EDGAR company search endpoint from server-side.
 **Root cause:** EDGAR CGI endpoints block AWS/Render IP ranges. Returns connection refused or a "Undeclared Automated Tool" HTML page.
 **Rule:** Never use `www.sec.gov/cgi-bin/` endpoints from cloud-hosted servers. Use `data.sec.gov/submissions/CIK{padded}.json` for filing history (works fine) and `www.sec.gov/files/company_tickers.json` for ticker-to-name lookup (static file, works). HTML directory listings at `www.sec.gov/Archives/` also work.
+
+---
+
+## Lesson: 2026-04-20 — Every async submit handler needs try/catch/finally or the button dies
+
+**Mistake:** `TradeModal.handleTrade` awaited `executeBuy` / `executeSell` with no error boundary. When the call threw (network blip, RLS rejection, OAuth expiry), `setLoading(false)` never ran and the button stayed "Processing…" forever. User-visible symptom: trades silently impossible. DB confirmed 4/6 users had zero trades, all hitting this path.
+**Root cause:** Optimistic "happy path only" async handler. `result.success === false` was handled, but a *thrown* exception wasn't. On mobile / flaky networks this is the common case, not the edge case.
+**Rule:** Every submit-style async handler must be shaped as `try { ... } catch { setError(friendly) } finally { setLoading(false) }`. Never rely on the called function to "always resolve." Always surface a user-visible error string in the catch so the user knows something failed and can retry.
+
+---
+
+## Lesson: 2026-04-20 — `Promise.all` + `.single()` is a fragile combo for multi-query page loads
+
+**Mistake:** `PlayerPortfolio` loaded player + holdings + watchlist via `Promise.all`, and `getPlayerById` used Supabase `.single()`. Any one failing query killed the page; any player with zero watchlist rows hit `PGRST116: 0 rows` and the whole page rendered "Player not found."
+**Root cause:** `Promise.all` fails together — one rejection rejects the whole array. `.single()` throws PGRST116 when there are zero rows instead of returning `null`. Combined, an empty but valid table kills the whole view.
+**Rule:** For any page that loads N independent queries, use `Promise.allSettled` and inspect each result's status. For "fetch one row by id" where the row may legitimately not exist, use `.maybeSingle()` (returns `null`) not `.single()` (throws). Reserve `.single()` for queries that must return exactly one row as a data-integrity invariant.
+
+---
+
+## Lesson: 2026-04-20 — Never `return null` from an auth-gate while a promise is pending
+
+**Mistake:** `App.tsx` returned `null` while `supabase.auth.getSession()` was pending. On slow mobile the promise could hang indefinitely — user saw a permanent blank white screen with no way to recover.
+**Root cause:** Treating "session unknown" as "render nothing" gives zero feedback and zero fallback. A hung network call becomes a fully broken app.
+**Rule:** Auth gates must render something visible (a spinner, skeleton, or logo) during session restoration, AND must have a timeout fallback (e.g. 10s) that forces the gate to resolve to a logged-out state so login UI at least renders. `return null` is never the right answer for an async-resolved top-level gate.
+
+---
+
+## Lesson: 2026-04-20 — React Query quote refetch defaults can drain API quota on mobile
+
+**Observation:** `useStockQuote` ran with `staleTime: 60_000` + `refetchInterval: 60_000` and default `refetchIntervalInBackground: true`. On a Portfolio page with 10 positions, that's 10 requests/minute even when the tab is hidden — plus another 10 on every remount when navigating back to the page.
+**Root cause:** React Query's polling defaults are aggressive and they keep polling in background tabs. For finance data that changes slowly between trading decisions, sub-minute precision isn't worth the API cost or the mobile battery drain.
+**Rule:** For any `useQuery` that polls a rate-limited external API, set `staleTime` to match the real data cadence (2m for quotes is fine), set `refetchInterval` equal to or greater than `staleTime`, add `refetchIntervalInBackground: false` to pause on hidden tabs, and add `refetchOnMount: false` so route changes reuse cached data. These four settings together typically halve API load with no user-visible regression.
+
+---
+
+## Lesson: 2026-04-20 — Supabase realtime fires ≥1 event per affected table; debounce the reload
+
+**Observation:** A single trade in MoneyTalks triggers inserts/updates across `trades`, `holdings`, and `players` (cash/balances in legacy rows). The Leaderboard listened to all three and fired three full reloads per trade within ~100ms of each other.
+**Root cause:** Supabase `postgres_changes` fires one event per table per row change — subscribing to multiple tables for a logically single operation fans out into N events. Each one kicked off a fresh `getAllPlayers + getAllHoldings + getRecentTrades` round trip.
+**Rule:** When subscribing to multiple `postgres_changes` topics that are commonly triggered together, debounce the reload handler (200–500ms is plenty). Same pattern applies anywhere you re-fetch in response to realtime events — never hook the refetch directly to the event without a coalescing timer.
