@@ -473,7 +473,11 @@ app.get('/api/ca-insider-activity', async (req, res) => {
         }
       }
 
-      allTrades.sort((a, b) => b.totalValue - a.totalValue);
+      allTrades.sort((a, b) =>
+        (b.filingDate || '').localeCompare(a.filingDate || '')
+        || (b.transactionDate || '').localeCompare(a.transactionDate || '')
+        || ((b.totalValue || 0) - (a.totalValue || 0))
+      );
       caInsiderCaches[cacheKey] = { trades: allTrades };
       caInsiderLastFetch[cacheKey] = Date.now();
     } catch (err) {
@@ -490,7 +494,7 @@ app.get('/api/ca-insider-activity', async (req, res) => {
 
 const insiderActivityCaches = { 7: null, 14: null, 30: null };
 const insiderActivityLastFetch = { 7: 0, 14: 0, 30: 0 };
-const INSIDER_ACTIVITY_TTL = 30 * 60 * 1000;
+const INSIDER_ACTIVITY_TTL = 10 * 60 * 1000;
 
 function quarterOfMonth(month) {
   return Math.floor((month - 1) / 3) + 1;
@@ -669,7 +673,11 @@ async function fetchLatestInsiderActivity(days = 7) {
   }
 
   const groups = await Promise.all(sampled.map((entry) => fetchSecInsiderActivityItem(entry)));
-  return groups.flat().sort((a, b) => b.totalValue - a.totalValue);
+  return groups.flat().sort((a, b) =>
+    (b.filingDate || '').localeCompare(a.filingDate || '')
+    || (b.transactionDate || '').localeCompare(a.transactionDate || '')
+    || ((b.totalValue || 0) - (a.totalValue || 0))
+  );
 }
 
 app.get('/api/insider-activity', async (req, res) => {

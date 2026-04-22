@@ -14,7 +14,7 @@ type MarketTab = 'us' | 'ca-insiders' | 'ca-filings';
 export default function InsiderActivityPage() {
   const navigate = useNavigate();
   const [marketTab, setMarketTab] = useState<MarketTab>('us');
-  const [sortMode, setSortMode] = useState<SortMode>('value');
+  const [sortMode, setSortMode] = useState<SortMode>('date');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [periodMode, setPeriodMode] = useState<PeriodMode>('7d');
   const watchlistSymbols = useWatchlistStore((state) => state.items.map((item) => item.symbol));
