@@ -15,5 +15,5 @@ services:
         sync: false
       - key: VITE_SUPABASE_ANON_KEY
         sync: false
-      - key: VITE_ADMIN_PIN
+      - key: VITE_ADMIN_EMAILS
         sync: false

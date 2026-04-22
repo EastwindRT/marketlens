@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowUpRight, ArrowDownRight, Briefcase, Eye } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, ArrowDownRight, Briefcase, Eye, RefreshCcw } from 'lucide-react';
 import { getHoldings, getPlayerById, getWatchlist, supabase } from '../api/supabase';
-import { useStockQuote } from '../hooks/useStockData';
+import { useStockQuotes } from '../hooks/useStockData';
 import type { Holding, Player, WatchlistInput } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
 
-const HoldingRow = React.memo(function HoldingRow({ holding }: { holding: Holding }) {
-  const { data: quote } = useStockQuote(holding.symbol);
+const HoldingRow = React.memo(function HoldingRow({ holding, quote }: { holding: Holding; quote?: { c?: number } }) {
   const currentPrice = quote?.c ?? holding.avg_cost;
   const currentValue = currentPrice * holding.shares;
   const costBasis = holding.avg_cost * holding.shares;
@@ -56,8 +55,7 @@ const HoldingRow = React.memo(function HoldingRow({ holding }: { holding: Holdin
   );
 });
 
-const WatchRow = React.memo(function WatchRow({ item }: { item: WatchlistInput }) {
-  const { data: quote } = useStockQuote(item.symbol);
+const WatchRow = React.memo(function WatchRow({ item, quote }: { item: WatchlistInput; quote?: { c?: number; d?: number; dp?: number } }) {
   const price = quote?.c;
   const change = quote?.d ?? 0;
   const changePct = quote?.dp ?? 0;
@@ -108,14 +106,6 @@ const WatchRow = React.memo(function WatchRow({ item }: { item: WatchlistInput }
   );
 });
 
-function SymbolPrice({ symbol, onPrice }: { symbol: string; onPrice: (p: number) => void }) {
-  const { data } = useStockQuote(symbol);
-  useEffect(() => {
-    if (data?.c) onPrice(data.c);
-  }, [data?.c]);
-  return null;
-}
-
 export default function PlayerPortfolio() {
   const { playerId } = useParams<{ playerId: string }>();
   const navigate = useNavigate();
@@ -123,14 +113,18 @@ export default function PlayerPortfolio() {
   const [player, setPlayer] = useState<Player | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [watchlist, setWatchlist] = useState<WatchlistInput[]>([]);
-  const [priceMap, setPriceMap] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [watchlistError, setWatchlistError] = useState('');
 
   useEffect(() => {
     if (!playerId) return;
     async function load() {
       try {
+        setLoading(true);
+        setError('');
+        setWatchlistError('');
+
         // Use allSettled so a failed watchlist/holdings fetch doesn't kill the whole page
         const [pRes, hRes, wRes] = await Promise.allSettled([
           getPlayerById(playerId!),
@@ -146,7 +140,14 @@ export default function PlayerPortfolio() {
         }
         setPlayer(p);
         if (hRes.status === 'fulfilled') setHoldings(hRes.value);
-        if (wRes.status === 'fulfilled') setWatchlist(wRes.value);
+        else setHoldings([]);
+
+        if (wRes.status === 'fulfilled') {
+          setWatchlist(wRes.value);
+        } else {
+          setWatchlist([]);
+          setWatchlistError('Could not load this watchlist right now.');
+        }
       } catch {
         setError('Could not load portfolio.');
       } finally {
@@ -165,9 +166,13 @@ export default function PlayerPortfolio() {
     return () => { supabase.removeChannel(sub); };
   }, [playerId]);
 
-  const symbols = [...new Set(holdings.map(h => h.symbol))];
+  const symbols = [...new Set([
+    ...holdings.map((holding) => holding.symbol),
+    ...watchlist.map((item) => item.symbol),
+  ])];
+  const { quoteMap } = useStockQuotes(symbols);
   const holdingsValue = holdings.reduce((sum, h) => {
-    return sum + h.shares * (priceMap[h.symbol] ?? h.avg_cost);
+    return sum + h.shares * (quoteMap[h.symbol]?.c ?? h.avg_cost);
   }, 0);
   const costBasis = holdings.reduce((sum, h) => sum + h.shares * h.avg_cost, 0);
   const gain = holdingsValue - costBasis;
@@ -197,10 +202,6 @@ export default function PlayerPortfolio() {
 
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', paddingBottom: 32 }}>
-      {symbols.map(sym => (
-        <SymbolPrice key={sym} symbol={sym} onPrice={p => setPriceMap(prev => ({ ...prev, [sym]: p }))} />
-      ))}
-
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '20px 16px 16px' }}>
         <button
@@ -281,7 +282,7 @@ export default function PlayerPortfolio() {
               <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: 0 }}>{player.name} hasn't made any trades yet</p>
             </div>
           ) : (
-            holdings.map(h => <HoldingRow key={h.id} holding={h} />)
+            holdings.map(h => <HoldingRow key={h.id} holding={h} quote={quoteMap[h.symbol]} />)
           )}
         </div>
       </div>
@@ -295,12 +296,28 @@ export default function PlayerPortfolio() {
           </span>
         </div>
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, overflow: 'hidden' }}>
-          {watchlist.length === 0 ? (
+          {watchlistError ? (
+            <div style={{ padding: '20px', textAlign: 'center' }}>
+              <p style={{ fontSize: 12, color: 'var(--color-down)', margin: '0 0 10px' }}>{watchlistError}</p>
+              <button
+                onClick={() => window.location.reload()}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '8px 12px', borderRadius: 10, cursor: 'pointer',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
+                  color: 'var(--text-primary)', fontSize: 12, fontWeight: 600,
+                }}
+              >
+                <RefreshCcw size={12} />
+                Retry
+              </button>
+            </div>
+          ) : watchlist.length === 0 ? (
             <div style={{ padding: '24px 20px', textAlign: 'center' }}>
               <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: 0 }}>Watchlist is empty</p>
             </div>
           ) : (
-            watchlist.map(w => <WatchRow key={w.symbol} item={w} />)
+            watchlist.map(w => <WatchRow key={w.symbol} item={w} quote={quoteMap[w.symbol]} />)
           )}
         </div>
       </div>

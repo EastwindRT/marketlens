@@ -22,6 +22,37 @@ alter table trades add column if not exists note text;
 -- Public read stays fully open.
 -- We scope by matching auth.email() → players.google_email.
 
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'players' and policyname = 'Public read players'
+  ) then
+    create policy "Public read players" on players for select using (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'holdings' and policyname = 'Public read holdings'
+  ) then
+    create policy "Public read holdings" on holdings for select using (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'trades' and policyname = 'Public read trades'
+  ) then
+    create policy "Public read trades" on trades for select using (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'watchlists' and policyname = 'Public read watchlists'
+  ) then
+    create policy "Public read watchlists" on watchlists for select using (true);
+  end if;
+end $$;
+
 -- Drop the old "allow all writes" blanket policies (they existed for the PIN-gated era).
 drop policy if exists "Allow all writes players" on players;
 drop policy if exists "Allow all writes holdings" on holdings;

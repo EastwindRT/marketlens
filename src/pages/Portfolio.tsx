@@ -3,14 +3,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ArrowUpRight, ArrowDownRight, LogOut, Briefcase, Plus, Star } from 'lucide-react';
 import { getHoldings, supabase } from '../api/supabase';
 import { useLeagueStore } from '../store/leagueStore';
-import { useStockQuote } from '../hooks/useStockData';
+import { useStockQuotes } from '../hooks/useStockData';
 import type { Holding, Player } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
 import AddPositionModal from '../components/trade/AddPositionModal';
 import { useWatchlistStore } from '../store/watchlistStore';
 
-const HoldingRow = React.memo(function HoldingRow({ holding }: { holding: Holding }) {
-  const { data: quote } = useStockQuote(holding.symbol);
+const HoldingRow = React.memo(function HoldingRow({ holding, quote }: { holding: Holding; quote?: { c?: number } }) {
   const currentPrice = quote?.c ?? holding.avg_cost;
   const currentValue = currentPrice * holding.shares;
   const costBasis = holding.avg_cost * holding.shares;
@@ -61,8 +60,7 @@ const HoldingRow = React.memo(function HoldingRow({ holding }: { holding: Holdin
   );
 });
 
-const WatchRow = React.memo(function WatchRow({ symbol, name }: { symbol: string; name?: string }) {
-  const { data: quote } = useStockQuote(symbol);
+const WatchRow = React.memo(function WatchRow({ symbol, name, quote }: { symbol: string; name?: string; quote?: { c?: number; dp?: number } }) {
   const price = quote?.c;
   const changePct = quote?.dp ?? 0;
   const isUp = changePct >= 0;
@@ -107,7 +105,7 @@ const WatchRow = React.memo(function WatchRow({ symbol, name }: { symbol: string
 });
 
 export default function Portfolio() {
-  const { player, logout } = useLeagueStore();
+  const { player, playerStatus, logout } = useLeagueStore();
   const { items: watchlist } = useWatchlistStore();
   const navigate = useNavigate();
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -122,6 +120,7 @@ export default function Portfolio() {
 
     async function load() {
       try {
+        setLoading(true);
         setLoadError('');
         const h = await getHoldings(player!.id);
         setHoldings(h);
@@ -142,16 +141,59 @@ export default function Portfolio() {
     return () => { supabase.removeChannel(sub); };
   }, [player]);
 
+  const allSymbols = [...new Set([
+    ...holdings.map((holding) => holding.symbol),
+    ...watchlist.map((item) => item.symbol),
+  ])];
+  const { quoteMap } = useStockQuotes(allSymbols);
+
   // Show skeleton while session/player is still loading
-  if (!player) return (
-    <div className="max-w-2xl mx-auto px-4 md:px-6 py-6">
-      <div className="h-10 w-48 rounded-2xl animate-pulse mb-6" style={{ background: 'var(--bg-surface)' }} />
-      <div className="h-36 rounded-2xl animate-pulse mb-6" style={{ background: 'var(--bg-surface)' }} />
-      {Array.from({ length: 3 }).map((_, i) => (
-        <div key={i} className="h-16 rounded-2xl animate-pulse mb-2" style={{ background: 'var(--bg-surface)' }} />
-      ))}
-    </div>
-  );
+  if (!player) {
+    if (playerStatus === 'loading') return (
+      <div className="max-w-2xl mx-auto px-4 md:px-6 py-6">
+        <div className="h-10 w-48 rounded-2xl animate-pulse mb-6" style={{ background: 'var(--bg-surface)' }} />
+        <div className="h-36 rounded-2xl animate-pulse mb-6" style={{ background: 'var(--bg-surface)' }} />
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="h-16 rounded-2xl animate-pulse mb-2" style={{ background: 'var(--bg-surface)' }} />
+        ))}
+      </div>
+    );
+
+    const isSlowBoot = playerStatus === 'timed_out';
+    return (
+      <div className="max-w-2xl mx-auto px-4 md:px-6 py-8">
+        <div
+          className="rounded-2xl p-6"
+          style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
+        >
+          <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+            {isSlowBoot ? 'Still connecting to your portfolio' : 'Could not load your profile'}
+          </p>
+          <p className="text-sm mt-2" style={{ color: 'var(--text-secondary)' }}>
+            {isSlowBoot
+              ? 'Your session is live, but player setup is taking longer than expected. This usually means auth or Supabase is responding slowly.'
+              : 'The app could not match your signed-in session to a player row yet.'}
+          </p>
+          <div className="flex gap-3 mt-4">
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 rounded-xl text-sm font-medium"
+              style={{ background: 'var(--accent-blue)', color: '#fff', border: 'none', cursor: 'pointer' }}
+            >
+              Retry
+            </button>
+            <button
+              onClick={() => navigate('/leaderboard')}
+              className="px-4 py-2 rounded-xl text-sm font-medium"
+              style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', cursor: 'pointer' }}
+            >
+              View portfolios
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl mx-auto px-4 md:px-6 py-6">
@@ -180,7 +222,7 @@ export default function Portfolio() {
         </button>
       </div>
 
-      <PortfolioSummary player={player} holdings={holdings} />
+      <PortfolioSummary player={player} holdings={holdings} quoteMap={quoteMap} />
 
       <div className="mt-6">
         <div className="flex items-center justify-between mb-3">
@@ -232,7 +274,7 @@ export default function Portfolio() {
             </button>
           </div>
         ) : (
-          holdings.map(h => <HoldingRow key={h.id} holding={h} />)
+          holdings.map(h => <HoldingRow key={h.id} holding={h} quote={quoteMap[h.symbol]} />)
         )}
       </div>
 
@@ -246,7 +288,7 @@ export default function Portfolio() {
             </span>
           </div>
           {watchlist.map(item => (
-            <WatchRow key={item.symbol} symbol={item.symbol} name={item.name} />
+            <WatchRow key={item.symbol} symbol={item.symbol} name={item.name} quote={quoteMap[item.symbol]} />
           ))}
         </div>
       )}
@@ -258,35 +300,14 @@ export default function Portfolio() {
   );
 }
 
-function PortfolioSummary({ player, holdings }: { player: Player; holdings: Holding[] }) {
-  const [priceMap, setPriceMap] = useState<Record<string, number>>({});
-  const symbols = [...new Set(holdings.map(h => h.symbol))];
-
+function PortfolioSummary({ player, holdings, quoteMap }: { player: Player; holdings: Holding[]; quoteMap: Record<string, { c?: number } | undefined> }) {
   const holdingsValue = holdings.reduce((sum, h) => {
-    const price = priceMap[h.symbol] ?? h.avg_cost;
+    const price = quoteMap[h.symbol]?.c ?? h.avg_cost;
     return sum + h.shares * price;
   }, 0);
 
   const costBasis = holdings.reduce((sum, h) => sum + h.shares * h.avg_cost, 0);
-
-  return (
-    <>
-      {symbols.map(sym => (
-        <SymbolPrice key={sym} symbol={sym} onPrice={(p) =>
-          setPriceMap(prev => ({ ...prev, [sym]: p }))
-        } />
-      ))}
-      <SummaryCard player={player} holdingsValue={holdingsValue} costBasis={costBasis} holdingsCount={holdings.length} />
-    </>
-  );
-}
-
-function SymbolPrice({ symbol, onPrice }: { symbol: string; onPrice: (p: number) => void }) {
-  const { data } = useStockQuote(symbol);
-  useEffect(() => {
-    if (data?.c) onPrice(data.c);
-  }, [data?.c]);
-  return null;
+  return <SummaryCard player={player} holdingsValue={holdingsValue} costBasis={costBasis} holdingsCount={holdings.length} />;
 }
 
 function SummaryCard({ holdingsValue, costBasis, holdingsCount }: {

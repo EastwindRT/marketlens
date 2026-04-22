@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { finnhub } from '../api/finnhub';
 import { tmx, fetchYahooCandles } from '../api/tmx';
 import type { OHLCVBar, TimeRange } from '../api/types';
@@ -76,7 +76,11 @@ export function useStockCandles(symbol: string, range: TimeRange) {
 // ─── Quote ────────────────────────────────────────────────────────────────────
 
 export function useStockQuote(symbol: string) {
-  return useQuery({
+  return useQuery(getStockQuoteQueryOptions(symbol));
+}
+
+function getStockQuoteQueryOptions(symbol: string) {
+  return {
     queryKey: ['quote', symbol],
     queryFn: async () => {
       if (!hasApiKey()) return generateMockQuote(symbol);
@@ -128,7 +132,26 @@ export function useStockQuote(symbol: string) {
     refetchInterval: 2 * 60 * 1000,   // refetch every 2 min instead of every 1 min
     refetchIntervalInBackground: false, // don't hammer APIs when tab is hidden
     refetchOnMount: false,             // use cached data if still fresh on re-mount
+  } as const;
+}
+
+export function useStockQuotes(symbols: string[]) {
+  const uniqueSymbols = [...new Set(symbols.filter(Boolean).map((symbol) => symbol.toUpperCase()))];
+
+  const results = useQueries({
+    queries: uniqueSymbols.map((symbol) => getStockQuoteQueryOptions(symbol)),
   });
+
+  const quoteMap = uniqueSymbols.reduce<Record<string, (typeof results)[number]['data']>>((acc, symbol, index) => {
+    acc[symbol] = results[index]?.data;
+    return acc;
+  }, {});
+
+  return {
+    quoteMap,
+    isLoading: results.some((result) => result.isLoading),
+    isFetching: results.some((result) => result.isFetching),
+  };
 }
 
 // ─── Profile ──────────────────────────────────────────────────────────────────

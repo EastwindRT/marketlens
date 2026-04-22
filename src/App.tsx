@@ -25,21 +25,35 @@ const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY
 
 export default function App() {
-  const { setPlayer } = useLeagueStore()
+  const { setPlayer, setPlayerStatus } = useLeagueStore()
   const initializeWatchlist = useWatchlistStore((state) => state.initialize)
   // null = loading, undefined = no session, Session = authenticated
   const [session, setSession] = useState<Session | null | undefined>(undefined)
 
   // ── Handle Google OAuth redirect + session restore ──────────────────────
   useEffect(() => {
+    let isActive = true
+    let sessionRunId = 0
+
     const applySession = async (nextSession: Session | null) => {
+      const runId = ++sessionRunId
       setSession(nextSession)
 
       if (!nextSession?.user?.email) {
+        setPlayerStatus('idle')
         setPlayer(null)
         await initializeWatchlist(null)
         return
       }
+
+      setPlayerStatus('loading')
+      let didTimeout = false
+      const playerTimeout = setTimeout(() => {
+        didTimeout = true
+        if (isActive && sessionRunId === runId) {
+          setPlayerStatus('timed_out')
+        }
+      }, 8_000)
 
       // Create the player row on first login, return it on subsequent logins.
       // Don't let a failed lookup crash the whole app — log it loudly and
@@ -47,16 +61,25 @@ export default function App() {
       // sees routes (even if portfolio shows a skeleton) instead of a blank screen.
       try {
         const player = await ensurePlayerForSession(nextSession)
+        if (!isActive || sessionRunId !== runId) return
         setPlayer(player ?? null)
         await initializeWatchlist(player?.id ?? null)
+        if (!isActive || sessionRunId !== runId) return
+        setPlayerStatus('ready')
       } catch (err) {
         console.error('[App] ensurePlayerForSession failed:', err)
+        if (!isActive || sessionRunId !== runId) return
         setPlayer(null)
         await initializeWatchlist(null)
+        if (!isActive || sessionRunId !== runId) return
+        setPlayerStatus(didTimeout ? 'timed_out' : 'error')
+      } finally {
+        clearTimeout(playerTimeout)
       }
     }
 
     if (!SUPABASE_CONFIGURED) {
+      setPlayerStatus('ready')
       setSession(null) // no auth configured → open access
       void initializeWatchlist(null)
       return
@@ -79,8 +102,12 @@ export default function App() {
       }
     )
 
-    return () => { subscription.unsubscribe(); clearTimeout(sessionTimeout) }
-  }, [initializeWatchlist, setPlayer])
+    return () => {
+      isActive = false
+      subscription.unsubscribe()
+      clearTimeout(sessionTimeout)
+    }
+  }, [initializeWatchlist, setPlayer, setPlayerStatus])
 
   // Still loading session — show spinner instead of blank screen
   if (session === undefined) {
