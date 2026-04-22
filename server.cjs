@@ -2414,10 +2414,22 @@ setTimeout(() => {
 
 // Serve built React app
 const distPath = path.join(__dirname, 'dist');
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path === '/index.html') {
+    res.setHeader('Cache-Control', 'no-store');
+  } else if (req.path.startsWith('/assets/')) {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  }
+  next();
+});
 app.use(express.static(distPath));
+app.get('/assets/*', (req, res) => {
+  res.status(404).json({ error: `Asset not found: ${req.path}` });
+});
 
 // SPA fallback — send index.html for all non-API routes
 app.get('*', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(distPath, 'index.html'));
 });
 

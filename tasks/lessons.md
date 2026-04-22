@@ -220,3 +220,11 @@
 **Observation:** Ask AI responses felt shallow even though the stock page already had candles, fundamentals, insider flow, and news. Follow-up questions were especially weak because the assistant kept answering as if each turn were the first.
 **Root cause:** The backend had rich snapshot context, but the chat was stateless. Sending only the newest question forces the model to reconstruct intent every turn, which makes answers repetitive and generic.
 **Rule:** For any multi-turn AI surface, always send a trimmed conversation window along with the latest structured context. Better prompt design helps, but preserving the last few user/assistant turns is what makes follow-up questions feel coherent and analytically cumulative.
+
+---
+
+## Lesson: 2026-04-22 - Missing hashed assets must never fall through to the SPA shell
+
+**Observation:** After a fresh deploy, some browsers asked for an older lazy chunk filename and got `index.html` back, which showed up as `Failed to fetch dynamically imported module` and made pages look broken.
+**Root cause:** The server treated unknown `/assets/...` paths like normal app routes and served the SPA fallback instead of a 404. That means the browser received HTML where it expected JavaScript.
+**Rule:** For SPAs with hashed build assets, serve `index.html` with `no-store`, serve `/assets/...` with immutable cache headers, and make missing asset paths return a real 404. Pair that with a one-time client reload on chunk-load failure so deploy transitions recover automatically for users with a stale shell in memory.

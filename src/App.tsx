@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState, Suspense, lazy } from 'react'
+import type { ComponentType } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import AppShell from './components/layout/AppShell'
 import Dashboard from './pages/Dashboard'
@@ -7,22 +8,48 @@ import LoginModal from './components/auth/LoginModal'
 import ErrorBoundary from './components/ui/ErrorBoundary'
 
 // Lazy-load heavy pages to reduce initial bundle size
-const StockDetail       = lazy(() => import('./pages/StockDetail'))
-const Search            = lazy(() => import('./pages/Search'))
-const Leaderboard       = lazy(() => import('./pages/Leaderboard'))
-const Portfolio         = lazy(() => import('./pages/Portfolio'))
-const PlayerPortfolio   = lazy(() => import('./pages/PlayerPortfolio'))
-const Admin             = lazy(() => import('./pages/Admin'))
-const NewsPage          = lazy(() => import('./pages/News'))
-const InsiderActivityPage = lazy(() => import('./pages/InsiderActivity'))
-const CongressPage      = lazy(() => import('./pages/Congress'))
-const FundsPage         = lazy(() => import('./pages/Funds'))
+const StockDetail         = lazyWithAutoReload(() => import('./pages/StockDetail'))
+const Search              = lazyWithAutoReload(() => import('./pages/Search'))
+const Leaderboard         = lazyWithAutoReload(() => import('./pages/Leaderboard'))
+const Portfolio           = lazyWithAutoReload(() => import('./pages/Portfolio'))
+const PlayerPortfolio     = lazyWithAutoReload(() => import('./pages/PlayerPortfolio'))
+const Admin               = lazyWithAutoReload(() => import('./pages/Admin'))
+const NewsPage            = lazyWithAutoReload(() => import('./pages/News'))
+const InsiderActivityPage = lazyWithAutoReload(() => import('./pages/InsiderActivity'))
+const CongressPage        = lazyWithAutoReload(() => import('./pages/Congress'))
+const FundsPage           = lazyWithAutoReload(() => import('./pages/Funds'))
 import { useLeagueStore } from './store/leagueStore'
 import { useWatchlistStore } from './store/watchlistStore'
 import { supabase, ensurePlayerForSession } from './api/supabase'
 
 const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY
+
+const LAZY_RELOAD_KEY = 'tars:lazy-reload'
+
+function lazyWithAutoReload<T extends { default: ComponentType<any> }>(
+  importer: () => Promise<T>
+) {
+  return lazy(async () => {
+    try {
+      const mod = await importer()
+      sessionStorage.removeItem(LAZY_RELOAD_KEY)
+      return mod
+    } catch (err) {
+      const message = String((err as Error)?.message || err)
+      const isChunkLoadError =
+        /Failed to fetch dynamically imported module|Importing a module script failed|ChunkLoadError/i.test(message)
+
+      if (isChunkLoadError && sessionStorage.getItem(LAZY_RELOAD_KEY) !== '1') {
+        sessionStorage.setItem(LAZY_RELOAD_KEY, '1')
+        window.location.reload()
+        return new Promise<T>(() => {})
+      }
+
+      throw err
+    }
+  })
+}
 
 export default function App() {
   const { setPlayer, setPlayerStatus } = useLeagueStore()

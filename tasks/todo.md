@@ -147,3 +147,19 @@
 - Follow-up questions should feel like a real conversation instead of a reset.
 - Broad questions should return a more PM-style note with clearer reasoning and more supporting detail.
 - Answers should be less generic because the model is being pushed to synthesize chart, fundamentals, insider flow, and news into one thesis.
+
+## Plan: Chunk-load recovery after deploys (2026-04-22)
+
+### Reported issue
+1. After deploy, users could hit `Failed to fetch dynamically imported module` and the app would stop loading route pages.
+
+### Root causes found
+- The browser still had an older app shell / lazy-route reference in memory while Render was already serving a newer build with different hashed chunk filenames.
+- The Express SPA fallback returned `index.html` for missing `/assets/...` requests, so stale chunk requests got HTML instead of a real 404, which made the module failure harder to recover from cleanly.
+
+### Shipped
+- [x] `src/App.tsx` - lazy route imports now auto-reload the app once when they detect a stale chunk / dynamic import failure.
+- [x] `server.cjs` - `index.html` is now served with `Cache-Control: no-store` so the app shell refreshes more aggressively after deploys.
+- [x] `server.cjs` - hashed `/assets/...` files are now marked immutable for proper long-term caching.
+- [x] `server.cjs` - missing asset requests now return a real 404 instead of falling through to the SPA HTML shell.
+- [x] `npm run build` clean after the change.
