@@ -59,7 +59,11 @@ export default function InsiderActivityPage() {
       return true;
     });
     return [...base].sort((a, b) => {
-      if (sortMode === 'date') return (b.transactionDate || '').localeCompare(a.transactionDate || '');
+      if (sortMode === 'date') {
+        return (b.filingDate || '').localeCompare(a.filingDate || '')
+          || (b.transactionDate || '').localeCompare(a.transactionDate || '')
+          || ((b.totalValue ?? 0) - (a.totalValue ?? 0));
+      }
       return (b.totalValue ?? 0) - (a.totalValue ?? 0);
     });
   }, [rawTrades, filterMode, sortMode]);
@@ -227,7 +231,8 @@ export default function InsiderActivityPage() {
                         </p>
 
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, rowGap: 6 }}>
-                          <DataPoint label="Date" value={trade.transactionDate} />
+                          <DataPoint label="Filed" value={trade.filingDate || trade.transactionDate} />
+                          <DataPoint label="Traded" value={trade.transactionDate} />
                           <DataPoint label="Shares" value={Math.abs(trade.shares).toLocaleString()} />
                           <DataPoint label="Price" value={formatPrice(trade.pricePerShare, trade.market === 'CA' ? 'CAD' : 'USD')} />
                           <DataPoint label="Value" value={formatLargeNumber(trade.totalValue)} strong color={accentColor} />
