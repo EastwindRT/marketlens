@@ -60,7 +60,7 @@ export default function InsiderActivityPage() {
     });
     return [...base].sort((a, b) => {
       if (sortMode === 'date') return (b.transactionDate || '').localeCompare(a.transactionDate || '');
-      return b.totalValue - a.totalValue;
+      return (b.totalValue ?? 0) - (a.totalValue ?? 0);
     });
   }, [rawTrades, filterMode, sortMode]);
 

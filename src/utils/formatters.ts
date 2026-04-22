@@ -1,15 +1,18 @@
-export const formatPrice = (n: number, currency = 'USD'): string =>
-  new Intl.NumberFormat('en-CA', {
+export const formatPrice = (n: number | null | undefined, currency = 'USD'): string => {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return new Intl.NumberFormat('en-CA', {
     style: 'currency',
     currency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(n);
+};
 
 export const formatChange = (n: number): string =>
   `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
 
-export const formatLargeNumber = (n: number): string => {
+export const formatLargeNumber = (n: number | null | undefined): string => {
+  if (n == null || !Number.isFinite(n)) return '—';
   if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
   if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
   if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;

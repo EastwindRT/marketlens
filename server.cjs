@@ -138,6 +138,11 @@ function httpsPost(url, body, headers = {}) {
   return withRetry(() => httpsPostOnce(url, body, headers), { label: `POST ${new URL(url).hostname}` });
 }
 
+function toFiniteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 // In-memory cache
 let congressCache = null;
 let congressLastFetch = 0;
@@ -389,76 +394,95 @@ app.get('/api/ca-insider-activity', async (req, res) => {
   const cacheKey = `${days}-${mode}`;
 
   if (!caInsiderCaches[cacheKey] || Date.now() - (caInsiderLastFetch[cacheKey] || 0) > CA_INSIDER_TTL) {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    try {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      const cutoffStr = cutoff.toISOString().slice(0, 10);
 
-    const allTrades = [];
-    const batchSize = 5;
+      const allTrades = [];
+      const batchSize = 5;
 
-    for (let i = 0; i < CA_TSX_STOCKS.length; i += batchSize) {
-      const batch = CA_TSX_STOCKS.slice(i, i + batchSize);
-      const results = await Promise.allSettled(
-        batch.map(async ({ sym, name }) => {
-          try {
-            const body = { query: `{ getInsiderTransactions(symbol: "${sym}") }` };
-            const raw = await httpsPost(TMX_GQL_URL, body, TMX_HEADERS);
-            const json = JSON.parse(raw);
-            const txns = json.data?.getInsiderTransactions ?? [];
-            return { sym, name, txns };
-          } catch {
-            return { sym, name, txns: [] };
+      for (let i = 0; i < CA_TSX_STOCKS.length; i += batchSize) {
+        const batch = CA_TSX_STOCKS.slice(i, i + batchSize);
+        const results = await Promise.allSettled(
+          batch.map(async ({ sym, name }) => {
+            try {
+              const body = { query: `{ getInsiderTransactions(symbol: "${sym}") }` };
+              const raw = await httpsPost(TMX_GQL_URL, body, TMX_HEADERS);
+              const json = JSON.parse(raw);
+              const txns = json.data?.getInsiderTransactions ?? [];
+              return { sym, name, txns };
+            } catch {
+              return { sym, name, txns: [] };
+            }
+          })
+        );
+
+        for (const r of results) {
+          if (r.status !== 'fulfilled') continue;
+          const { sym, name, txns } = r.value;
+          for (const t of txns) {
+            const txDate = (t.filingdate || t.datefrom || t.date || '').slice(0, 10);
+            if (!txDate || txDate < cutoffStr) continue;
+
+            // SEDI code 1 = open-market transaction (buy or sell based on amount sign)
+            // code 2 = rare private placement; others = grants, options, buybacks, etc.
+            const isOpenMarket = t.transactionTypeCode === 1;
+            if (mode === 'insiders' && !isOpenMarket) continue;
+
+            const shares = toFiniteNumber(t.amount);
+            const pricePerShare = toFiniteNumber(t.pricefrom);
+            const marketValue = toFiniteNumber(t.marketvalue);
+            const computedTotalValue = shares !== null && pricePerShare !== null
+              ? Math.abs(shares) * pricePerShare
+              : null;
+            const totalValue = (marketValue !== null && marketValue > 0)
+              ? marketValue
+              : computedTotalValue;
+
+            if (shares === null || shares === 0) continue;
+            if (pricePerShare === null || pricePerShare <= 0) continue;
+            if (totalValue === null || totalValue <= 0) continue;
+
+            const parts = (t.filer || '').split(',').map(s => s.trim());
+            const insiderName = parts.length === 2 ? `${parts[1]} ${parts[0]}` : t.filer;
+            const title = (t.relationship || '').replace(/\s+of\s+(the\s+)?Issuer$/i, '').trim();
+            // Sign of amount determines direction: positive = buy, negative = sell
+            const txType = isOpenMarket
+              ? (t.amount > 0 ? 'BUY' : 'SELL')
+              : 'OTHER';
+
+            allTrades.push({
+              id: `ca-${t.transactionid || `${sym}-${txDate}-${t.amount}`}`,
+              symbol: `${sym}.TO`,
+              companyName: name,
+              insiderName,
+              title,
+              type: txType,
+              transactionDate: (t.datefrom || t.date || '').slice(0, 10),
+              filingDate: (t.filingdate || '').slice(0, 10),
+              shares: Math.abs(shares),
+              pricePerShare,
+              totalValue,
+              market: 'CA',
+              exchange: 'TSX',
+              source: 'TMX/SEDI',
+              filingUrl: null,
+            });
           }
-        })
-      );
-
-      for (const r of results) {
-        if (r.status !== 'fulfilled') continue;
-        const { sym, name, txns } = r.value;
-        for (const t of txns) {
-          const txDate = (t.filingdate || t.datefrom || t.date || '').slice(0, 10);
-          if (!txDate || txDate < cutoffStr) continue;
-
-          // SEDI code 1 = open-market transaction (buy or sell based on amount sign)
-          // code 2 = rare private placement; others = grants, options, buybacks, etc.
-          const isOpenMarket = t.transactionTypeCode === 1;
-          if (mode === 'insiders' && !isOpenMarket) continue;
-
-          const totalValue = t.marketvalue > 0 ? t.marketvalue : (Math.abs(t.amount) * t.pricefrom);
-          if (!t.amount || t.pricefrom <= 0 || totalValue <= 0) continue;
-
-          const parts = (t.filer || '').split(',').map(s => s.trim());
-          const insiderName = parts.length === 2 ? `${parts[1]} ${parts[0]}` : t.filer;
-          const title = (t.relationship || '').replace(/\s+of\s+(the\s+)?Issuer$/i, '').trim();
-          // Sign of amount determines direction: positive = buy, negative = sell
-          const txType = isOpenMarket
-            ? (t.amount > 0 ? 'BUY' : 'SELL')
-            : 'OTHER';
-
-          allTrades.push({
-            id: `ca-${t.transactionid || `${sym}-${txDate}-${t.amount}`}`,
-            symbol: `${sym}.TO`,
-            companyName: name,
-            insiderName,
-            title,
-            type: txType,
-            transactionDate: (t.datefrom || t.date || '').slice(0, 10),
-            filingDate: (t.filingdate || '').slice(0, 10),
-            shares: Math.abs(t.amount),
-            pricePerShare: t.pricefrom,
-            totalValue,
-            market: 'CA',
-            exchange: 'TSX',
-            source: 'TMX/SEDI',
-            filingUrl: null,
-          });
         }
       }
-    }
 
-    allTrades.sort((a, b) => b.totalValue - a.totalValue);
-    caInsiderCaches[cacheKey] = { trades: allTrades };
-    caInsiderLastFetch[cacheKey] = Date.now();
+      allTrades.sort((a, b) => b.totalValue - a.totalValue);
+      caInsiderCaches[cacheKey] = { trades: allTrades };
+      caInsiderLastFetch[cacheKey] = Date.now();
+    } catch (err) {
+      console.error(`[ca-insider-activity:${cacheKey}]`, err.message);
+      if (!caInsiderCaches[cacheKey]) {
+        return res.status(502).json({ error: err.message, trades: [] });
+      }
+      res.setHeader('X-Data-Stale', '1');
+    }
   }
 
   res.json({ trades: caInsiderCaches[cacheKey].trades });
@@ -653,8 +677,14 @@ app.get('/api/insider-activity', async (req, res) => {
     const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
     const now = Date.now();
     if (!insiderActivityCaches[days] || now - insiderActivityLastFetch[days] > INSIDER_ACTIVITY_TTL) {
-      insiderActivityCaches[days] = await fetchLatestInsiderActivity(days);
-      insiderActivityLastFetch[days] = now;
+      try {
+        insiderActivityCaches[days] = await fetchLatestInsiderActivity(days);
+        insiderActivityLastFetch[days] = now;
+      } catch (err) {
+        console.error('[insider-activity-refresh]', err.message);
+        if (!insiderActivityCaches[days]) throw err;
+        res.setHeader('X-Data-Stale', '1');
+      }
     }
 
     const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);

@@ -132,8 +132,8 @@ export interface InsiderFeedItem {
   transactionDate: string;
   filingDate?: string;
   shares: number;
-  pricePerShare: number;
-  totalValue: number;
+  pricePerShare: number | null;
+  totalValue: number | null;
   market: 'US' | 'CA';
   exchange: string;
   source: string;
