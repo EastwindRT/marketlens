@@ -71,7 +71,7 @@ export async function getPlayerByGoogleEmail(email: string): Promise<Player | nu
     .select('*')
     .eq('google_email', email.toLowerCase())
     .maybeSingle();
-  if (error) return null;
+  if (error) throw error;
   return data;
 }
 
@@ -117,7 +117,9 @@ export async function ensurePlayerForSession(session: {
 
   if (error) {
     // Race condition — another tab created it. Fetch again.
-    return getPlayerByGoogleEmail(email);
+    const recovered = await getPlayerByGoogleEmail(email);
+    if (recovered) return recovered;
+    throw error;
   }
   return data;
 }

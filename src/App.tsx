@@ -26,6 +26,7 @@ const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY
 
 const LAZY_RELOAD_KEY = 'tars:lazy-reload'
+const BOOTSTRAP_RETRY_DELAY_MS = 1200
 
 function lazyWithAutoReload<T extends { default: ComponentType<any> }>(
   importer: () => Promise<T>
@@ -62,6 +63,18 @@ export default function App() {
     let isActive = true
     let sessionRunId = 0
 
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+    const resolvePlayerWithRetry = async (nextSession: Session) => {
+      try {
+        return await ensurePlayerForSession(nextSession)
+      } catch (err) {
+        console.warn('[App] first player bootstrap attempt failed, retrying once:', err)
+        await sleep(BOOTSTRAP_RETRY_DELAY_MS)
+        return ensurePlayerForSession(nextSession)
+      }
+    }
+
     const applySession = async (nextSession: Session | null) => {
       const runId = ++sessionRunId
       setSession(nextSession)
@@ -87,7 +100,7 @@ export default function App() {
       // continue with player=null so the session is still usable and the user
       // sees routes (even if portfolio shows a skeleton) instead of a blank screen.
       try {
-        const player = await ensurePlayerForSession(nextSession)
+        const player = await resolvePlayerWithRetry(nextSession)
         if (!isActive || sessionRunId !== runId) return
         setPlayer(player ?? null)
         setPlayerStatus('ready')
