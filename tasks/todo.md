@@ -163,3 +163,20 @@
 - [x] `server.cjs` - hashed `/assets/...` files are now marked immutable for proper long-term caching.
 - [x] `server.cjs` - missing asset requests now return a real 404 instead of falling through to the SPA HTML shell.
 - [x] `npm run build` clean after the change.
+
+## Plan: Insider coverage expansion (2026-04-22)
+
+### Reported issue
+1. Insider pages still felt too sparse even when the feeds were technically current.
+
+### Root causes found
+- US insider activity was being aggressively thinned by per-day sampling before XML parsing, which kept the feed current but too small.
+- Canadian coverage still depended on a relatively narrow curated symbol list, so live SEDI activity outside that universe never appeared.
+- The page still defaulted to thinner views, which hid the denser information even when it was already available.
+
+### Shipped
+- [x] `server.cjs` - widened US Form 4 sampling substantially and switched SEC XML fetches to bounded batches instead of a tiny sampled set.
+- [x] `server.cjs` - expanded the Canadian insider universe with a larger TMX/SEDI symbol set and deduped it into a broader scan list.
+- [x] `src/pages/InsiderActivity.tsx` - page now defaults to `CA Filings` and `30D` so users land on the fuller dataset first.
+- [x] `src/pages/InsiderActivity.tsx` - insider requests now ask for larger result windows and the footer shows visible-vs-total transaction counts.
+- [x] `npm run build` clean after the change.

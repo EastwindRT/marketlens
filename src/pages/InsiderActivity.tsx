@@ -13,10 +13,10 @@ type MarketTab = 'us' | 'ca-insiders' | 'ca-filings';
 
 export default function InsiderActivityPage() {
   const navigate = useNavigate();
-  const [marketTab, setMarketTab] = useState<MarketTab>('us');
+  const [marketTab, setMarketTab] = useState<MarketTab>('ca-filings');
   const [sortMode, setSortMode] = useState<SortMode>('date');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
-  const [periodMode, setPeriodMode] = useState<PeriodMode>('7d');
+  const [periodMode, setPeriodMode] = useState<PeriodMode>('30d');
   const watchlistSymbols = useWatchlistStore((state) => state.items.map((item) => item.symbol));
 
   const days = periodMode === '7d' ? 7 : periodMode === '14d' ? 14 : 30;
@@ -26,7 +26,7 @@ export default function InsiderActivityPage() {
   const { data: usData, isLoading: usLoading, error: usError } = useQuery({
     queryKey: ['insider-activity-feed', days],
     queryFn: async (): Promise<{ trades: InsiderFeedItem[] }> => {
-      const res = await fetch(`/api/insider-activity?days=${days}`);
+      const res = await fetch(`/api/insider-activity?days=${days}&limit=250`);
       if (!res.ok) throw new Error(`Feed error ${res.status}`);
       return res.json();
     },
@@ -39,7 +39,7 @@ export default function InsiderActivityPage() {
   const { data: caData, isLoading: caLoading, error: caError } = useQuery({
     queryKey: ['ca-insider-activity', days, caMode],
     queryFn: async (): Promise<{ trades: InsiderFeedItem[] }> => {
-      const res = await fetch(`/api/ca-insider-activity?days=${days}&mode=${caMode}`);
+      const res = await fetch(`/api/ca-insider-activity?days=${days}&mode=${caMode}&limit=250`);
       if (!res.ok) throw new Error(`CA feed error ${res.status}`);
       return res.json();
     },
@@ -84,7 +84,7 @@ export default function InsiderActivityPage() {
             Insider $
           </h1>
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-            Market-wide insider activity ranked by dollar value or freshness.
+            Broader insider coverage ranked by freshness or dollar value.
           </p>
         </div>
 
@@ -147,7 +147,7 @@ export default function InsiderActivityPage() {
         {/* CA tabs loading note */}
         {marketTab !== 'us' && isLoading && (
           <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: -12, marginBottom: 16 }}>
-            Querying ~110 TSX stocks via SEDI — may take 20–40s on first load…
+            Querying ~160 Canadian symbols via SEDI/TMX — may take longer on first load…
           </p>
         )}
 
@@ -253,7 +253,7 @@ export default function InsiderActivityPage() {
             </div>
 
             <p style={{ marginTop: 14, fontSize: 11, color: 'var(--text-tertiary)' }}>
-              {tabLabel} · {trades.length} transactions · {days}D window
+              {tabLabel} · showing {trades.length} of {rawTrades.length} transactions · {days}D window
             </p>
           </>
         )}

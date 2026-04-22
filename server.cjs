@@ -376,6 +376,60 @@ const CA_TSX_STOCKS = [
   { sym: 'DRX', name: 'ADF Group' },
 ];
 
+const EXTRA_CA_TSX_STOCKS = [
+  { sym: 'CPX', name: 'Capital Power' },
+  { sym: 'CU', name: 'Canadian Utilities' },
+  { sym: 'BIR', name: 'Birchcliff Energy' },
+  { sym: 'ARX', name: 'ARC Resources Ltd' },
+  { sym: 'ATH', name: 'Athabasca Oil' },
+  { sym: 'SCR', name: 'Strathcona Resources' },
+  { sym: 'CJ', name: 'Cardinal Energy' },
+  { sym: 'HWX', name: 'Headwater Exploration' },
+  { sym: 'SGY', name: 'Surge Energy' },
+  { sym: 'OBE', name: 'Obsidian Energy' },
+  { sym: 'PXT', name: 'Parex Resources' },
+  { sym: 'ERF', name: 'Enerplus' },
+  { sym: 'BHC', name: 'Bausch Health Companies' },
+  { sym: 'AND', name: 'Andlauer Healthcare Group' },
+  { sym: 'TFPM', name: 'Triple Flag Precious Metals' },
+  { sym: 'OGC', name: 'OceanaGold' },
+  { sym: 'PAAS', name: 'Pan American Silver' },
+  { sym: 'SSL', name: 'Sandstorm Gold' },
+  { sym: 'NGD', name: 'New Gold' },
+  { sym: 'DML', name: 'Denison Mines' },
+  { sym: 'UEX', name: 'UEX Corp' },
+  { sym: 'TIH', name: 'Toromont Industries' },
+  { sym: 'ATS', name: 'ATS Corporation' },
+  { sym: 'SIS', name: 'Savaria' },
+  { sym: 'ADEN', name: 'Adena Corp' },
+  { sym: 'ATZ', name: 'Aritzia' },
+  { sym: 'GOOS', name: 'Canada Goose' },
+  { sym: 'X', name: 'TMX Group' },
+  { sym: 'FC', name: 'Firm Capital Property Trust' },
+  { sym: 'DIR.UN', name: 'Dream Industrial REIT' },
+  { sym: 'GRT.UN', name: 'Granite REIT' },
+  { sym: 'CAR.UN', name: 'Canadian Apartment Properties REIT' },
+  { sym: 'BEI.UN', name: 'Boardwalk REIT' },
+  { sym: 'MI.UN', name: 'Minto Apartment REIT' },
+  { sym: 'PRV.UN', name: 'PRO Real Estate Investment Trust' },
+  { sym: 'CSH.UN', name: 'Chartwell Retirement Residences' },
+  { sym: 'PSK', name: 'PrairieSky Royalty' },
+  { sym: 'MAL', name: 'Magellan Aerospace' },
+  { sym: 'QIPT', name: 'Quipt Home Medical' },
+  { sym: 'SVI', name: 'StorageVault Canada' },
+  { sym: 'LMN', name: 'Lumine Group' },
+  { sym: 'TOI', name: 'Topicus.com Inc' },
+  { sym: 'PKI', name: 'Parkland Corporation' },
+  { sym: 'BDT', name: 'Bird Construction' },
+  { sym: 'IFP', name: 'Interfor' },
+  { sym: 'CF', name: 'Canaccord Genuity Group' },
+  { sym: 'TSU', name: 'Trisura Group' },
+];
+
+const CA_TMX_UNIVERSE = [...CA_TSX_STOCKS, ...EXTRA_CA_TSX_STOCKS].filter((item, index, arr) =>
+  arr.findIndex((candidate) => candidate.sym === item.sym) === index
+);
+
 const TMX_GQL_URL = 'https://app-money.tmx.com/graphql';
 const TMX_HEADERS = {
   'Origin': 'https://money.tmx.com',
@@ -402,8 +456,8 @@ async function buildCaInsiderCache(days, mode) {
       const allTrades = [];
       const batchSize = 10;
 
-      for (let i = 0; i < CA_TSX_STOCKS.length; i += batchSize) {
-        const batch = CA_TSX_STOCKS.slice(i, i + batchSize);
+      for (let i = 0; i < CA_TMX_UNIVERSE.length; i += batchSize) {
+        const batch = CA_TMX_UNIVERSE.slice(i, i + batchSize);
         const results = await Promise.allSettled(
           batch.map(async ({ sym, name }) => {
             try {
@@ -676,27 +730,35 @@ async function fetchLatestInsiderActivity(days = 7) {
   const cutoffStr = cutoff.toISOString().slice(0, 10);
   const inWindow = entries.filter(e => e.filedDate >= cutoffStr);
 
-  // Group by date then sample evenly across the alphabet so we don't
-  // end up with only companies starting with A-C.
+  // Group by date then keep a much wider slice per day. The previous
+  // aggressively thinned sampling made the feed feel stale/sparse even when
+  // newer filings existed. We still cap it to avoid exploding SEC fetches.
   const byDate = new Map();
   for (const e of inWindow) {
     if (!byDate.has(e.filedDate)) byDate.set(e.filedDate, []);
     byDate.get(e.filedDate).push(e);
   }
-  const perDay = days <= 7 ? 12 : days <= 14 ? 9 : 6;
+  const perDay = days <= 7 ? 30 : days <= 14 ? 22 : 16;
   const sampled = [];
-  for (const dayEntries of byDate.values()) {
+  for (const [_, dayEntries] of [...byDate.entries()].sort((a, b) => b[0].localeCompare(a[0]))) {
+    dayEntries.sort((a, b) => a.companyName.localeCompare(b.companyName));
     if (dayEntries.length <= perDay) {
       sampled.push(...dayEntries);
     } else {
-      const step = Math.floor(dayEntries.length / perDay);
+      const step = Math.max(1, Math.floor(dayEntries.length / perDay));
       for (let i = 0; i < dayEntries.length && sampled.length < perDay * byDate.size; i += step) {
         sampled.push(dayEntries[i]);
       }
     }
   }
 
-  const groups = await Promise.all(sampled.map((entry) => fetchSecInsiderActivityItem(entry)));
+  const groups = [];
+  const batchSize = 8;
+  for (let i = 0; i < sampled.length; i += batchSize) {
+    const batch = sampled.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map((entry) => fetchSecInsiderActivityItem(entry)));
+    groups.push(...batchResults);
+  }
   return groups.flat().sort((a, b) =>
     (b.filingDate || '').localeCompare(a.filingDate || '')
     || (b.transactionDate || '').localeCompare(a.transactionDate || '')

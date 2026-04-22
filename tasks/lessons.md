@@ -228,3 +228,11 @@
 **Observation:** After a fresh deploy, some browsers asked for an older lazy chunk filename and got `index.html` back, which showed up as `Failed to fetch dynamically imported module` and made pages look broken.
 **Root cause:** The server treated unknown `/assets/...` paths like normal app routes and served the SPA fallback instead of a 404. That means the browser received HTML where it expected JavaScript.
 **Rule:** For SPAs with hashed build assets, serve `index.html` with `no-store`, serve `/assets/...` with immutable cache headers, and make missing asset paths return a real 404. Pair that with a one-time client reload on chunk-load failure so deploy transitions recover automatically for users with a stale shell in memory.
+
+---
+
+## Lesson: 2026-04-22 - A feed can be current and still feel broken if sampling is too aggressive
+
+**Observation:** The insider endpoints were up to date, but users still perceived them as stale because the result set was too small and too selective. "Fresh but thin" reads like "missing data" to users.
+**Root cause:** We optimized sampling for speed and provider safety before optimizing for informational density. That kept the feeds technically current while hiding too much of the available activity.
+**Rule:** For research surfaces, optimize first for a convincing information surface, then trim with batching and caching. If you must sample, do it generously enough that the page still feels comprehensive; otherwise users will correctly conclude the feed is incomplete even when the timestamps are current.
