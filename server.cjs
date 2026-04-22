@@ -386,21 +386,21 @@ const TMX_HEADERS = {
 // invalidate each other on switch.
 const caInsiderCaches = {};
 const caInsiderLastFetch = {};
+const caInsiderBuilds = {};
 const CA_INSIDER_TTL = 30 * 60 * 1000;
 
-app.get('/api/ca-insider-activity', async (req, res) => {
-  const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
-  const mode = req.query.mode === 'filings' ? 'filings' : 'insiders'; // insiders=open-market only, filings=all types
+async function buildCaInsiderCache(days, mode) {
   const cacheKey = `${days}-${mode}`;
+  if (caInsiderBuilds[cacheKey]) return caInsiderBuilds[cacheKey];
 
-  if (!caInsiderCaches[cacheKey] || Date.now() - (caInsiderLastFetch[cacheKey] || 0) > CA_INSIDER_TTL) {
+  caInsiderBuilds[cacheKey] = (async () => {
     try {
       const cutoff = new Date();
       cutoff.setDate(cutoff.getDate() - days);
       const cutoffStr = cutoff.toISOString().slice(0, 10);
 
       const allTrades = [];
-      const batchSize = 5;
+      const batchSize = 10;
 
       for (let i = 0; i < CA_TSX_STOCKS.length; i += batchSize) {
         const batch = CA_TSX_STOCKS.slice(i, i + batchSize);
@@ -480,13 +480,37 @@ app.get('/api/ca-insider-activity', async (req, res) => {
       );
       caInsiderCaches[cacheKey] = { trades: allTrades };
       caInsiderLastFetch[cacheKey] = Date.now();
+      return caInsiderCaches[cacheKey];
     } catch (err) {
       console.error(`[ca-insider-activity:${cacheKey}]`, err.message);
-      if (!caInsiderCaches[cacheKey]) {
-        return res.status(502).json({ error: err.message, trades: [] });
-      }
+      if (!caInsiderCaches[cacheKey]) throw err;
+      return caInsiderCaches[cacheKey];
+    } finally {
+      delete caInsiderBuilds[cacheKey];
+    }
+  })();
+
+  return caInsiderBuilds[cacheKey];
+}
+
+app.get('/api/ca-insider-activity', async (req, res) => {
+  const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+  const mode = req.query.mode === 'filings' ? 'filings' : 'insiders'; // insiders=open-market only, filings=all types
+  const cacheKey = `${days}-${mode}`;
+  const hasCache = Boolean(caInsiderCaches[cacheKey]);
+  const isFresh = hasCache && (Date.now() - (caInsiderLastFetch[cacheKey] || 0) <= CA_INSIDER_TTL);
+
+  try {
+    if (!hasCache) {
+      await buildCaInsiderCache(days, mode);
+    } else if (!isFresh) {
+      buildCaInsiderCache(days, mode).catch((err) => {
+        console.error(`[ca-insider-activity-refresh:${cacheKey}]`, err.message);
+      });
       res.setHeader('X-Data-Stale', '1');
     }
+  } catch (err) {
+    return res.status(502).json({ error: err.message, trades: [] });
   }
 
   res.json({ trades: caInsiderCaches[cacheKey].trades });
@@ -2360,6 +2384,10 @@ app.get('/api/13f/options-scan', async (_req, res) => {
 
 // Pre-warm on startup (delay 8s to let server stabilise first)
 setTimeout(() => buildOptionsScan().catch(e => console.error('[options-scan init]', e.message)), 8000);
+setTimeout(() => {
+  buildCaInsiderCache(7, 'insiders').catch(e => console.error('[ca-insider init:7-insiders]', e.message));
+  buildCaInsiderCache(7, 'filings').catch(e => console.error('[ca-insider init:7-filings]', e.message));
+}, 12000);
 
 // Serve built React app
 const distPath = path.join(__dirname, 'dist');

@@ -34,6 +34,40 @@
 - [ ] `SymbolPriceFetcher` / `SymbolPrice` pattern mounts one component per symbol to pull prices. Consolidate into a single batched query (one `useQueries` call against a deduped symbol list) to cut request fan-out on Portfolio / Leaderboard.
 - [ ] Add a global error boundary around the Portfolio / Leaderboard pages so a single bad row can't blank the screen.
 
+## Plan: Endpoint recheck + Canadian insider API perf hardening (2026-04-21)
+
+### Live endpoint snapshot
+- `GET /api/latest-congress?limit=10` — 200 in ~993ms
+- `GET /api/latest-insiders` — 200 in ~1420ms
+- `GET /api/insider-activity?days=7&limit=20` — 200 in ~112ms
+- `GET /api/ca-insider-activity?days=7&mode=insiders&limit=20` — 200 in ~13089ms
+- `GET /api/ca-insider-activity?days=7&mode=filings&limit=20` — 200 in ~11206ms
+- `GET /api/13f/recent-filings` — 200 in ~1919ms
+- `GET /api/13f/recent-filers` — 200 in ~1877ms
+- `GET /api/13f/options-scan` — 200 in ~499ms
+
+### Root cause
+- The clear outlier was the Canadian insider route.
+- Once its 30-minute cache expired, the next request blocked on a full TMX rebuild across the curated TSX list.
+- That meant users paid the full 11–13s rebuild cost even when slightly stale cached data already existed.
+
+### Shipped
+- [x] `server.cjs` — extracted the Canadian insider cache rebuild into `buildCaInsiderCache(days, mode)`.
+- [x] `server.cjs` — added in-flight build dedupe so overlapping requests for the same cache key share one rebuild instead of stampeding TMX.
+- [x] `server.cjs` — switched Canadian insider cache expiry from blocking refresh to stale-while-revalidate: stale cache is served immediately with background refresh.
+- [x] `server.cjs` — increased TMX batch concurrency from 5 symbols to 10 symbols per batch.
+- [x] `server.cjs` — prewarms `7-insiders` and `7-filings` shortly after boot because those are the default Insider page paths.
+- [x] `npm run build` clean after the change.
+
+### Verification
+- Local cold `GET /api/ca-insider-activity?days=7&mode=insiders` — ~11510ms
+- Immediate second hit on the same route — ~72ms
+- `GET /api/ca-insider-activity?days=7&mode=filings` after warm-up — ~186ms
+
+### Open
+- [ ] Recheck the live Render instance after deploy to confirm repeat-hit CA insider latency drops sharply there too.
+- [ ] If cold-start latency is still too visible on Render, consider persisting the CA insider caches externally or narrowing the first-load symbol universe for the 7-day tabs.
+
 ### Review
 - The "stuck on Processing" pattern (missing `finally`) is the kind of bug that only shows up under real-world network failure modes — worth codifying as a lesson for every async submit handler.
 - `Promise.all` + `.single()` is a very easy combo to regress into; the `maybeSingle` + `allSettled` pair is the right default for any "load this page with N independent queries" flow.

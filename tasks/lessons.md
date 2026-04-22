@@ -180,3 +180,11 @@
 **Observation:** A single trade in MoneyTalks triggers inserts/updates across `trades`, `holdings`, and `players` (cash/balances in legacy rows). The Leaderboard listened to all three and fired three full reloads per trade within ~100ms of each other.
 **Root cause:** Supabase `postgres_changes` fires one event per table per row change — subscribing to multiple tables for a logically single operation fans out into N events. Each one kicked off a fresh `getAllPlayers + getAllHoldings + getRecentTrades` round trip.
 **Rule:** When subscribing to multiple `postgres_changes` topics that are commonly triggered together, debounce the reload handler (200–500ms is plenty). Same pattern applies anywhere you re-fetch in response to realtime events — never hook the refetch directly to the event without a coalescing timer.
+
+---
+
+## Lesson: 2026-04-21 — Expiring a hot cache should not force the next user to pay the rebuild cost
+
+**Observation:** The Canadian insider endpoints were healthy but felt broken in production because each cache expiry forced the next request to wait ~11–13 seconds for a full TMX rebuild across the curated TSX list. Users experienced that as "the tab is slow" even though cached data from minutes earlier was still perfectly usable.
+**Root cause:** The route treated cache expiry as a synchronous miss instead of a stale-but-serviceable hit. We already had valid cached data in memory, but the handler blocked on refresh before returning anything.
+**Rule:** For expensive upstream aggregations with acceptable staleness windows, use stale-while-revalidate. If a cache exists, return it immediately and refresh in the background; only block when there is no cache at all. Pair that with in-flight build dedupe so concurrent requests share one refresh instead of stampeding the provider.
