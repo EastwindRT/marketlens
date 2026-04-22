@@ -266,6 +266,7 @@ export default function StockDetail() {
         <StockAIChat
           symbol={symbol}
           context={{
+            companyName: profile?.name || quote?._name || symbol,
             price: quote?.c ? `${currency === 'CAD' ? 'CA$' : 'US$'}${quote.c}` : undefined,
             priceRaw: quote?.c,
             change: quote?.dp != null ? `${quote.dp >= 0 ? '+' : ''}${quote.dp.toFixed(2)}%` : undefined,
@@ -401,6 +402,7 @@ function renderMarkdown(text: string): string {
 function StockAIChat({ symbol, context }: {
   symbol: string;
   context: {
+    companyName?: string;
     price?: string; priceRaw?: number; change?: string; marketCap?: string;
     volume?: string; exchange?: string; insiders?: InsiderTransaction[];
     candles?: OHLCVBar[];
@@ -425,10 +427,14 @@ function StockAIChat({ symbol, context }: {
     setMessages(prev => [...prev, { role: 'user', text: question }]);
     setLoading(true);
     try {
+      const history = messages.slice(-6).map((message) => ({
+        role: message.role === 'ai' ? 'assistant' : 'user',
+        content: message.text,
+      }));
       const res = await fetch('/api/ask-stock', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, symbol, context }),
+        body: JSON.stringify({ question, symbol, context, history }),
       });
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'ai', text: data.answer || data.error || 'No response.' }]);

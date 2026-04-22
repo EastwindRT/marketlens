@@ -1699,7 +1699,7 @@ function summarizeInsiders(insiders) {
 
 // ── Stock Q&A Chat ────────────────────────────────────────────────────────────
 app.post('/api/ask-stock', async (req, res) => {
-  const { question, symbol, context } = req.body ?? {};
+  const { question, symbol, context, history } = req.body ?? {};
   if (!question || !symbol) return res.status(400).json({ error: 'Missing question or symbol' });
 
   const apiKey = process.env.GROQ_API_KEY;
@@ -1715,6 +1715,7 @@ app.post('/api/ask-stock', async (req, res) => {
   // Build context block from what the client sends
   const ctx = [];
   const quick = [];
+  const companyLabel = context?.companyName ? `${context.companyName} (${symbol})` : symbol;
   if (context?.price)       quick.push(`Price ${context.price}`);
   if (context?.change)      quick.push(`Day change ${context.change}`);
   if (context?.marketCap)   quick.push(`Mkt Cap ${context.marketCap}`);
@@ -1751,27 +1752,48 @@ app.post('/api/ask-stock', async (req, res) => {
     ctx.push(summarizeNews(context.news));
   }
 
-  const systemPrompt = `You are a sharp Wall Street equity analyst covering ${symbol}. Answer like a senior analyst briefing a PM — direct, specific, data-driven.
+  const conversationHistory = Array.isArray(history)
+    ? history
+        .filter((message) =>
+          message &&
+          (message.role === 'user' || message.role === 'assistant') &&
+          typeof message.content === 'string' &&
+          message.content.trim()
+        )
+        .slice(-6)
+        .map((message) => ({
+          role: message.role,
+          content: message.content.trim().slice(0, 2500),
+        }))
+    : [];
+
+  const systemPrompt = `You are a sharp Wall Street equity analyst covering ${companyLabel}. Answer like a senior analyst briefing a PM — direct, specific, data-driven, and willing to make a call.
 
 RESPONSE FORMAT:
-- Lead with a one-line verdict
-- For analytical questions, use compact markdown sections in this order (skip any section with no supporting data):
+- Lead with a one-line verdict that actually answers the question
+- For analytical questions, use markdown sections in this order when relevant:
+  **What matters most right now**
   **Trend / Regime**
   **Key Levels**
-  **Indicator Read**
-  **Valuation & Analyst View**
-  **Insider / News Read**
-  **Bullish Case**
-  **Bearish Case**
+  **What the fundamentals say**
+  **What insiders / news say**
+  **Bull case**
+  **Bear case**
+  **What would change my mind**
   **Bottom line**
 - Use bullet points (-) when listing 3+ items
 - Bold key numbers and names with **markdown**
 - Cite specific numbers from the context (price levels, P/E, insider $ flow, target upside %) rather than vague language
-- Keep response under 400 words unless the question genuinely needs more
+- Explain the why, not just the what: connect the evidence to the conclusion
+- If the user's question is broad, synthesize the chart, fundamentals, insider flow, and news into one coherent thesis
+- If the user's question is narrow, answer it first and then add the most relevant supporting evidence
+- Keep response in the 350-700 word range when the question is analytical; be concise only for narrow factual questions
 - Never use generic disclaimers ("consult a financial advisor", "past performance", etc.)
 - If a specific fact isn't in the context and you don't know it, say so briefly and pivot to what the data does show
 - Tie the technical read to the fundamental read when both are present — do they agree or conflict?
 - Comment explicitly on whether insider flow confirms or contradicts the price action
+- Do not hedge every sentence; if the evidence leans one way, say so clearly
+- Treat prior conversation as context for follow-up questions and maintain continuity instead of restarting from scratch
 
 STOCK CONTEXT (live data as of today):
 ${ctx.join('\n') || 'No live context — rely on your training knowledge about this company.'}`;
@@ -1779,10 +1801,11 @@ ${ctx.join('\n') || 'No live context — rely on your training knowledge about t
   try {
     const body = JSON.stringify({
       model: 'llama-3.3-70b-versatile',
-      max_tokens: 1500,
-      temperature: 0.4,
+      max_tokens: 2200,
+      temperature: 0.25,
       messages: [
         { role: 'system', content: systemPrompt },
+        ...conversationHistory,
         { role: 'user', content: question },
       ],
     });

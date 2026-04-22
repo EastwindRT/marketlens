@@ -124,3 +124,26 @@
 - [ ] Add a small shared "Last updated / Refreshing" pattern across all data-heavy pages so users can tell the difference between stale data and an in-flight refresh.
 - [ ] Consider server-backed aggregation for leaderboard/public portfolio snapshots if league size grows, because client-side `getAllPlayers + getAllHoldings + quotes` will eventually become the next bottleneck.
 - [ ] Recheck News / Signals pages for similar repeated client fanout if those surfaces start to feel heavy under larger watchlists.
+
+## Plan: Ask AI depth upgrade (2026-04-22)
+
+### Reported issue
+1. Stock-detail Ask AI answers felt too shallow and too generic compared with the data available on the page.
+
+### Root causes found
+- `/api/ask-stock` was still optimized like a quick single-turn chat despite having much richer stock context available.
+- Follow-up questions were stateless: the client sent only the newest question, so the model lost the prior conversation and kept restarting from scratch.
+- The Groq prompt emphasized brevity, which made the model compress conclusions instead of walking through the evidence.
+
+### Shipped
+- [x] `src/pages/StockDetail.tsx` - Ask AI now sends the last few chat turns as history so follow-up questions keep context.
+- [x] `src/pages/StockDetail.tsx` - Ask AI context now includes the company name alongside the symbol.
+- [x] `server.cjs` - `/api/ask-stock` now accepts conversation history and passes a trimmed multi-turn window to Groq.
+- [x] `server.cjs` - upgraded the stock-analysis system prompt to force a clearer thesis, evidence, bull/bear framing, and "what would change my mind" reasoning.
+- [x] `server.cjs` - increased Ask AI response budget (`max_tokens` 1500 -> 2200) and lowered temperature (`0.4 -> 0.25`) for more detailed and more consistent answers.
+- [x] `npm run build` clean after the change.
+
+### Expected user-facing outcome
+- Follow-up questions should feel like a real conversation instead of a reset.
+- Broad questions should return a more PM-style note with clearer reasoning and more supporting detail.
+- Answers should be less generic because the model is being pushed to synthesize chart, fundamentals, insider flow, and news into one thesis.

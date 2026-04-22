@@ -212,3 +212,11 @@
 **Observation:** Dashboard and leaderboard views felt progressively slow because each tile or row mounted its own quote hook, so the page hydrated one card at a time and did more work than necessary.
 **Root cause:** The data model was fine, but the fetch topology was fragmented. Many small quote hooks create extra React work, noisier loading states, and more visible fanout on navigation.
 **Rule:** On list/grid surfaces, dedupe the symbol set once and hydrate quotes through a shared `useStockQuotes()` path. Let the page render its structural data first, then fill prices into existing rows instead of turning every card into its own mini loading pipeline.
+
+---
+
+## Lesson: 2026-04-22 - A good stock chat needs conversation memory, not just a better model
+
+**Observation:** Ask AI responses felt shallow even though the stock page already had candles, fundamentals, insider flow, and news. Follow-up questions were especially weak because the assistant kept answering as if each turn were the first.
+**Root cause:** The backend had rich snapshot context, but the chat was stateless. Sending only the newest question forces the model to reconstruct intent every turn, which makes answers repetitive and generic.
+**Rule:** For any multi-turn AI surface, always send a trimmed conversation window along with the latest structured context. Better prompt design helps, but preserving the last few user/assistant turns is what makes follow-up questions feel coherent and analytically cumulative.
