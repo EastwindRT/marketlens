@@ -4,6 +4,17 @@ import { executeBuy, executeSell } from '../../api/supabase';
 import { useLeagueStore } from '../../store/leagueStore';
 import { formatPrice } from '../../utils/formatters';
 
+const TRADE_TIMEOUT_MS = 20000;
+
+async function withTradeTimeout<T>(promise: Promise<T>, timeoutMs = TRADE_TIMEOUT_MS): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error('Trade request timed out')), timeoutMs);
+    }),
+  ]);
+}
+
 interface TradeModalProps {
   symbol: string;
   exchange: string;
@@ -53,8 +64,8 @@ export default function TradeModal({
 
     try {
       const result = mode === 'BUY'
-        ? await executeBuy(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)
-        : await executeSell(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined);
+        ? await withTradeTimeout(executeBuy(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined))
+        : await withTradeTimeout(executeSell(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined));
 
       if (!result.success) {
         setError(result.error ?? 'Trade failed');
@@ -63,8 +74,13 @@ export default function TradeModal({
 
       setDone(true);
       setTimeout(() => { onSuccess?.(); onClose(); }, 1200);
-    } catch {
-      setError('Connection error — check your network and try again');
+    } catch (err) {
+      const message = String((err as Error)?.message || err);
+      if (/timed out/i.test(message)) {
+        setError('This trade request took too long. Please try again.');
+      } else {
+        setError('Connection error — check your network and try again');
+      }
     } finally {
       setLoading(false);
     }
