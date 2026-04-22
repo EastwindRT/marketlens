@@ -339,7 +339,7 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
       />
       {items.length === 0 ? (
         <div style={{ padding: '12px 16px 8px', textAlign: 'center' }}>
-          <p style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Search for stocks to add</p>
+          <p style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No watchlist items yet</p>
         </div>
       ) : (
         <div style={{ padding: '0 4px' }}>

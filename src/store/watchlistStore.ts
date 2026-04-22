@@ -13,7 +13,7 @@ export interface WatchlistItem {
   exchange?: string;
 }
 
-const DEFAULT_ITEMS: WatchlistItem[] = [
+const LEGACY_DEFAULT_ITEMS: WatchlistItem[] = [
   { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ' },
   { symbol: 'SHOP.TO', name: 'Shopify Inc.', exchange: 'TSX' },
   { symbol: 'TD.TO', name: 'TD Bank', exchange: 'TSX' },
@@ -44,6 +44,21 @@ function dedupe(items: WatchlistItem[]): WatchlistItem[] {
   return out;
 }
 
+const LEGACY_DEFAULT_SYMBOLS = dedupe(LEGACY_DEFAULT_ITEMS).map((item) => item.symbol).sort();
+
+function isLegacySeededWatchlist(items: WatchlistItem[]): boolean {
+  const symbols = dedupe(items).map((item) => item.symbol).sort();
+  return (
+    symbols.length === LEGACY_DEFAULT_SYMBOLS.length &&
+    symbols.every((symbol, index) => symbol === LEGACY_DEFAULT_SYMBOLS[index])
+  );
+}
+
+function sanitizeItems(items: WatchlistItem[]): WatchlistItem[] {
+  const normalized = dedupe(items);
+  return isLegacySeededWatchlist(normalized) ? [] : normalized;
+}
+
 interface WatchlistStore {
   items: WatchlistItem[];
   hydrated: boolean;
@@ -58,13 +73,13 @@ interface WatchlistStore {
 export const useWatchlistStore = create<WatchlistStore>()(
   persist(
     (set, get) => ({
-      items: DEFAULT_ITEMS,
+      items: [],
       hydrated: false,
       syncing: false,
       currentPlayerId: null,
 
       initialize: async (playerId) => {
-        const fallbackItems = dedupe(get().items.length ? get().items : DEFAULT_ITEMS);
+        const fallbackItems = sanitizeItems(get().items);
 
         if (!playerId || !HAS_SUPABASE) {
           set({
@@ -79,7 +94,7 @@ export const useWatchlistStore = create<WatchlistStore>()(
         set({ currentPlayerId: playerId, hydrated: false, syncing: true });
 
         try {
-          const remoteItems = dedupe(await getWatchlist(playerId));
+          const remoteItems = sanitizeItems(await getWatchlist(playerId));
 
           if (remoteItems.length > 0) {
             set({
@@ -92,13 +107,18 @@ export const useWatchlistStore = create<WatchlistStore>()(
           }
 
           set({
-            items: fallbackItems,
+            items: [],
             currentPlayerId: playerId,
             hydrated: true,
             syncing: false,
           });
 
-          await replaceWatchlist(playerId, fallbackItems);
+          if (fallbackItems.length > 0) {
+            await replaceWatchlist(playerId, fallbackItems);
+            return;
+          }
+
+          await replaceWatchlist(playerId, []);
         } catch {
           set({
             items: fallbackItems,

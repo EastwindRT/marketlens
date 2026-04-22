@@ -7,6 +7,7 @@ import { useStockQuotes } from '../hooks/useStockData';
 import type { Holding, Player } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
 import AddPositionModal from '../components/trade/AddPositionModal';
+import AddWatchlistModal from '../components/trade/AddWatchlistModal';
 import { useWatchlistStore } from '../store/watchlistStore';
 
 const HoldingRow = React.memo(function HoldingRow({ holding, quote }: { holding: Holding; quote?: { c?: number } }) {
@@ -112,6 +113,7 @@ export default function Portfolio() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [showAddPosition, setShowAddPosition] = useState(false);
+  const [showAddWatchlist, setShowAddWatchlist] = useState(false);
 
   useEffect(() => {
     // Don't redirect — App.tsx handles the login wall for unauthenticated users.
@@ -281,11 +283,21 @@ export default function Portfolio() {
       {/* ── Watchlist ── */}
       {watchlist.length > 0 && (
         <div className="mt-6">
-          <div className="flex items-center gap-2 mb-3">
-            <Star size={14} style={{ color: 'var(--text-tertiary)' }} />
-            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
-              Watchlist
-            </span>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Star size={14} style={{ color: 'var(--text-tertiary)' }} />
+              <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
+                Watchlist
+              </span>
+            </div>
+            <button
+              onClick={() => setShowAddWatchlist(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold"
+              style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', cursor: 'pointer' }}
+            >
+              <Plus size={13} />
+              Add symbol
+            </button>
           </div>
           {watchlist.map(item => (
             <WatchRow key={item.symbol} symbol={item.symbol} name={item.name} quote={quoteMap[item.symbol]} />
@@ -293,8 +305,34 @@ export default function Portfolio() {
         </div>
       )}
 
+      {watchlist.length === 0 && (
+        <div
+          className="mt-6 rounded-2xl p-8 text-center"
+          style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}
+        >
+          <div className="flex justify-center mb-3">
+            <Star size={20} style={{ color: 'var(--text-tertiary)' }} />
+          </div>
+          <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>No watchlist items yet</p>
+          <p className="text-xs mt-1" style={{ color: 'var(--text-tertiary)' }}>
+            Add symbols here to track price moves without opening each stock first.
+          </p>
+          <button
+            onClick={() => setShowAddWatchlist(true)}
+            className="inline-flex items-center gap-1.5 mt-4 px-4 py-2 rounded-xl text-sm font-medium"
+            style={{ background: 'var(--accent-blue)', color: '#fff', border: 'none', cursor: 'pointer' }}
+          >
+            <Plus size={14} /> Add your first watchlist item
+          </button>
+        </div>
+      )}
+
       {showAddPosition && (
         <AddPositionModal onClose={() => setShowAddPosition(false)} />
+      )}
+
+      {showAddWatchlist && (
+        <AddWatchlistModal onClose={() => setShowAddWatchlist(false)} />
       )}
     </div>
   );
