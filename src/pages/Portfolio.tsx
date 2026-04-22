@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowUpRight, ArrowDownRight, LogOut, Briefcase, Plus, Star } from 'lucide-react';
 import { getHoldings, supabase } from '../api/supabase';
@@ -107,11 +107,13 @@ const WatchRow = React.memo(function WatchRow({ symbol, name, quote }: { symbol:
 
 export default function Portfolio() {
   const { player, playerStatus, logout } = useLeagueStore();
-  const { items: watchlist } = useWatchlistStore();
+  const { items: watchlist, hydrated: watchlistHydrated } = useWatchlistStore();
   const navigate = useNavigate();
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const hasLoadedRef = useRef(false);
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [showAddWatchlist, setShowAddWatchlist] = useState(false);
 
@@ -120,27 +122,46 @@ export default function Portfolio() {
     // Just wait for the player to be set after the session resolves.
     if (!player) return;
 
-    async function load() {
+    let isActive = true;
+    let requestId = 0;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    async function load(showBlockingState: boolean) {
+      const runId = ++requestId;
       try {
-        setLoading(true);
-        setLoadError('');
+        if (showBlockingState && !hasLoadedRef.current) setLoading(true);
+        else setRefreshing(true);
+        if (showBlockingState || !hasLoadedRef.current) setLoadError('');
         const h = await getHoldings(player!.id);
+        if (!isActive || runId !== requestId) return;
         setHoldings(h);
+        setLoadError('');
+        hasLoadedRef.current = true;
       } catch {
-        setLoadError('Could not load holdings. Tap to retry.');
+        if (!isActive || runId !== requestId) return;
+        if (!hasLoadedRef.current) setLoadError('Could not load holdings. Tap to retry.');
       } finally {
+        if (!isActive || runId !== requestId) return;
         setLoading(false);
+        setRefreshing(false);
       }
     }
-    load();
+    void load(true);
 
     const sub = supabase
       .channel('portfolio')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'holdings',
-        filter: `player_id=eq.${player.id}` }, load)
+        filter: `player_id=eq.${player.id}` }, () => {
+          if (refreshTimer) clearTimeout(refreshTimer);
+          refreshTimer = setTimeout(() => { void load(false); }, 250);
+        })
       .subscribe();
 
-    return () => { supabase.removeChannel(sub); };
+    return () => {
+      isActive = false;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      supabase.removeChannel(sub);
+    };
   }, [player]);
 
   const allSymbols = [...new Set([
@@ -233,6 +254,11 @@ export default function Portfolio() {
             <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
               Positions
             </span>
+            {refreshing && (
+              <span className="text-[11px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                Refreshing…
+              </span>
+            )}
           </div>
           <button
             onClick={() => setShowAddPosition(true)}
@@ -281,7 +307,7 @@ export default function Portfolio() {
       </div>
 
       {/* ── Watchlist ── */}
-      {watchlist.length > 0 && (
+      {watchlistHydrated && watchlist.length > 0 && (
         <div className="mt-6">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
@@ -305,7 +331,7 @@ export default function Portfolio() {
         </div>
       )}
 
-      {watchlist.length === 0 && (
+      {watchlistHydrated && watchlist.length === 0 && (
         <div
           className="mt-6 rounded-2xl p-8 text-center"
           style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}
@@ -324,6 +350,12 @@ export default function Portfolio() {
           >
             <Plus size={14} /> Add your first watchlist item
           </button>
+        </div>
+      )}
+
+      {!watchlistHydrated && (
+        <div className="mt-6">
+          <div className="h-28 rounded-2xl animate-pulse" style={{ background: 'var(--bg-surface)' }} />
         </div>
       )}
 

@@ -4,7 +4,7 @@ import { TrendingUp, TrendingDown, Clock, RotateCcw } from 'lucide-react';
 import { getAllPlayers, getAllHoldings, getRecentTrades, supabase } from '../api/supabase';
 import { useLeagueStore } from '../store/leagueStore';
 import type { Player, Holding, Trade } from '../api/supabase';
-import { useStockQuote } from '../hooks/useStockData';
+import { useStockQuotes } from '../hooks/useStockData';
 
 // Cash system removed — returns are now computed as (holdings value − cost basis) / cost basis
 
@@ -236,26 +236,20 @@ interface LeaderEntry {
 }
 
 // ── Price fetching infra ──────────────────────────────────────────────────────
-function SymbolPriceFetcher({ symbol, onPrice }: { symbol: string; onPrice: (s: string, p: number) => void }) {
-  const { data } = useStockQuote(symbol);
-  useEffect(() => {
-    if (data?.c) onPrice(symbol, data.c);
-  }, [data?.c, symbol]);
-  return null;
-}
-
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function Leaderboard() {
   const { player: me } = useLeagueStore();
   const [players, setPlayers] = useState<Player[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [recentTrades, setRecentTrades] = useState<(Trade & { player_name: string })[]>([]);
-  const [priceMap, setPriceMap] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (showBlockingState = false) => {
     try {
+      if (showBlockingState && players.length === 0 && holdings.length === 0) setLoading(true);
+      else setRefreshing(true);
       setError('');
       const [p, h, t] = await Promise.all([
         getAllPlayers(),
@@ -269,17 +263,18 @@ export default function Leaderboard() {
       setError('Could not load leaderboard.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, []);
+  }, [holdings.length, players.length]);
 
   useEffect(() => {
-    load();
+    void load(true);
     // Debounce: when someone makes a trade, Supabase fires events on trades +
     // holdings + players nearly simultaneously. Collapse them into a single reload.
     let reloadTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleReload = () => {
       if (reloadTimer) clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(load, 500);
+      reloadTimer = setTimeout(() => { void load(false); }, 500);
     };
     const sub = supabase
       .channel('leaderboard')
@@ -293,11 +288,14 @@ export default function Leaderboard() {
     };
   }, [load]);
 
+  const symbols = [...new Set(holdings.map(h => h.symbol))];
+  const { quoteMap } = useStockQuotes(symbols);
+
   // Build and sort entries
   const entries: LeaderEntry[] = players.map(player => {
     const myHoldings = holdings.filter(h => h.player_id === player.id);
     const holdingsValue = myHoldings.reduce((sum, h) => {
-      const price = priceMap[h.symbol] ?? h.avg_cost;
+      const price = quoteMap[h.symbol]?.c ?? h.avg_cost;
       return sum + h.shares * price;
     }, 0);
     const costBasis = myHoldings.reduce((sum, h) => sum + h.shares * h.avg_cost, 0);
@@ -307,7 +305,6 @@ export default function Leaderboard() {
   });
   entries.sort((a, b) => b.portfolioValue - a.portfolioValue);
 
-  const symbols = [...new Set(holdings.map(h => h.symbol))];
   const myEntry = entries.find(e => e.player.id === me?.id);
   const myRank = myEntry ? entries.indexOf(myEntry) + 1 : null;
   const iMeInTop3 = myRank !== null && myRank <= 3;
@@ -348,11 +345,11 @@ export default function Leaderboard() {
             Portfolios
           </h1>
           <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '2px 0 0' }}>
-            Public portfolios · {players.length} members
+            Public portfolios · {players.length} members{refreshing ? ' · Refreshing…' : ''}
           </p>
         </div>
         <button
-          onClick={load}
+          onClick={() => void load(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 6,
             padding: '8px 12px', borderRadius: 10,
@@ -374,7 +371,7 @@ export default function Leaderboard() {
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
           <span style={{ fontSize: 13, color: 'var(--color-down)' }}>{error}</span>
-          <button onClick={load} style={{ fontSize: 12, color: 'var(--color-down)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>
+          <button onClick={() => void load(false)} style={{ fontSize: 12, color: 'var(--color-down)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>
             Retry
           </button>
         </div>
@@ -489,12 +486,6 @@ export default function Leaderboard() {
         </div>
       )}
 
-      {/* Price fetchers (invisible) */}
-      {symbols.map(sym => (
-        <SymbolPriceFetcher key={sym} symbol={sym} onPrice={(s, p) =>
-          setPriceMap(prev => ({ ...prev, [s]: p }))
-        } />
-      ))}
     </div>
   );
 }

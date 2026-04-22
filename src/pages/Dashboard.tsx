@@ -1,13 +1,13 @@
 import { useNavigate } from 'react-router-dom';
 import { useWatchlistStore } from '../store/watchlistStore';
-import { useStockQuote } from '../hooks/useStockData';
+import { useStockQuotes } from '../hooks/useStockData';
 import { formatPrice, formatChange } from '../utils/formatters';
 import { formatTicker, isTSXTicker } from '../utils/marketHours';
 import { TrendingUp, TrendingDown, Search as SearchIcon, AlertCircle } from 'lucide-react';
 
-function DashboardCard({ symbol, name }: { symbol: string; name?: string }) {
+function DashboardCard({ symbol, name, quote, isLoading }: { symbol: string; name?: string; quote?: { c?: number; dp?: number }; isLoading?: boolean }) {
   const navigate = useNavigate();
-  const { data: quote, isLoading, isError } = useStockQuote(symbol);
+  const isError = !isLoading && !quote;
   const isUp = (quote?.dp ?? 0) >= 0;
   const currency = isTSXTicker(symbol) ? 'CAD' : 'USD';
 
@@ -60,7 +60,7 @@ function DashboardCard({ symbol, name }: { symbol: string; name?: string }) {
             className="text-sm font-medium mono mt-1"
             style={{ color: isUp ? 'var(--color-up)' : 'var(--color-down)', fontFamily: "'Roboto Mono', monospace" }}
           >
-            {formatChange(quote.dp)}
+            {formatChange(quote.dp ?? 0)}
           </div>
         </>
       )}
@@ -69,8 +69,10 @@ function DashboardCard({ symbol, name }: { symbol: string; name?: string }) {
 }
 
 export default function Dashboard() {
-  const { items } = useWatchlistStore();
+  const { items, hydrated } = useWatchlistStore();
   const navigate = useNavigate();
+  const symbols = items.map(item => item.symbol);
+  const { quoteMap, isLoading: quotesLoading } = useStockQuotes(symbols);
 
   return (
     <div className="p-6">
@@ -78,7 +80,13 @@ export default function Dashboard() {
         <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>Dashboard</h1>
         <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Your watchlist at a glance</p>
       </div>
-      {items.length === 0 ? (
+      {!hydrated ? (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="rounded-2xl p-5 animate-pulse" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', height: 136 }} />
+          ))}
+        </div>
+      ) : items.length === 0 ? (
         <div
           className="rounded-2xl p-10 text-center"
           style={{ background: 'var(--bg-surface)', border: '1px dashed var(--border-default)' }}
@@ -103,7 +111,13 @@ export default function Dashboard() {
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {items.map(item => (
-            <DashboardCard key={item.symbol} symbol={item.symbol} name={item.name} />
+            <DashboardCard
+              key={item.symbol}
+              symbol={item.symbol}
+              name={item.name}
+              quote={quoteMap[item.symbol]}
+              isLoading={quotesLoading && !quoteMap[item.symbol]}
+            />
           ))}
         </div>
       )}

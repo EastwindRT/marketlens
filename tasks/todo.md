@@ -68,8 +68,59 @@
 - [ ] Recheck the live Render instance after deploy to confirm repeat-hit CA insider latency drops sharply there too.
 - [ ] If cold-start latency is still too visible on Render, consider persisting the CA insider caches externally or narrowing the first-load symbol universe for the 7-day tabs.
 
+## Plan: Portfolio loading cleanup (2026-04-21)
+
+### Reported issue
+1. `/portfolio` and public portfolio pages sometimes hang, flicker back into loading states, or briefly fail to show data.
+
+### Root causes found
+- `App.tsx` waited on watchlist initialization in the same auth boot path as player lookup, so portfolio readiness was blocked by a secondary fetch.
+- `Portfolio.tsx` and `PlayerPortfolio.tsx` treated every refresh like an initial page load, which made Supabase realtime updates and slow queries feel like the page was hanging.
+- Public portfolio reloads fetched player, holdings, and watchlist together on every holdings/watchlist event with no debounce, so bursts of realtime changes could trigger visible repeated reloads.
+
+### Shipped
+- [x] `src/App.tsx` — player readiness no longer waits on watchlist hydration; watchlist now initializes in the background after the session/player match is established.
+- [x] `src/pages/Portfolio.tsx` — added in-place refresh behavior so existing holdings stay visible during reloads instead of dropping back to a blocking loading state.
+- [x] `src/pages/Portfolio.tsx` — debounced holdings realtime reloads and surfaced a lightweight `Refreshing…` indicator instead of a full skeleton reset.
+- [x] `src/pages/Portfolio.tsx` — gated watchlist empty-state rendering on watchlist hydration so the page no longer flashes a misleading empty watchlist while the store is still syncing.
+- [x] `src/pages/PlayerPortfolio.tsx` — changed public portfolio reloads to preserve the last good snapshot, debounce realtime-triggered reloads, and refresh in place.
+- [x] `npm run build` clean after the change.
+
+### Expected user-facing outcome
+- My Portfolio becomes usable sooner after login because player boot is no longer blocked on watchlist sync.
+- Realtime or slow refreshes should keep current positions visible instead of making the whole portfolio feel blank.
+- Public portfolio pages should feel steadier and less prone to “hung up” reload loops.
+
 ### Review
 - The "stuck on Processing" pattern (missing `finally`) is the kind of bug that only shows up under real-world network failure modes — worth codifying as a lesson for every async submit handler.
 - `Promise.all` + `.single()` is a very easy combo to regress into; the `maybeSingle` + `allSettled` pair is the right default for any "load this page with N independent queries" flow.
 - The session-gate fix (spinner + 10s timeout) turned a whole class of "app is broken" reports into at worst a slow load — worth applying the same pattern to any future auth-gated shell.
 - Perf wins were cheap (no new deps, ~60 lines changed) and compound: fewer API calls + fewer reloads + fewer re-renders.
+
+## Plan: Broad site responsiveness pass (2026-04-21)
+
+### Reported issue
+1. The site still felt stall-prone in normal navigation, especially around Dashboard, Portfolios, and My Portfolio.
+
+### Root causes found
+- Dashboard and Leaderboard still had repeated quote fanout patterns that made the UI feel progressively chatty even after the main data was loaded.
+- Portfolio-style pages treated refreshes too much like first loads, so users saw skeletons or blank-feeling resets during ordinary realtime updates.
+- Route readiness and secondary hydration were too tightly coupled in places, which made slow watchlist or profile sync look like a broken page.
+
+### Shipped
+- [x] `src/pages/Dashboard.tsx` - switched watchlist cards to shared `useStockQuotes()` loading so quote hydration is centralized instead of one hook per tile.
+- [x] `src/pages/Leaderboard.tsx` - switched holdings valuation to shared quote loading and removed the hidden per-symbol fetcher pattern.
+- [x] `src/App.tsx` - player/session readiness is now decoupled from watchlist hydration, so route navigation settles sooner.
+- [x] `src/pages/Portfolio.tsx` - holdings stay visible during refresh; realtime-driven reloads are debounced; watchlist empty-state waits for hydration instead of flashing early.
+- [x] `src/pages/PlayerPortfolio.tsx` - public portfolios now preserve the last good snapshot during refreshes and debounce holdings/watchlist realtime bursts.
+- [x] `npm run build` clean after the pass.
+
+### Expected user-facing outcome
+- Dashboard should feel snappier because quotes hydrate in one shared path instead of card-by-card fanout.
+- Leaderboard and both portfolio pages should stop flickering back into loading states during normal refreshes.
+- Slow auth/watchlist sync should degrade into localized loading states instead of making whole pages feel hung.
+
+### Open / next improvements
+- [ ] Add a small shared "Last updated / Refreshing" pattern across all data-heavy pages so users can tell the difference between stale data and an in-flight refresh.
+- [ ] Consider server-backed aggregation for leaderboard/public portfolio snapshots if league size grows, because client-side `getAllPlayers + getAllHoldings + quotes` will eventually become the next bottleneck.
+- [ ] Recheck News / Signals pages for similar repeated client fanout if those surfaces start to feel heavy under larger watchlists.

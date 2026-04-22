@@ -42,7 +42,7 @@ export default function App() {
       if (!nextSession?.user?.email) {
         setPlayerStatus('idle')
         setPlayer(null)
-        await initializeWatchlist(null)
+        void initializeWatchlist(null)
         return
       }
 
@@ -63,15 +63,13 @@ export default function App() {
         const player = await ensurePlayerForSession(nextSession)
         if (!isActive || sessionRunId !== runId) return
         setPlayer(player ?? null)
-        await initializeWatchlist(player?.id ?? null)
-        if (!isActive || sessionRunId !== runId) return
         setPlayerStatus('ready')
+        void initializeWatchlist(player?.id ?? null)
       } catch (err) {
         console.error('[App] ensurePlayerForSession failed:', err)
         if (!isActive || sessionRunId !== runId) return
         setPlayer(null)
-        await initializeWatchlist(null)
-        if (!isActive || sessionRunId !== runId) return
+        void initializeWatchlist(null)
         setPlayerStatus(didTimeout ? 'timed_out' : 'error')
       } finally {
         clearTimeout(playerTimeout)

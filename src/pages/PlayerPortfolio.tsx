@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowUpRight, ArrowDownRight, Briefcase, Eye, RefreshCcw } from 'lucide-react';
 import { getHoldings, getPlayerById, getWatchlist, supabase } from '../api/supabase';
@@ -114,16 +114,26 @@ export default function PlayerPortfolio() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [watchlist, setWatchlist] = useState<WatchlistInput[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [watchlistError, setWatchlistError] = useState('');
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
     if (!playerId) return;
-    async function load() {
+    let isActive = true;
+    let requestId = 0;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    async function load(showBlockingState: boolean) {
+      const runId = ++requestId;
       try {
-        setLoading(true);
-        setError('');
-        setWatchlistError('');
+        if (showBlockingState && !hasLoadedRef.current) setLoading(true);
+        else setRefreshing(true);
+        if (showBlockingState || !hasLoadedRef.current) {
+          setError('');
+          setWatchlistError('');
+        }
 
         // Use allSettled so a failed watchlist/holdings fetch doesn't kill the whole page
         const [pRes, hRes, wRes] = await Promise.allSettled([
@@ -131,6 +141,7 @@ export default function PlayerPortfolio() {
           getHoldings(playerId!),
           getWatchlist(playerId!),
         ]);
+        if (!isActive || runId !== requestId) return;
 
         const p = pRes.status === 'fulfilled' ? pRes.value : null;
         if (!p) {
@@ -139,31 +150,47 @@ export default function PlayerPortfolio() {
           return;
         }
         setPlayer(p);
+        setError('');
         if (hRes.status === 'fulfilled') setHoldings(hRes.value);
         else setHoldings([]);
 
         if (wRes.status === 'fulfilled') {
           setWatchlist(wRes.value);
+          setWatchlistError('');
         } else {
-          setWatchlist([]);
+          if (!hasLoadedRef.current) setWatchlist([]);
           setWatchlistError('Could not load this watchlist right now.');
         }
+        hasLoadedRef.current = true;
       } catch {
-        setError('Could not load portfolio.');
+        if (!isActive || runId !== requestId) return;
+        if (!hasLoadedRef.current) setError('Could not load portfolio.');
       } finally {
+        if (!isActive || runId !== requestId) return;
         setLoading(false);
+        setRefreshing(false);
       }
     }
-    load();
+    void load(true);
 
     const sub = supabase
       .channel(`player-portfolio-${playerId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'holdings',
-        filter: `player_id=eq.${playerId}` }, load)
+        filter: `player_id=eq.${playerId}` }, () => {
+          if (refreshTimer) clearTimeout(refreshTimer);
+          refreshTimer = setTimeout(() => { void load(false); }, 250);
+        })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlists',
-        filter: `player_id=eq.${playerId}` }, load)
+        filter: `player_id=eq.${playerId}` }, () => {
+          if (refreshTimer) clearTimeout(refreshTimer);
+          refreshTimer = setTimeout(() => { void load(false); }, 250);
+        })
       .subscribe();
-    return () => { supabase.removeChannel(sub); };
+    return () => {
+      isActive = false;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      supabase.removeChannel(sub);
+    };
   }, [playerId]);
 
   const symbols = [...new Set([
@@ -229,7 +256,9 @@ export default function PlayerPortfolio() {
           <h1 style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', margin: 0, letterSpacing: '-0.02em' }}>
             {player.display_name || player.name}
           </h1>
-          <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '2px 0 0' }}>Public portfolio</p>
+          <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '2px 0 0' }}>
+            Public portfolio{refreshing ? ' · Refreshing…' : ''}
+          </p>
         </div>
       </div>
 

@@ -188,3 +188,27 @@
 **Observation:** The Canadian insider endpoints were healthy but felt broken in production because each cache expiry forced the next request to wait ~11–13 seconds for a full TMX rebuild across the curated TSX list. Users experienced that as "the tab is slow" even though cached data from minutes earlier was still perfectly usable.
 **Root cause:** The route treated cache expiry as a synchronous miss instead of a stale-but-serviceable hit. We already had valid cached data in memory, but the handler blocked on refresh before returning anything.
 **Rule:** For expensive upstream aggregations with acceptable staleness windows, use stale-while-revalidate. If a cache exists, return it immediately and refresh in the background; only block when there is no cache at all. Pair that with in-flight build dedupe so concurrent requests share one refresh instead of stampeding the provider.
+
+---
+
+## Lesson: 2026-04-21 — Don’t block route readiness on secondary hydration
+
+**Observation:** The portfolio experience felt randomly slow because `App.tsx` treated player lookup and watchlist initialization as one serial boot path. Even when the player row was ready, the page still waited for watchlist sync before the route really settled.
+**Root cause:** We bundled “critical identity state” and “nice-to-have secondary data” into the same readiness gate. That makes every downstream route pay for the slowest dependency.
+**Rule:** Separate critical route boot from secondary hydration. As soon as the app knows who the user is and can resolve the primary record (`player`), mark the route ready and hydrate watchlists or other side data in the background. Then make the page render those secondary sections behind their own local hydration guards instead of blocking the whole screen.
+
+---
+
+## Lesson: 2026-04-21 - Keep refreshes in place; don't make ordinary reloads feel like first load
+
+**Observation:** Portfolio-style pages felt hung even when the underlying queries eventually succeeded, because every realtime update or manual refresh pushed the screen back into a blocking skeleton or temporary blank-feeling state.
+**Root cause:** We treated "refresh" and "initial load" as the same UI state. That means perfectly normal background reloads looked like failures, especially on mobile or slower networks.
+**Rule:** Preserve the last good snapshot during refreshes. Reserve full-page skeletons for true first load only, use a lightweight `Refreshing...` indicator for later reloads, and debounce realtime-triggered refetches so bursty database events do not cause visible page thrash.
+
+---
+
+## Lesson: 2026-04-21 - Shared quote hydration beats per-card fanout on dashboard-style screens
+
+**Observation:** Dashboard and leaderboard views felt progressively slow because each tile or row mounted its own quote hook, so the page hydrated one card at a time and did more work than necessary.
+**Root cause:** The data model was fine, but the fetch topology was fragmented. Many small quote hooks create extra React work, noisier loading states, and more visible fanout on navigation.
+**Rule:** On list/grid surfaces, dedupe the symbol set once and hydrate quotes through a shared `useStockQuotes()` path. Let the page render its structural data first, then fill prices into existing rows instead of turning every card into its own mini loading pipeline.
