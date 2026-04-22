@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowUpRight, ArrowDownRight, Briefcase, Eye, RefreshCcw } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, ArrowDownRight, Briefcase, Eye } from 'lucide-react';
 import { getHoldings, getPlayerById, getWatchlist, supabase } from '../api/supabase';
 import { useStockQuotes } from '../hooks/useStockData';
 import type { Holding, Player, WatchlistInput } from '../api/supabase';
@@ -116,7 +116,6 @@ export default function PlayerPortfolio() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const [watchlistError, setWatchlistError] = useState('');
   const hasLoadedRef = useRef(false);
 
   useEffect(() => {
@@ -132,7 +131,6 @@ export default function PlayerPortfolio() {
         else setRefreshing(true);
         if (showBlockingState || !hasLoadedRef.current) {
           setError('');
-          setWatchlistError('');
         }
 
         // Use allSettled so a failed watchlist/holdings fetch doesn't kill the whole page
@@ -156,10 +154,11 @@ export default function PlayerPortfolio() {
 
         if (wRes.status === 'fulfilled') {
           setWatchlist(wRes.value);
-          setWatchlistError('');
         } else {
-          if (!hasLoadedRef.current) setWatchlist([]);
-          setWatchlistError('Could not load this watchlist right now.');
+          // Public portfolios should degrade to an empty watchlist instead of
+          // throwing users into an error/reload path for a non-critical section.
+          console.warn('[PlayerPortfolio] watchlist load failed:', wRes.reason);
+          setWatchlist([]);
         }
         hasLoadedRef.current = true;
       } catch {
@@ -325,23 +324,7 @@ export default function PlayerPortfolio() {
           </span>
         </div>
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, overflow: 'hidden' }}>
-          {watchlistError ? (
-            <div style={{ padding: '20px', textAlign: 'center' }}>
-              <p style={{ fontSize: 12, color: 'var(--color-down)', margin: '0 0 10px' }}>{watchlistError}</p>
-              <button
-                onClick={() => window.location.reload()}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '8px 12px', borderRadius: 10, cursor: 'pointer',
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
-                  color: 'var(--text-primary)', fontSize: 12, fontWeight: 600,
-                }}
-              >
-                <RefreshCcw size={12} />
-                Retry
-              </button>
-            </div>
-          ) : watchlist.length === 0 ? (
+          {watchlist.length === 0 ? (
             <div style={{ padding: '24px 20px', textAlign: 'center' }}>
               <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: 0 }}>Watchlist is empty</p>
             </div>
