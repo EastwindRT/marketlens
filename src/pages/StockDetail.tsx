@@ -6,6 +6,7 @@ import { useInsiderData } from '../hooks/useInsiderData';
 import { useRealTimeQuote } from '../hooks/useRealTimeQuote';
 import { useStockNews } from '../hooks/useStockNews';
 import { useStockAIContext } from '../hooks/useStockAIContext';
+import { useEdgarFilings } from '../hooks/useEdgarFilings';
 import { useChartStore } from '../store/chartStore';
 import { useWatchlistStore } from '../store/watchlistStore';
 import { useLeagueStore } from '../store/leagueStore';
@@ -19,10 +20,12 @@ import { PeerComparison } from '../components/stock/PeerComparison';
 import { DeepAnalyzeDrawer, type DeepAnalyzeTarget } from '../components/ai/DeepAnalyzeDrawer';
 import { DeepAnalyzeButton } from '../components/ai/DeepAnalyzeButton';
 import { TrendLinesLegend } from '../components/chart/TrendLines';
+import { FilingSheet } from '../components/ui/FilingSheet';
 import { PriceHeaderSkeleton } from '../components/ui/LoadingSkeleton';
 import TradeModal from '../components/trade/TradeModal';
 import { formatLargeNumber, formatVolume, formatPrice } from '../utils/formatters';
 import { isTSXTicker } from '../utils/marketHours';
+import type { MarketFiling } from '../api/edgar';
 
 const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -36,21 +39,23 @@ export default function StockDetail() {
   } = useChartStore();
   const { hasItem, addItem, removeItem } = useWatchlistStore();
   const { player } = useLeagueStore();
+  const isCanadian = isTSXTicker(symbol);
+  const currency = isCanadian ? 'CAD' : 'USD';
   const [showTradeModal, setShowTradeModal] = useState(false);
   const [deepTarget, setDeepTarget] = useState<DeepAnalyzeTarget | null>(null);
+  const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
 
   const { data: candles, isLoading: candlesLoading, error: candlesError, refetch: refetchCandles } = useStockCandles(symbol, timeRange);
   const { data: quote, isLoading: quoteLoading } = useStockQuote(symbol);
   const { data: profile, isLoading: profileLoading } = useStockProfile(symbol);
   const { data: insiders, isLoading: insidersLoading } = useInsiderData(symbol);
+  const { data: filings, isLoading: filingsLoading } = useEdgarFilings(symbol, isCanadian);
   const { data: news } = useStockNews(symbol);
   // Fundamentals + analyst context for Ask AI chat (US stocks only)
   const { data: aiFundamentals } = useStockAIContext(symbol);
   const liveQuote = useRealTimeQuote(symbol);
 
   const inWatchlist = hasItem(symbol);
-  const isCanadian = isTSXTicker(symbol);
-  const currency = isCanadian ? 'CAD' : 'USD';
 
   // Market cap: Canadian stocks get raw $ from TMX, US stocks get millions from Finnhub
   const marketCap = isCanadian
@@ -261,6 +266,16 @@ export default function StockDetail() {
         />
       </div>
 
+      <div className="px-4 md:px-8 pb-4">
+        <RecentFilingsPanel
+          symbol={symbol}
+          isCanadian={isCanadian}
+          filings={filings ?? []}
+          loading={filingsLoading}
+          onOpenFiling={setSelectedFiling}
+        />
+      </div>
+
       {/* ── Ask AI Chat ── */}
       <div className="px-4 md:px-8 pb-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
         <StockAIChat
@@ -326,6 +341,8 @@ export default function StockDetail() {
         target={deepTarget}
       />
 
+      <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
+
       {showTradeModal && quote?.c && (
         <TradeModal
           symbol={symbol}
@@ -381,6 +398,150 @@ function ChartWithResponsiveHeight({
         currency={currency}
         height={height}
       />
+    </div>
+  );
+}
+
+function RecentFilingsPanel({
+  symbol,
+  isCanadian,
+  filings,
+  loading,
+  onOpenFiling,
+}: {
+  symbol: string;
+  isCanadian: boolean;
+  filings: MarketFiling[];
+  loading: boolean;
+  onOpenFiling: (filing: MarketFiling) => void;
+}) {
+  const recentFilings = filings.filter((filing) => filing?.filedDate).slice(0, 5);
+
+  const formStyle = (formType: string) => {
+    if (formType.startsWith('13D')) {
+      return {
+        bg: 'rgba(247,147,26,0.12)',
+        color: '#F7931A',
+        border: 'rgba(247,147,26,0.25)',
+      };
+    }
+    return {
+      bg: 'rgba(45,107,255,0.12)',
+      color: 'var(--accent-blue-light)',
+      border: 'rgba(45,107,255,0.25)',
+    };
+  };
+
+  return (
+    <div
+      style={{
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 18,
+        padding: 18,
+      }}
+    >
+      <div style={{ marginBottom: 12 }}>
+        <p style={{ margin: '0 0 4px', fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          Recent 13D / 13G Filings
+        </p>
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
+          Large-holder and activist ownership disclosures for {symbol}
+        </p>
+      </div>
+
+      {isCanadian ? (
+        <div style={{ padding: '6px 0 2px' }}>
+          <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--text-secondary)' }}>
+            Canadian ownership filings are reported on SEDAR+ rather than SEC EDGAR.
+          </p>
+          <a
+            href={`https://www.sedarplus.ca/csa-party/party/search.html?lang=EN&company=${encodeURIComponent(symbol.replace('.TO', ''))}`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontSize: 13, color: 'var(--accent-blue-light)', textDecoration: 'none' }}
+          >
+            Search this issuer on SEDAR+
+          </a>
+        </div>
+      ) : loading ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div key={index} style={{ padding: 14, borderRadius: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
+              <div style={{ width: 54, height: 20, borderRadius: 6, background: 'var(--bg-hover)', marginBottom: 8 }} className="animate-pulse" />
+              <div style={{ width: '65%', height: 12, borderRadius: 4, background: 'var(--bg-hover)', marginBottom: 6 }} className="animate-pulse" />
+              <div style={{ width: '40%', height: 10, borderRadius: 4, background: 'var(--bg-hover)' }} className="animate-pulse" />
+            </div>
+          ))}
+        </div>
+      ) : recentFilings.length === 0 ? (
+        <div style={{ padding: '6px 0 2px' }}>
+          <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--text-tertiary)' }}>
+            No recent 13D or 13G filings found for this stock.
+          </p>
+          <a
+            href={`https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(symbol)}&type=SC+13&dateb=&owner=include&count=10`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontSize: 13, color: 'var(--accent-blue-light)', textDecoration: 'none' }}
+          >
+            Search EDGAR directly
+          </a>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {recentFilings.map((filing, index) => {
+              const style = formStyle(filing.formType);
+              return (
+                <button
+                  key={filing.accessionNo || index}
+                  onClick={() => onOpenFiling(filing)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: 14,
+                    borderRadius: 12,
+                    background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border-subtle)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      padding: '3px 8px',
+                      borderRadius: 6,
+                      background: style.bg,
+                      color: style.color,
+                      border: `1px solid ${style.border}`,
+                      fontFamily: "'Roboto Mono', monospace",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {filing.formType}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ margin: '0 0 3px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {filing.filerName}
+                    </p>
+                    <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
+                      Filed {filing.filedDate}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <p style={{ margin: '10px 0 0', fontSize: 11, color: 'var(--text-tertiary)' }}>
+            13D = activist or control intent. 13G = passive 5%+ ownership.
+          </p>
+        </>
+      )}
     </div>
   );
 }
