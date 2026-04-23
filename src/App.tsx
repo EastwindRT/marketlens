@@ -54,7 +54,7 @@ function lazyWithAutoReload<T extends { default: ComponentType<any> }>(
 }
 
 export default function App() {
-  const { setPlayer, setPlayerStatus, logout } = useLeagueStore()
+  const { player, setPlayer, setPlayerStatus, logout } = useLeagueStore()
   const initializeWatchlist = useWatchlistStore((state) => state.initialize)
   // null = loading, undefined = no session, Session = authenticated
   const [session, setSession] = useState<Session | null | undefined>(undefined)
@@ -85,6 +85,13 @@ export default function App() {
         setPlayer(null)
         void initializeWatchlist(null)
         return
+      }
+
+      const nextEmail = nextSession.user.email.toLowerCase()
+      const currentEmail = player?.google_email?.toLowerCase()
+      if (currentEmail && currentEmail !== nextEmail) {
+        setPlayer(null)
+        void initializeWatchlist(null)
       }
 
       setPlayerStatus('loading')
@@ -146,7 +153,7 @@ export default function App() {
       subscription.unsubscribe()
       clearTimeout(sessionTimeout)
     }
-  }, [initializeWatchlist, setPlayer, setPlayerStatus])
+  }, [initializeWatchlist, player?.google_email, setPlayer, setPlayerStatus])
 
   useEffect(() => {
     if (!SUPABASE_CONFIGURED || !session) return
