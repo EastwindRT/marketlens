@@ -27,6 +27,7 @@ const SUPABASE_CONFIGURED =
 
 const LAZY_RELOAD_KEY = 'tars:lazy-reload'
 const BOOTSTRAP_RETRY_DELAY_MS = 1200
+const IDLE_LOGOUT_MS = 30 * 60 * 1000
 
 function lazyWithAutoReload<T extends { default: ComponentType<any> }>(
   importer: () => Promise<T>
@@ -53,7 +54,7 @@ function lazyWithAutoReload<T extends { default: ComponentType<any> }>(
 }
 
 export default function App() {
-  const { setPlayer, setPlayerStatus } = useLeagueStore()
+  const { setPlayer, setPlayerStatus, logout } = useLeagueStore()
   const initializeWatchlist = useWatchlistStore((state) => state.initialize)
   // null = loading, undefined = no session, Session = authenticated
   const [session, setSession] = useState<Session | null | undefined>(undefined)
@@ -146,6 +147,47 @@ export default function App() {
       clearTimeout(sessionTimeout)
     }
   }, [initializeWatchlist, setPlayer, setPlayerStatus])
+
+  useEffect(() => {
+    if (!SUPABASE_CONFIGURED || !session) return
+
+    let timeoutId: number | null = null
+
+    const resetIdleTimer = () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+      timeoutId = window.setTimeout(() => {
+        console.warn('[App] signing out idle session after inactivity timeout')
+        logout()
+      }, IDLE_LOGOUT_MS)
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        resetIdleTimer()
+      }
+    }
+
+    const activityEvents: Array<keyof WindowEventMap> = [
+      'pointerdown',
+      'keydown',
+      'scroll',
+      'focus',
+    ]
+
+    resetIdleTimer()
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, resetIdleTimer, { passive: true })
+    })
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, resetIdleTimer)
+      })
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [logout, session])
 
   // Still loading session — show spinner instead of blank screen
   if (session === undefined) {
