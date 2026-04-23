@@ -203,18 +203,41 @@ async function fetchHouseLatest(limit = 50): Promise<CongressTrade[]> {
   return results.slice(0, limit);
 }
 
+async function fetchServerTradesForTickers(tickers: string[], days = 90): Promise<CongressTrade[]> {
+  const cleaned = [...new Set(
+    tickers
+      .map((ticker) => ticker.replace(/\.(TO|TSX)$/i, '').toUpperCase())
+      .filter(Boolean)
+  )];
+
+  if (cleaned.length === 0) return [];
+
+  const params = new URLSearchParams({
+    tickers: cleaned.join(','),
+    days: String(days),
+  });
+  const res = await fetch(`/api/congress-trades?${params.toString()}`);
+  if (!res.ok) throw new Error(`Congress data ${res.status}`);
+  const json = await res.json();
+  return (json.trades ?? []) as CongressTrade[];
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export const congress = {
   /** All trades for a single ticker (house + senate combined) */
   getTradesForTicker: async (ticker: string): Promise<CongressTrade[]> => {
-    const [house, senate] = await Promise.all([
-      fetchHouse(ticker),
-      fetchSenate(ticker),
-    ]);
-    return [...house, ...senate].sort((a, b) =>
-      b.transactionDate.localeCompare(a.transactionDate)
-    );
+    try {
+      return await fetchServerTradesForTickers([ticker], 365);
+    } catch {
+      const [house, senate] = await Promise.all([
+        fetchHouse(ticker),
+        fetchSenate(ticker),
+      ]);
+      return [...house, ...senate].sort((a, b) =>
+        b.transactionDate.localeCompare(a.transactionDate)
+      );
+    }
   },
 
   /** Recent trades across multiple tickers — used on the Market Signals page */
@@ -222,17 +245,21 @@ export const congress = {
     tickers: string[],
     days = 90
   ): Promise<CongressTrade[]> => {
-    if (tickers.length === 0) return [];
-    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    try {
+      return await fetchServerTradesForTickers(tickers, days);
+    } catch {
+      if (tickers.length === 0) return [];
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-    const all = await Promise.all(
-      tickers.map(t => congress.getTradesForTicker(t))
-    );
+      const all = await Promise.all(
+        tickers.map(t => congress.getTradesForTicker(t))
+      );
 
-    return all
-      .flat()
-      .filter(t => t.transactionDate && new Date(t.transactionDate) >= cutoff)
-      .sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
+      return all
+        .flat()
+        .filter(t => t.transactionDate && new Date(t.transactionDate) >= cutoff)
+        .sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
+    }
   },
 
   /**

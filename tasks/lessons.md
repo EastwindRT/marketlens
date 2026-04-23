@@ -236,3 +236,27 @@
 **Observation:** The insider endpoints were up to date, but users still perceived them as stale because the result set was too small and too selective. "Fresh but thin" reads like "missing data" to users.
 **Root cause:** We optimized sampling for speed and provider safety before optimizing for informational density. That kept the feeds technically current while hiding too much of the available activity.
 **Rule:** For research surfaces, optimize first for a convincing information surface, then trim with batching and caching. If you must sample, do it generously enough that the page still feels comprehensive; otherwise users will correctly conclude the feed is incomplete even when the timestamps are current.
+
+---
+
+## Lesson: 2026-04-22 - Do not build data-heavy watchlist screens out of hooks-in-a-loop
+
+**Observation:** Market Signals was fragile and expensive because it mounted one insider hook per watchlist symbol inside a mapped render path, then tried to reconstruct a unified signal surface from many small query objects.
+**Root cause:** Hook-per-item fanout looks convenient, but it couples render shape to query shape, makes loading/error handling messy, and gets risky as the watchlist changes over time.
+**Rule:** For watchlist or portfolio surfaces, centralize the fetch topology. Either use `useQueries` with stable symbol lists or move the aggregation server-side, but do not rely on ad hoc hook loops for a core page.
+
+---
+
+## Lesson: 2026-04-22 - Reuse server caches for market-wide crossover pages
+
+**Observation:** The congress-backed side of Market Signals was weaker than the standalone congress views because ticker-specific lookups were not reusing the same server-side cached dataset.
+**Root cause:** We treated "latest market feed" and "watchlist subset" as separate problems, even though both should come from the same authoritative source.
+**Rule:** When a market-wide provider feed is already cached server-side, expose filtered server endpoints for downstream pages instead of rebuilding partial client-side fetch stacks. Shared source, filtered views.
+
+---
+
+## Lesson: 2026-04-22 - Stale-while-revalidate matters most on rate-limited upstreams
+
+**Observation:** The US insider route could still feel bad after cache expiry because `sec.gov` throttling made synchronous cache rebuilds slow and noisy.
+**Root cause:** We had caching, but not the right serving strategy. A cached route that blocks on refresh is still user-visible when the upstream is rate-limited.
+**Rule:** For rate-limited data providers, pair caching with in-flight dedupe and stale-while-revalidate. Users should get the last good snapshot immediately while refreshes happen in the background.

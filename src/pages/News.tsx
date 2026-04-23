@@ -1,55 +1,107 @@
-import { useState, useMemo, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { ExternalLink, Zap, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { useQueries, useQuery } from '@tanstack/react-query';
+import { ExternalLink, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { format, subDays } from 'date-fns';
 import { edgar } from '../api/edgar';
 import type { MarketFiling } from '../api/edgar';
-import { FilingSheet } from '../components/ui/FilingSheet';
-import { format, subDays } from 'date-fns';
-import { useWatchlistStore } from '../store/watchlistStore';
-import { useInsiderData, getInsiderType } from '../hooks/useInsiderData';
-import { useCongressTradesForWatchlist } from '../hooks/useCongressTrades';
-import type { InsiderTransaction } from '../api/types';
 import type { CongressTrade } from '../api/congress';
-import { formatPrice, formatLargeNumber } from '../utils/formatters';
-import { isTSXTicker } from '../utils/marketHours';
+import type { InsiderTransaction } from '../api/types';
+import { FilingSheet } from '../components/ui/FilingSheet';
+import { useWatchlistStore } from '../store/watchlistStore';
+import { fetchInsiderData, getInsiderType } from '../hooks/useInsiderData';
+import { useCongressTradesForWatchlist } from '../hooks/useCongressTrades';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+interface CorrelatedSignal {
+  ticker: string;
+  month: string;
+  direction: 'buy' | 'sell';
+  congressTrades: CongressTrade[];
+  insiderTrades: FlatTrade[];
+}
+
+interface FlatTrade extends InsiderTransaction {
+  symbol: string;
+  tradeType: 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL';
+}
 
 function formStyle(formType: string): { bg: string; color: string; border: string } {
-  if (formType === '13D')   return { bg: 'rgba(247,147,26,0.15)', color: '#F7931A',                   border: 'rgba(247,147,26,0.5)' };
-  if (formType === '13D/A') return { bg: 'rgba(247,147,26,0.08)', color: '#F7931A',                   border: 'rgba(247,147,26,0.3)' };
-  if (formType === '13G')   return { bg: 'rgba(45,107,255,0.12)', color: 'var(--accent-blue-light)',  border: 'rgba(45,107,255,0.4)' };
-  if (formType === '13G/A') return { bg: 'rgba(45,107,255,0.07)', color: 'var(--accent-blue-light)',  border: 'rgba(45,107,255,0.25)' };
-  // Legacy fallback for SCHEDULE 13D etc.
-  if (formType.startsWith('13D') || formType.startsWith('SCHEDULE 13D'))
+  if (formType === '13D') return { bg: 'rgba(247,147,26,0.15)', color: '#F7931A', border: 'rgba(247,147,26,0.5)' };
+  if (formType === '13D/A') return { bg: 'rgba(247,147,26,0.08)', color: '#F7931A', border: 'rgba(247,147,26,0.3)' };
+  if (formType === '13G') return { bg: 'rgba(45,107,255,0.12)', color: 'var(--accent-blue-light)', border: 'rgba(45,107,255,0.4)' };
+  if (formType === '13G/A') return { bg: 'rgba(45,107,255,0.07)', color: 'var(--accent-blue-light)', border: 'rgba(45,107,255,0.25)' };
+  if (formType.startsWith('13D') || formType.startsWith('SCHEDULE 13D')) {
     return { bg: 'rgba(247,147,26,0.12)', color: '#F7931A', border: 'rgba(247,147,26,0.3)' };
+  }
   return { bg: 'var(--bg-hover)', color: 'var(--text-secondary)', border: 'var(--border-subtle)' };
 }
 
 function formTypeLabel(formType: string): { intent: string; amended: boolean } {
   const amended = formType.endsWith('/A');
   const base = amended ? formType.slice(0, -2) : formType;
-  const intent = base === '13D' || base === 'SCHEDULE 13D' ? 'Activist' : 'Passive';
-  return { intent, amended };
+  return {
+    intent: base === '13D' || base === 'SCHEDULE 13D' ? 'Activist' : 'Passive',
+    amended,
+  };
 }
 
-function typeStyle(type: 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL') {
-  if (type === 'BUY')      return { bg: 'rgba(5,177,105,0.12)',   color: '#05B169', border: 'rgba(5,177,105,0.25)' };
-  if (type === 'TAX_SELL') return { bg: 'rgba(247,147,26,0.12)', color: '#F7931A', border: 'rgba(247,147,26,0.25)' };
-  if (type === 'GRANT')    return { bg: 'rgba(45,107,255,0.12)', color: 'var(--accent-blue-light)', border: 'rgba(45,107,255,0.25)' };
-  return                          { bg: 'rgba(246,70,93,0.12)',  color: '#F6465D', border: 'rgba(246,70,93,0.25)' };
+function findCorrelations(insiderTrades: FlatTrade[], congressTrades: CongressTrade[]): CorrelatedSignal[] {
+  const insiderMap = new Map<string, FlatTrade[]>();
+  for (const trade of insiderTrades) {
+    if (trade.tradeType !== 'BUY' && trade.tradeType !== 'SELL') continue;
+    const ym = trade.transactionDate.slice(0, 7);
+    const dir = trade.tradeType === 'BUY' ? 'buy' : 'sell';
+    const key = `${trade.symbol.replace(/\.TO$/i, '').toUpperCase()}_${ym}_${dir}`;
+    const bucket = insiderMap.get(key) ?? [];
+    bucket.push(trade);
+    insiderMap.set(key, bucket);
+  }
+
+  const congressMap = new Map<string, CongressTrade[]>();
+  for (const trade of congressTrades) {
+    if (trade.type !== 'purchase' && trade.type !== 'sale') continue;
+    const ym = trade.transactionDate.slice(0, 7);
+    const dir = trade.type === 'purchase' ? 'buy' : 'sell';
+    const key = `${trade.ticker.toUpperCase()}_${ym}_${dir}`;
+    const bucket = congressMap.get(key) ?? [];
+    bucket.push(trade);
+    congressMap.set(key, bucket);
+  }
+
+  const signals: CorrelatedSignal[] = [];
+  for (const [key, congressional] of congressMap) {
+    const insiders = insiderMap.get(key);
+    if (!insiders?.length) continue;
+    const [ticker, month, direction] = key.split('_');
+    signals.push({
+      ticker,
+      month,
+      direction: direction as 'buy' | 'sell',
+      congressTrades: congressional,
+      insiderTrades: insiders,
+    });
+  }
+
+  return signals.sort((a, b) => b.month.localeCompare(a.month));
 }
 
 function FilingsSkeleton() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="animate-pulse" style={{
-          padding: 14, borderRadius: 12,
-          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-          display: 'flex', gap: 12, alignItems: 'center',
-        }}>
+      {Array.from({ length: 5 }).map((_, index) => (
+        <div
+          key={index}
+          className="animate-pulse"
+          style={{
+            padding: 14,
+            borderRadius: 12,
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
+            display: 'flex',
+            gap: 12,
+            alignItems: 'center',
+          }}
+        >
           <div style={{ width: 56, height: 22, borderRadius: 6, background: 'var(--bg-hover)', flexShrink: 0 }} />
           <div style={{ flex: 1 }}>
             <div style={{ width: '55%', height: 13, borderRadius: 4, background: 'var(--bg-hover)', marginBottom: 6 }} />
@@ -61,77 +113,6 @@ function FilingsSkeleton() {
   );
 }
 
-// ── Correlation helpers ────────────────────────────────────────────────────────
-
-interface CorrelatedSignal {
-  ticker: string;
-  month: string;           // "2024-01"
-  direction: 'buy' | 'sell';
-  congressTrades: CongressTrade[];
-  insiderTrades: FlatTradeBase[];
-}
-
-interface FlatTradeBase {
-  name: string;
-  tradeType: 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL';
-  transactionDate: string;
-  transactionPrice: number;
-  change: number;
-  symbol: string;
-}
-
-function findCorrelations(
-  insiderTrades: FlatTradeBase[],
-  congressTrades: CongressTrade[]
-): CorrelatedSignal[] {
-  // Build insider map: "TICKER_YYYY-MM_buy" → trades
-  const insiderMap = new Map<string, FlatTradeBase[]>();
-  for (const t of insiderTrades) {
-    if (t.tradeType !== 'BUY' && t.tradeType !== 'SELL') continue;
-    const ym = t.transactionDate.slice(0, 7);
-    const dir = t.tradeType === 'BUY' ? 'buy' : 'sell';
-    const key = `${t.symbol.replace(/\.TO$/i, '').toUpperCase()}_${ym}_${dir}`;
-    const arr = insiderMap.get(key) ?? [];
-    arr.push(t);
-    insiderMap.set(key, arr);
-  }
-
-  // Build congress map: same key format
-  const congressMap = new Map<string, CongressTrade[]>();
-  for (const t of congressTrades) {
-    if (t.type !== 'purchase' && t.type !== 'sale') continue;
-    const ym = t.transactionDate.slice(0, 7);
-    const dir = t.type === 'purchase' ? 'buy' : 'sell';
-    const key = `${t.ticker.toUpperCase()}_${ym}_${dir}`;
-    const arr = congressMap.get(key) ?? [];
-    arr.push(t);
-    congressMap.set(key, arr);
-  }
-
-  const signals: CorrelatedSignal[] = [];
-  for (const [key, congressional] of congressMap) {
-    const insiders = insiderMap.get(key);
-    if (!insiders || insiders.length === 0) continue;
-    const parts = key.split('_');
-    const ticker = parts[0];
-    const month  = parts[1];
-    const dir    = parts[2] as 'buy' | 'sell';
-    signals.push({ ticker, month, direction: dir, congressTrades: congressional, insiderTrades: insiders });
-  }
-
-  return signals.sort((a, b) => b.month.localeCompare(a.month));
-}
-
-// ── Watchlist Insider Feed ─────────────────────────────────────────────────────
-// One component per ticker so we can use hooks legally
-
-interface FlatTrade extends InsiderTransaction {
-  symbol: string;
-  tradeType: 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL';
-}
-
-// ── Main page ─────────────────────────────────────────────────────────────────
-
 export default function NewsPage() {
   const [days, setDays] = useState(14);
   const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
@@ -140,200 +121,226 @@ export default function NewsPage() {
   const [confSort, setConfSort] = useState<'date' | 'trades'>('date');
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
-  const symbols = watchlist.map(w => w.symbol);
+  const signalSymbols = useMemo(
+    () => [...new Set(watchlist.map((item) => item.symbol))],
+    [watchlist]
+  );
 
   const { data: filings, isLoading: filingsLoading, error: filingsError } = useQuery({
     queryKey: ['market-filings', days],
-    queryFn:  () => edgar.getRecentFilings(days),
+    queryFn: () => edgar.getRecentFilings(days),
     staleTime: 60 * 60 * 1000,
     retry: 1,
   });
 
-  // Watchlist congress only for confluence signals (full congress feed lives in /congress tab)
-  const { data: watchlistCongressTrades } = useCongressTradesForWatchlist(
-    symbols.map(s => s.replace(/\.TO$/i, '')),
+  const {
+    data: watchlistCongressTrades,
+    isLoading: congressLoading,
+    error: congressError,
+  } = useCongressTradesForWatchlist(
+    signalSymbols.map((symbol) => symbol.replace(/\.TO$/i, '')),
     Math.max(days, 90)
   );
 
-  const fromDate = format(subDays(new Date(), days), 'MMM d');
-  const toDate   = format(new Date(), 'MMM d');
+  const insiderQueries = useQueries({
+    queries: signalSymbols.map((symbol) => ({
+      queryKey: ['insiders', symbol],
+      queryFn: () => fetchInsiderData(symbol),
+      staleTime: 5 * 60 * 1000,
+      enabled: signalSymbols.length > 0,
+    })),
+  });
 
-  // Confluence signals still use watchlist insider data (ticker-specific)
-  const watchlistSymbols = [...new Set([...symbols, 'AAPL', 'NVDA', 'MSFT'])];
-  const watchlistInsiderResults = watchlistSymbols.map(sym => ({
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    symbol: sym, q: useInsiderData(sym),
-  }));
-  const watchlistInsiderTrades: FlatTrade[] = useMemo(() => {
+  const watchlistInsiderTrades = useMemo(() => {
     const cutoff = subDays(new Date(), 90);
-    return watchlistInsiderResults.flatMap(({ symbol, q }) => {
-      if (!q.data) return [];
-      return q.data
-        .filter(t => t.transactionDate && t.transactionPrice && new Date(t.transactionDate) >= cutoff && getInsiderType(t.transactionCode, t.change) !== 'GRANT')
-        .map(t => ({ ...t, symbol, tradeType: getInsiderType(t.transactionCode, t.change) }));
+    return signalSymbols.flatMap((symbol, index) => {
+      const query = insiderQueries[index];
+      if (!query?.data) return [];
+      return query.data
+        .filter((trade) =>
+          trade.transactionDate &&
+          trade.transactionPrice &&
+          new Date(trade.transactionDate) >= cutoff &&
+          getInsiderType(trade.transactionCode, trade.change) !== 'GRANT'
+        )
+        .map((trade) => ({
+          ...trade,
+          symbol,
+          tradeType: getInsiderType(trade.transactionCode, trade.change),
+        }));
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchlistInsiderResults.map(r => r.q.data).join(',')]);
+  }, [insiderQueries, signalSymbols]);
 
   const correlations = useMemo(() => {
-    if (!watchlistCongressTrades || watchlistInsiderTrades.length === 0) return [];
+    if (!watchlistCongressTrades?.length || watchlistInsiderTrades.length === 0) return [];
     return findCorrelations(watchlistInsiderTrades, watchlistCongressTrades);
-  }, [watchlistInsiderTrades, watchlistCongressTrades]);
+  }, [watchlistCongressTrades, watchlistInsiderTrades]);
 
   const sortedCorrelations = useMemo(() => {
     if (confSort === 'trades') {
-      return [...correlations].sort((a, b) =>
-        (b.congressTrades.length + b.insiderTrades.length) - (a.congressTrades.length + a.insiderTrades.length)
+      return [...correlations].sort(
+        (a, b) => (b.congressTrades.length + b.insiderTrades.length) - (a.congressTrades.length + a.insiderTrades.length)
       );
     }
-    return correlations; // already date-sorted
-  }, [correlations, confSort]);
+    return correlations;
+  }, [confSort, correlations]);
 
   const sortedFilings = useMemo(() => {
     let list = filings ?? [];
-    if (formFilter !== 'all') list = list.filter(f => f.formType === formFilter);
+    if (formFilter !== 'all') list = list.filter((filing) => filing.formType === formFilter);
     return [...list].sort((a, b) => {
-      if (filingsSort === 'filer')   return (a.filerName ?? '').localeCompare(b.filerName ?? '');
+      if (filingsSort === 'filer') return (a.filerName ?? '').localeCompare(b.filerName ?? '');
       if (filingsSort === 'subject') return (a.subjectCompany ?? 'ZZZ').localeCompare(b.subjectCompany ?? 'ZZZ');
-      return b.filedDate.localeCompare(a.filedDate); // date desc
+      return b.filedDate.localeCompare(a.filedDate);
     });
-  }, [filings, formFilter, filingsSort]);
+  }, [filings, filingsSort, formFilter]);
+
+  const fromDate = format(subDays(new Date(), days), 'MMM d');
+  const toDate = format(new Date(), 'MMM d');
+  const signalsLoading = signalSymbols.length > 0 && (congressLoading || insiderQueries.some((query) => query.isLoading));
+  const signalsError = Boolean(congressError) || insiderQueries.some((query) => query.isError);
 
   return (
     <>
-    <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 40px' }}>
-      <div style={{ maxWidth: 760, margin: '0 auto' }}>
+      <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 40px' }}>
+        <div style={{ maxWidth: 760, margin: '0 auto' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <h1 style={{ margin: '0 0 3px', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.02em' }}>
+                Market Signals
+              </h1>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
+                Insider trades · 13D/13G filings · {fromDate} - {toDate}
+              </p>
+            </div>
 
-        {/* ── Header ── */}
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <h1 style={{
-              margin: '0 0 3px', fontSize: 20, fontWeight: 700,
-              color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.02em',
-            }}>
-              Market Signals
-            </h1>
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-              Insider trades · 13D/13G filings · {fromDate} – {toDate}
-            </p>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[7, 14, 30].map((value) => (
+                <button
+                  key={value}
+                  onClick={() => setDays(value)}
+                  style={{
+                    padding: '5px 12px',
+                    borderRadius: 16,
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    fontFamily: "'Inter', sans-serif",
+                    background: days === value ? 'var(--bg-elevated)' : 'transparent',
+                    color: days === value ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                    border: `1px solid ${days === value ? 'var(--border-default)' : 'var(--border-subtle)'}`,
+                    transition: 'all 120ms',
+                  }}
+                >
+                  {value}d
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 6 }}>
-            {[7, 14, 30].map(d => (
-              <button
-                key={d}
-                onClick={() => setDays(d)}
-                style={{
-                  padding: '5px 12px', borderRadius: 16, cursor: 'pointer',
-                  fontSize: 12, fontWeight: 500, fontFamily: "'Inter', sans-serif",
-                  background: days === d ? 'var(--bg-elevated)' : 'transparent',
-                  color: days === d ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                  border: `1px solid ${days === d ? 'var(--border-default)' : 'var(--border-subtle)'}`,
-                  transition: 'all 120ms',
-                }}
-              >
-                {d}d
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* ── SECTION 0: Confluence Signals ── */}
-        {correlations.length > 0 && (
-          <>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 12 }}>
-              <SectionHeader
-                noMargin
-                title="⚡ Confluence Signals"
-                subtitle="Congress members + company insiders traded the same stock in the same month"
-              />
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 12 }}>
+            <SectionHeader
+              noMargin
+              title="Confluence Signals"
+              subtitle="Congress members and company insiders trading the same watchlist stock in the same month"
+            />
+            {sortedCorrelations.length > 0 && (
               <div style={{ display: 'flex', gap: 2, background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, border: '1px solid var(--border-subtle)', flexShrink: 0 }}>
-                {(['date', 'trades'] as const).map(opt => (
+                {(['date', 'trades'] as const).map((option) => (
                   <button
-                    key={opt}
-                    onClick={() => setConfSort(opt)}
+                    key={option}
+                    onClick={() => setConfSort(option)}
                     style={{
-                      padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
-                      background: confSort === opt ? 'var(--bg-hover)' : 'transparent',
-                      color: confSort === opt ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                      transition: 'all 120ms',
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      border: 'none',
+                      background: confSort === option ? 'var(--bg-hover)' : 'transparent',
+                      color: confSort === option ? 'var(--text-primary)' : 'var(--text-tertiary)',
                     }}
                   >
-                    {opt === 'date' ? 'Date' : 'Activity'}
+                    {option === 'date' ? 'Date' : 'Activity'}
                   </button>
                 ))}
               </div>
-            </div>
+            )}
+          </div>
+
+          {signalSymbols.length === 0 && (
+            <EmptyState message="Add stocks to your watchlist to unlock crossovers between insider trades and congressional activity." />
+          )}
+
+          {signalSymbols.length > 0 && signalsLoading && <FilingsSkeleton />}
+
+          {signalSymbols.length > 0 && signalsError && (
+            <p style={{ color: 'var(--color-down)', fontSize: 13, padding: '0 0 20px' }}>
+              Could not load confluence signals right now.
+            </p>
+          )}
+
+          {signalSymbols.length > 0 && !signalsLoading && !signalsError && sortedCorrelations.length === 0 && (
+            <EmptyState message="No insider and congress overlap matched your watchlist in the current window." />
+          )}
+
+          {signalSymbols.length > 0 && !signalsLoading && !signalsError && sortedCorrelations.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 32 }}>
-              {sortedCorrelations.slice(0, 10).map((sig, i) => {
-                const isBuy = sig.direction === 'buy';
-                const accentColor  = isBuy ? '#05B169' : '#F6465D';
-                const accentBg     = isBuy ? 'rgba(5,177,105,0.08)' : 'rgba(246,70,93,0.08)';
-                const accentBorder = isBuy ? 'rgba(5,177,105,0.3)'  : 'rgba(246,70,93,0.3)';
+              {sortedCorrelations.slice(0, 10).map((signal, index) => {
+                const isBuy = signal.direction === 'buy';
+                const accentColor = isBuy ? '#05B169' : '#F6465D';
+                const accentBg = isBuy ? 'rgba(5,177,105,0.08)' : 'rgba(246,70,93,0.08)';
+                const accentBorder = isBuy ? 'rgba(5,177,105,0.3)' : 'rgba(246,70,93,0.3)';
                 const label = isBuy ? 'BULLISH CONFLUENCE' : 'BEARISH CONFLUENCE';
-                const congressMembers = [...new Set(sig.congressTrades.map(t => t.member))];
-                const insiderNames    = [...new Set(sig.insiderTrades.map(t => t.name))];
+                const congressMembers = [...new Set(signal.congressTrades.map((trade) => trade.member))];
+                const insiderNames = [...new Set(signal.insiderTrades.map((trade) => trade.name))];
 
                 return (
                   <button
-                    key={`${sig.ticker}_${sig.month}_${sig.direction}_${i}`}
-                    onClick={() => navigate(`/stock/${sig.ticker}`)}
+                    key={`${signal.ticker}_${signal.month}_${signal.direction}_${index}`}
+                    onClick={() => navigate(`/stock/${signal.ticker}`)}
                     style={{
-                      display: 'flex', gap: 12, padding: '12px 14px',
-                      borderRadius: 12, textAlign: 'left', width: '100%', cursor: 'pointer',
-                      background: accentBg, border: `1px solid ${accentBorder}`,
-                      transition: 'border-color 150ms',
+                      display: 'flex',
+                      gap: 12,
+                      padding: '12px 14px',
+                      borderRadius: 12,
+                      textAlign: 'left',
+                      width: '100%',
+                      cursor: 'pointer',
+                      background: accentBg,
+                      border: `1px solid ${accentBorder}`,
                     }}
-                    onMouseEnter={e => (e.currentTarget.style.borderColor = accentColor)}
-                    onMouseLeave={e => (e.currentTarget.style.borderColor = accentBorder)}
                   >
-                    {/* Zap icon */}
                     <div style={{ display: 'flex', alignItems: 'flex-start', paddingTop: 2, flexShrink: 0 }}>
                       <Zap size={15} color={accentColor} fill={accentColor} />
                     </div>
 
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      {/* Header row */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-                        <span style={{
-                          fontSize: 13, fontWeight: 700, color: 'var(--text-primary)',
-                          fontFamily: "'Roboto Mono', monospace",
-                        }}>
-                          {sig.ticker}
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}>
+                          {signal.ticker}
                         </span>
-                        <span style={{
-                          fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
-                          background: accentColor, color: '#fff',
-                          fontFamily: "'Inter', sans-serif", letterSpacing: '0.04em',
-                        }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: accentColor, color: '#fff' }}>
                           {label}
                         </span>
                         <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
-                          {sig.month}
+                          {signal.month}
                         </span>
                       </div>
 
-                      {/* Congress */}
-                      <div style={{ marginBottom: 3 }}>
-                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginRight: 6 }}>🏛</span>
-                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                          {congressMembers.slice(0, 3).join(', ')}
-                          {congressMembers.length > 3 ? ` +${congressMembers.length - 3} more` : ''}
-                          <span style={{ color: 'var(--text-tertiary)', marginLeft: 6 }}>
-                            ({sig.congressTrades.length} trade{sig.congressTrades.length !== 1 ? 's' : ''})
-                          </span>
+                      <div style={{ marginBottom: 3, fontSize: 12, color: 'var(--text-secondary)' }}>
+                        Congress: {congressMembers.slice(0, 3).join(', ')}
+                        {congressMembers.length > 3 ? ` +${congressMembers.length - 3} more` : ''}
+                        <span style={{ color: 'var(--text-tertiary)', marginLeft: 6 }}>
+                          ({signal.congressTrades.length} trade{signal.congressTrades.length !== 1 ? 's' : ''})
                         </span>
                       </div>
 
-                      {/* Insiders */}
-                      <div>
-                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginRight: 6 }}>👔</span>
-                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                          {insiderNames.slice(0, 2).join(', ')}
-                          {insiderNames.length > 2 ? ` +${insiderNames.length - 2} more` : ''}
-                          <span style={{ color: 'var(--text-tertiary)', marginLeft: 6 }}>
-                            ({sig.insiderTrades.length} trade{sig.insiderTrades.length !== 1 ? 's' : ''})
-                          </span>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        Insiders: {insiderNames.slice(0, 2).join(', ')}
+                        {insiderNames.length > 2 ? ` +${insiderNames.length - 2} more` : ''}
+                        <span style={{ color: 'var(--text-tertiary)', marginLeft: 6 }}>
+                          ({signal.insiderTrades.length} trade{signal.insiderTrades.length !== 1 ? 's' : ''})
                         </span>
                       </div>
                     </div>
@@ -341,247 +348,181 @@ export default function NewsPage() {
                 );
               })}
             </div>
-          </>
-        )}
+          )}
 
-        {/* ── SECTION 2: 13D / 13G Major Filings ── */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10, gap: 12 }}>
-          <SectionHeader
-            noMargin
-            title="Major Ownership Filings"
-            subtitle={`${sortedFilings.length} filings · 13D activist · 13G passive · 5%+ stake disclosures`}
-          />
-          <div style={{ display: 'flex', gap: 2, background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, border: '1px solid var(--border-subtle)', flexShrink: 0 }}>
-            {(['date', 'filer', 'subject'] as const).map(opt => (
-              <button
-                key={opt}
-                onClick={() => setFilingsSort(opt)}
-                style={{
-                  padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
-                  background: filingsSort === opt ? 'var(--bg-hover)' : 'transparent',
-                  color: filingsSort === opt ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                  transition: 'all 120ms',
-                }}
-              >
-                {opt === 'date' ? 'Date' : opt === 'filer' ? 'Filer' : 'Subject'}
-              </button>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10, gap: 12 }}>
+            <SectionHeader
+              noMargin
+              title="Major Ownership Filings"
+              subtitle={`${sortedFilings.length} filings · 13D activist · 13G passive · 5%+ stake disclosures`}
+            />
+            <div style={{ display: 'flex', gap: 2, background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, border: '1px solid var(--border-subtle)', flexShrink: 0 }}>
+              {(['date', 'filer', 'subject'] as const).map((option) => (
+                <button
+                  key={option}
+                  onClick={() => setFilingsSort(option)}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    border: 'none',
+                    background: filingsSort === option ? 'var(--bg-hover)' : 'transparent',
+                    color: filingsSort === option ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                  }}
+                >
+                  {option === 'date' ? 'Date' : option === 'filer' ? 'Filer' : 'Subject'}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
 
-        {/* Form type filter chips */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-          {(['all', '13D', '13D/A', '13G', '13G/A'] as const).map(f => {
-            const isActive = formFilter === f;
-            let activeColor = 'var(--accent-blue-light)';
-            let activeBg    = 'rgba(45,107,255,0.12)';
-            let activeBorder = 'rgba(45,107,255,0.4)';
-            if (f === '13D')   { activeColor = '#F7931A'; activeBg = 'rgba(247,147,26,0.15)'; activeBorder = 'rgba(247,147,26,0.5)'; }
-            if (f === '13D/A') { activeColor = '#F7931A'; activeBg = 'rgba(247,147,26,0.10)'; activeBorder = 'rgba(247,147,26,0.35)'; }
-            if (f === '13G/A') { activeBg = 'rgba(45,107,255,0.08)'; activeBorder = 'rgba(45,107,255,0.25)'; }
-            return (
-              <button
-                key={f}
-                onClick={() => setFormFilter(f)}
-                style={{
-                  padding: '4px 12px', borderRadius: 14, fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                  background: isActive ? activeBg : 'var(--bg-elevated)',
-                  color: isActive ? (f === 'all' ? 'var(--text-primary)' : activeColor) : 'var(--text-tertiary)',
-                  border: `1px solid ${isActive ? activeBorder : 'var(--border-subtle)'}`,
-                  transition: 'all 120ms',
-                  fontFamily: "'Inter', sans-serif",
-                }}
-              >
-                {f === 'all' ? 'All' : f}
-              </button>
-            );
-          })}
-        </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+            {(['all', '13D', '13D/A', '13G', '13G/A'] as const).map((filter) => {
+              const isActive = formFilter === filter;
+              let activeColor = 'var(--accent-blue-light)';
+              let activeBg = 'rgba(45,107,255,0.12)';
+              let activeBorder = 'rgba(45,107,255,0.4)';
+              if (filter === '13D') {
+                activeColor = '#F7931A';
+                activeBg = 'rgba(247,147,26,0.15)';
+                activeBorder = 'rgba(247,147,26,0.5)';
+              }
+              if (filter === '13D/A') {
+                activeColor = '#F7931A';
+                activeBg = 'rgba(247,147,26,0.10)';
+                activeBorder = 'rgba(247,147,26,0.35)';
+              }
+              if (filter === '13G/A') {
+                activeBg = 'rgba(45,107,255,0.08)';
+                activeBorder = 'rgba(45,107,255,0.25)';
+              }
+              return (
+                <button
+                  key={filter}
+                  onClick={() => setFormFilter(filter)}
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: 14,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: isActive ? activeBg : 'var(--bg-elevated)',
+                    color: isActive ? (filter === 'all' ? 'var(--text-primary)' : activeColor) : 'var(--text-tertiary)',
+                    border: `1px solid ${isActive ? activeBorder : 'var(--border-subtle)'}`,
+                  }}
+                >
+                  {filter === 'all' ? 'All' : filter}
+                </button>
+              );
+            })}
+          </div>
 
-        {filingsLoading && <FilingsSkeleton />}
+          {filingsLoading && <FilingsSkeleton />}
 
-        {filingsError && (
-          <p style={{ color: 'var(--color-down)', fontSize: 13, padding: '12px 0' }}>
-            Could not load filings — EDGAR may be temporarily unavailable.
-          </p>
-        )}
-
-        {!filingsLoading && !filingsError && sortedFilings.length === 0 && (
-          <EmptyState message={`No 13D/13G filings in the last ${days} days.`}>
-            <a
-              href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=SCHEDULE+13D&dateb=&owner=include&count=40&output=atom"
-              target="_blank" rel="noopener noreferrer"
-              style={{ color: 'var(--accent-blue-light)', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 8 }}
-            >
-              Browse on EDGAR <ExternalLink size={12} />
-            </a>
-          </EmptyState>
-        )}
-
-        {!filingsLoading && !filingsError && sortedFilings.length > 0 && (
-          <>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {sortedFilings.map((f: MarketFiling, i: number) => {
-                const fc = formStyle(f.formType);
-                return (
-                  <button
-                    key={f.accessionNo || i}
-                    onClick={() => setSelectedFiling(f)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 12, padding: 14,
-                      borderRadius: 12, textAlign: 'left', width: '100%', cursor: 'pointer',
-                      background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                      transition: 'border-color 150ms',
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
-                    onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                  >
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3, flexShrink: 0 }}>
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-                        whiteSpace: 'nowrap',
-                        background: fc.bg, color: fc.color, border: `1px solid ${fc.border}`,
-                        fontFamily: "'Roboto Mono', monospace",
-                      }}>
-                        {f.formType}
-                      </span>
-                      {(() => {
-                        const { intent, amended } = formTypeLabel(f.formType);
-                        return (
-                          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', whiteSpace: 'nowrap', lineHeight: 1 }}>
-                            {intent}{amended ? ' · Amended' : ''}
-                          </span>
-                        );
-                      })()}
-                    </div>
-
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      {f.subjectCompany && (
-                        <p style={{
-                          margin: '0 0 2px', fontSize: 13, fontWeight: 600,
-                          color: 'var(--text-primary)',
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                        }}>
-                          {f.subjectCompany}
-                        </p>
-                      )}
-                      <p style={{
-                        margin: 0, fontSize: 12,
-                        color: f.subjectCompany ? 'var(--text-secondary)' : 'var(--text-primary)',
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {f.subjectCompany ? `Filed by ${f.filerName}` : f.filerName}
-                      </p>
-                      <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
-                        {f.filedDate}
-                        {f.periodOfReport && f.periodOfReport !== f.filedDate ? ` · Period: ${f.periodOfReport}` : ''}
-                      </p>
-                    </div>
-
-                    <ExternalLink size={13} color="var(--text-tertiary)" style={{ flexShrink: 0 }} />
-                  </button>
-                );
-              })}
-            </div>
-
-            <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 14 }}>
-              <span style={{ color: '#F7931A', fontWeight: 600 }}>13D</span> = 5%+ stake, activist intent ·{' '}
-              <span style={{ color: 'var(--accent-blue-light)', fontWeight: 600 }}>13G</span> = 5%+ stake, passive · Source: SEC EDGAR
+          {filingsError && (
+            <p style={{ color: 'var(--color-down)', fontSize: 13, padding: '12px 0' }}>
+              Could not load filings. EDGAR may be temporarily unavailable.
             </p>
-          </>
-        )}
+          )}
+
+          {!filingsLoading && !filingsError && sortedFilings.length === 0 && (
+            <EmptyState message={`No 13D/13G filings in the last ${days} days.`}>
+              <a
+                href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=SCHEDULE+13D&dateb=&owner=include&count=40&output=atom"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: 'var(--accent-blue-light)', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 8 }}
+              >
+                Browse on EDGAR <ExternalLink size={12} />
+              </a>
+            </EmptyState>
+          )}
+
+          {!filingsLoading && !filingsError && sortedFilings.length > 0 && (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {sortedFilings.map((filing, index) => {
+                  const fc = formStyle(filing.formType);
+                  const { intent, amended } = formTypeLabel(filing.formType);
+                  return (
+                    <button
+                      key={filing.accessionNo || index}
+                      onClick={() => setSelectedFiling(filing)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 12,
+                        padding: 14,
+                        borderRadius: 12,
+                        textAlign: 'left',
+                        width: '100%',
+                        cursor: 'pointer',
+                        background: 'var(--bg-elevated)',
+                        border: '1px solid var(--border-subtle)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3, flexShrink: 0 }}>
+                        <span
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            padding: '3px 7px',
+                            borderRadius: 6,
+                            whiteSpace: 'nowrap',
+                            background: fc.bg,
+                            color: fc.color,
+                            border: `1px solid ${fc.border}`,
+                            fontFamily: "'Roboto Mono', monospace",
+                          }}
+                        >
+                          {filing.formType}
+                        </span>
+                        <span style={{ fontSize: 10, color: 'var(--text-tertiary)', whiteSpace: 'nowrap', lineHeight: 1 }}>
+                          {intent}{amended ? ' · Amended' : ''}
+                        </span>
+                      </div>
+
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {filing.subjectCompany && (
+                          <p style={{ margin: '0 0 2px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {filing.subjectCompany}
+                          </p>
+                        )}
+                        <p style={{ margin: 0, fontSize: 12, color: filing.subjectCompany ? 'var(--text-secondary)' : 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {filing.subjectCompany ? `Filed by ${filing.filerName}` : filing.filerName}
+                        </p>
+                        <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
+                          {filing.filedDate}
+                          {filing.periodOfReport && filing.periodOfReport !== filing.filedDate ? ` · Period: ${filing.periodOfReport}` : ''}
+                        </p>
+                      </div>
+
+                      <ExternalLink size={13} color="var(--text-tertiary)" style={{ flexShrink: 0 }} />
+                    </button>
+                  );
+                })}
+              </div>
+
+              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 14 }}>
+                <span style={{ color: '#F7931A', fontWeight: 600 }}>13D</span> = 5%+ stake, activist intent ·{' '}
+                <span style={{ color: 'var(--accent-blue-light)', fontWeight: 600 }}>13G</span> = 5%+ stake, passive · Source: SEC EDGAR
+              </p>
+            </>
+          )}
+        </div>
       </div>
-    </div>
 
-    <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
+      <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
     </>
-  );
-}
-
-// ── Congress Feed (kept for confluence signal display only, not used as standalone section) ──
-
-function CongressFeed({ trades, onNavigate }: { trades: CongressTrade[]; onNavigate: (ticker: string) => void }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 32 }}>
-      {trades.map((t, i) => {
-        const isBuy      = t.type === 'purchase';
-        const tradeColor = isBuy ? '#05B169' : '#F6465D';
-        const tradeBg    = isBuy ? 'rgba(5,177,105,0.12)' : 'rgba(246,70,93,0.12)';
-        const tradeBorder = isBuy ? 'rgba(5,177,105,0.3)' : 'rgba(246,70,93,0.3)';
-        const partyColor = t.party === 'D' ? '#3B82F6' : t.party === 'R' ? '#F6465D' : 'var(--text-tertiary)';
-        const partyBg    = t.party === 'D' ? 'rgba(59,130,246,0.12)' : t.party === 'R' ? 'rgba(246,70,93,0.1)' : 'var(--bg-hover)';
-
-        return (
-          <div
-            key={`${t.member}-${t.transactionDate}-${t.ticker}-${i}`}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px',
-              borderRadius: 12, background: 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
-              cursor: 'pointer', transition: 'border-color 150ms',
-            }}
-            onClick={() => onNavigate(t.ticker)}
-            onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
-            onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-          >
-            {/* BUY/SELL badge */}
-            <span style={{
-              fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6, flexShrink: 0,
-              background: tradeBg, color: tradeColor, border: `1px solid ${tradeBorder}`,
-              textTransform: 'uppercase', fontFamily: "'Roboto Mono', monospace",
-            }}>
-              {isBuy ? 'BUY' : 'SELL'}
-            </span>
-
-            {/* Ticker */}
-            <span style={{
-              fontSize: 12, fontWeight: 700, padding: '3px 8px', borderRadius: 6, flexShrink: 0,
-              background: 'var(--bg-hover)', color: 'var(--text-primary)',
-              border: '1px solid var(--border-default)', fontFamily: "'Roboto Mono', monospace",
-            }}>
-              {t.ticker}
-            </span>
-
-            {/* Member + party */}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ margin: '0 0 2px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {t.member}
-                <span style={{
-                  marginLeft: 6, fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
-                  background: partyBg, color: partyColor, fontFamily: "'Roboto Mono', monospace",
-                }}>{t.party || '?'}</span>
-              </p>
-              <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
-                {t.transactionDate.slice(0, 10)}{t.disclosureDate ? ` · filed ${t.disclosureDate}` : ''}
-              </p>
-            </div>
-
-            {/* Value range — prominent on the right */}
-            {t.amount && (
-              <span style={{
-                fontSize: 12, fontWeight: 700, color: tradeColor,
-                fontFamily: "'Roboto Mono', monospace", flexShrink: 0, textAlign: 'right',
-              }}>
-                {t.amount}
-              </span>
-            )}
-          </div>
-        );
-      })}
-      <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
-        STOCK Act value ranges (share qty not disclosed) · Source: Quiver Quant
-      </p>
-    </div>
   );
 }
 
 function SectionHeader({ title, subtitle, noMargin }: { title: string; subtitle: string; noMargin?: boolean }) {
   return (
     <div style={{ marginBottom: noMargin ? 0 : 12 }}>
-      <h2 style={{
-        margin: '0 0 2px', fontSize: 15, fontWeight: 700,
-        color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.01em',
-      }}>
+      <h2 style={{ margin: '0 0 2px', fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.01em' }}>
         {title}
       </h2>
       <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>{subtitle}</p>

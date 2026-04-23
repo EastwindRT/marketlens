@@ -180,3 +180,24 @@
 - [x] `src/pages/InsiderActivity.tsx` - page now defaults to `CA Filings` and `30D` so users land on the fuller dataset first.
 - [x] `src/pages/InsiderActivity.tsx` - insider requests now ask for larger result windows and the footer shows visible-vs-total transaction counts.
 - [x] `npm run build` clean after the change.
+
+## Plan: Market Signals + Insider hardening (2026-04-22)
+
+### Reported issue
+1. Market Signals felt unreliable and thin.
+2. Insider pages still stalled or felt fragile when tabs and periods changed.
+
+### Root causes found
+- Market Signals was calling insider hooks inside a dynamic `map`, which is a brittle hook pattern and scales poorly with watchlist size.
+- Market Signals confluence used client-side congress ticker fetches that did not have the same complete House/Senate backing as the server cache.
+- US insider refreshes still rebuilt synchronously after cache expiry, which made SEC `429` limits more visible on cold or stale hits.
+
+### Shipped
+- [x] `server.cjs` - added `/api/congress-trades` so watchlist confluence queries reuse the server-side Quiver cache instead of faning out brittle client fetches.
+- [x] `src/api/congress.ts` - ticker and watchlist congress lookups now prefer the new server endpoint and only fall back locally if needed.
+- [x] `src/hooks/useInsiderData.ts` - extracted a reusable `fetchInsiderData()` path so watchlist insider queries can stay consistent without hook misuse.
+- [x] `src/pages/News.tsx` - rebuilt Market Signals with stable `useQueries`, explicit loading/error/empty states, and watchlist-first confluence behavior.
+- [x] `server.cjs` - US insider activity now uses an in-flight cache build map plus stale-while-revalidate semantics instead of blocking every stale request.
+- [x] `server.cjs` - reduced SEC XML batch concurrency to be gentler on `sec.gov` rate limits during cold cache rebuilds.
+- [x] `src/pages/InsiderActivity.tsx` - rebuilt insider page copy and loading behavior so tab/period switches keep prior data visible and show a lightweight refreshing state.
+- [x] `npm run build` clean after the change.

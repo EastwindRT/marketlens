@@ -157,6 +157,45 @@ async function fetchCongressData() {
   return JSON.parse(raw);
 }
 
+function parseAmountMin(amount) {
+  const clean = String(amount || '').replace(/[,$]/g, '').toLowerCase();
+  const match = clean.match(/(\d+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+function mapQuiverCongressTrade(t) {
+  const ticker = (t.Ticker || '').trim().toUpperCase();
+  if (!ticker || ticker === 'N/A' || ticker === '--' || ticker.length > 8) return null;
+
+  const txType = (t.Transaction || '').toLowerCase();
+  if (!txType.includes('purchase') && !txType.includes('sale') && !txType.includes('sell') && !txType.includes('exchange')) {
+    return null;
+  }
+
+  const txDate = normaliseDate(t.TransactionDate || '');
+  if (!txDate) return null;
+
+  const member = (t.Representative || '').trim();
+  if (!member) return null;
+
+  const amount = t.Range || t.Amount || '';
+
+  return {
+    member,
+    party: (t.Party || '').trim(),
+    state: '',
+    ticker,
+    assetDescription: t.Description || '',
+    type: txType.includes('purchase') ? 'purchase' : txType.includes('exchange') ? 'exchange' : 'sale',
+    amount,
+    amountMin: parseAmountMin(amount),
+    transactionDate: txDate,
+    disclosureDate: normaliseDate(t.ReportDate || ''),
+    filingUrl: '',
+    chamber: (t.House || '').toLowerCase() === 'senate' ? 'senate' : 'house',
+  };
+}
+
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 app.get('/api/latest-congress', async (req, res) => {
@@ -173,35 +212,58 @@ app.get('/api/latest-congress', async (req, res) => {
     //   Range, House, Amount, Party, TickerType, Description, BioGuideID
     const trades = [];
     for (const t of (Array.isArray(congressCache) ? congressCache : [])) {
-      const ticker = (t.Ticker || '').trim().toUpperCase();
-      if (!ticker || ticker === 'N/A' || ticker === '--' || ticker.length > 8) continue;
-      const txType = (t.Transaction || '').toLowerCase();
-      if (!txType.includes('purchase') && !txType.includes('sale') && !txType.includes('sell') && !txType.includes('exchange')) continue;
-      const txDate = normaliseDate(t.TransactionDate || '');
-      if (!txDate) continue;
-      const member = (t.Representative || '').trim();
-      if (!member) continue;
-
-      trades.push({
-        member,
-        party: (t.Party || '').trim(),
-        state: '',
-        ticker,
-        assetDescription: t.Description || '',
-        type: txType.includes('purchase') ? 'purchase' : 'sale',
-        amount: t.Range || t.Amount || '',
-        amountMin: 0,
-        transactionDate: txDate,
-        disclosureDate: normaliseDate(t.ReportDate || ''),
-        filingUrl: '',
-        chamber: (t.House || '').toLowerCase() === 'senate' ? 'senate' : 'house',
-      });
+      const mapped = mapQuiverCongressTrade(t);
+      if (mapped) trades.push(mapped);
     }
 
     trades.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
     res.json({ trades: trades.slice(0, limit) });
   } catch (err) {
     console.error('[latest-congress]', err.message);
+    res.status(502).json({ error: err.message, trades: [] });
+  }
+});
+
+app.get('/api/congress-trades', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (!congressCache || now - congressLastFetch > CONGRESS_CACHE_TTL) {
+      congressCache = await fetchCongressData();
+      congressLastFetch = now;
+    }
+
+    const tickers = String(req.query.tickers || '')
+      .split(',')
+      .map((ticker) => ticker.trim().replace(/\.(TO|TSX)$/i, '').toUpperCase())
+      .filter(Boolean);
+    const uniqueTickers = [...new Set(tickers)];
+    if (uniqueTickers.length === 0) {
+      return res.json({ trades: [] });
+    }
+
+    const tickerSet = new Set(uniqueTickers);
+    const days = Math.min(Math.max(parseInt(req.query.days || '90', 10), 1), 365);
+    const cutoff = new Date();
+    cutoff.setUTCDate(cutoff.getUTCDate() - days);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+    const trades = [];
+    for (const entry of (Array.isArray(congressCache) ? congressCache : [])) {
+      const mapped = mapQuiverCongressTrade(entry);
+      if (!mapped) continue;
+      if (!tickerSet.has(mapped.ticker)) continue;
+      if (!mapped.transactionDate || mapped.transactionDate < cutoffStr) continue;
+      trades.push(mapped);
+    }
+
+    trades.sort((a, b) =>
+      b.transactionDate.localeCompare(a.transactionDate)
+      || ((b.amountMin || 0) - (a.amountMin || 0))
+    );
+
+    res.json({ trades });
+  } catch (err) {
+    console.error('[congress-trades]', err.message);
     res.status(502).json({ error: err.message, trades: [] });
   }
 });
@@ -572,6 +634,7 @@ app.get('/api/ca-insider-activity', async (req, res) => {
 
 const insiderActivityCaches = { 7: null, 14: null, 30: null };
 const insiderActivityLastFetch = { 7: 0, 14: 0, 30: 0 };
+const insiderActivityBuilds = { 7: null, 14: null, 30: null };
 const INSIDER_ACTIVITY_TTL = 10 * 60 * 1000;
 
 function quarterOfMonth(month) {
@@ -753,7 +816,7 @@ async function fetchLatestInsiderActivity(days = 7) {
   }
 
   const groups = [];
-  const batchSize = 8;
+  const batchSize = days <= 7 ? 4 : 3;
   for (let i = 0; i < sampled.length; i += batchSize) {
     const batch = sampled.slice(i, i + batchSize);
     const batchResults = await Promise.all(batch.map((entry) => fetchSecInsiderActivityItem(entry)));
@@ -766,19 +829,36 @@ async function fetchLatestInsiderActivity(days = 7) {
   );
 }
 
+async function buildInsiderActivityCache(days) {
+  if (insiderActivityBuilds[days]) return insiderActivityBuilds[days];
+
+  insiderActivityBuilds[days] = (async () => {
+    try {
+      const trades = await fetchLatestInsiderActivity(days);
+      insiderActivityCaches[days] = trades;
+      insiderActivityLastFetch[days] = Date.now();
+      return trades;
+    } finally {
+      insiderActivityBuilds[days] = null;
+    }
+  })();
+
+  return insiderActivityBuilds[days];
+}
+
 app.get('/api/insider-activity', async (req, res) => {
   try {
     const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
-    const now = Date.now();
-    if (!insiderActivityCaches[days] || now - insiderActivityLastFetch[days] > INSIDER_ACTIVITY_TTL) {
-      try {
-        insiderActivityCaches[days] = await fetchLatestInsiderActivity(days);
-        insiderActivityLastFetch[days] = now;
-      } catch (err) {
+    const hasCache = Array.isArray(insiderActivityCaches[days]) && insiderActivityCaches[days].length > 0;
+    const isFresh = hasCache && (Date.now() - insiderActivityLastFetch[days] <= INSIDER_ACTIVITY_TTL);
+
+    if (!hasCache) {
+      await buildInsiderActivityCache(days);
+    } else if (!isFresh) {
+      buildInsiderActivityCache(days).catch((err) => {
         console.error('[insider-activity-refresh]', err.message);
-        if (!insiderActivityCaches[days]) throw err;
-        res.setHeader('X-Data-Stale', '1');
-      }
+      });
+      res.setHeader('X-Data-Stale', '1');
     }
 
     const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
