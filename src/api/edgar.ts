@@ -76,6 +76,54 @@ function parseAtomFeed(xml: string): MarketFiling[] {
   return filings.filter(f => f.filedDate).sort((a, b) => b.filedDate.localeCompare(a.filedDate));
 }
 
+function parseCompanyFeed(xml: string): MarketFiling[] {
+  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  const subjectCompany = doc.querySelector('company-info > conformed-name')?.textContent?.trim() ?? '';
+  const entries = Array.from(doc.querySelectorAll('entry'));
+
+  return entries
+    .map((entry) => {
+      const filingType = entry.querySelector('content > filing-type')?.textContent?.trim() ?? '';
+      const filingDate = entry.querySelector('content > filing-date')?.textContent?.trim() ?? '';
+      const accessionNo = entry.querySelector('content > accession-number')?.textContent?.trim() ?? '';
+      const edgarUrl =
+        entry.querySelector('content > filing-href')?.textContent?.trim()
+        || entry.querySelector('link')?.getAttribute('href')
+        || '';
+
+      if (!/^SCHEDULE\s+13[DG](?:\/A)?$/i.test(filingType)) return null;
+
+      return {
+        accessionNo,
+        formType: filingType.replace(/^SCHEDULE\s+/i, '').toUpperCase(),
+        filedDate: filingDate,
+        edgarUrl,
+        filerName: '',
+        subjectCompany,
+        periodOfReport: undefined,
+      } as MarketFiling;
+    })
+    .filter((filing): filing is MarketFiling => Boolean(filing?.filedDate))
+    .sort((a, b) => b.filedDate.localeCompare(a.filedDate));
+}
+
+async function fetchFiledByName(edgarUrl: string): Promise<string> {
+  if (!edgarUrl) return '';
+
+  try {
+    const url = edgarUrl.startsWith('http')
+      ? edgarUrl.replace('https://www.sec.gov', '/api/sec')
+      : edgarUrl;
+    const res = await fetch(url);
+    if (!res.ok) return '';
+    const html = await res.text();
+    const match = html.match(/<span class="companyName">\s*([^<]+?)\s+\(Filed by\)/i);
+    return match?.[1]?.replace(/\s+/g, ' ').trim() ?? '';
+  } catch {
+    return '';
+  }
+}
+
 async function fetchFeed(formType: string, count = 80): Promise<MarketFiling[]> {
   const url = `/api/sec/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent(formType)}&dateb=&owner=include&count=${count}&output=atom`;
   const res = await fetch(url);
@@ -125,7 +173,14 @@ export const edgar = {
     try {
       const res = await fetch(url);
       if (!res.ok) return [];
-      return parseAtomFeed(await res.text());
+      const filings = parseCompanyFeed(await res.text());
+      const enriched = await Promise.all(
+        filings.map(async (filing) => ({
+          ...filing,
+          filerName: filing.filerName || await fetchFiledByName(filing.edgarUrl),
+        }))
+      );
+      return enriched;
     } catch {
       return [];
     }
