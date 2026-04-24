@@ -6,7 +6,6 @@ import { useInsiderData } from '../hooks/useInsiderData';
 import { useRealTimeQuote } from '../hooks/useRealTimeQuote';
 import { useStockNews } from '../hooks/useStockNews';
 import { useStockAIContext } from '../hooks/useStockAIContext';
-import { useAnalystData } from '../hooks/useAnalystData';
 import { useEdgarFilings } from '../hooks/useEdgarFilings';
 import { useChartStore } from '../store/chartStore';
 import { useWatchlistStore } from '../store/watchlistStore';
@@ -52,7 +51,6 @@ export default function StockDetail() {
   const { data: profile, isLoading: profileLoading } = useStockProfile(symbol);
   const { data: insiders, isLoading: insidersLoading } = useInsiderData(symbol);
   const { data: filings, isLoading: filingsLoading } = useEdgarFilings(symbol, isCanadian);
-  const { earnings } = useAnalystData(symbol);
   const { data: news } = useStockNews(symbol);
   // Fundamentals + analyst context for Ask AI chat (US stocks only)
   const { data: aiFundamentals } = useStockAIContext(symbol);
@@ -79,7 +77,7 @@ export default function StockDetail() {
   const sma20 = sma20Series.length > 0 ? sma20Series[sma20Series.length - 1].value : null;
   const sma50 = sma50Series.length > 0 ? sma50Series[sma50Series.length - 1].value : null;
   const latestClose = lastCandle?.close ?? null;
-  const nextEarnings = earnings.data?.[0] ?? null;
+  const nextEarningsDate = aiFundamentals?.upcomingEarningsDate ?? null;
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%', background: 'var(--bg-primary)' }}>
@@ -276,7 +274,7 @@ export default function StockDetail() {
           latestVolume={rvolStats.latestVolume}
           insiderCount={insiders?.length ?? 0}
           filingCount={filings?.length ?? 0}
-          nextEarningsDate={nextEarnings?.period ?? null}
+          nextEarningsDate={nextEarningsDate}
           isCanadian={isCanadian}
         />
       </div>
