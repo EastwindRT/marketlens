@@ -459,6 +459,15 @@ function SignalSummaryPanel({
   nextEarningsDate: string | null;
   isCanadian: boolean;
 }) {
+  const priceVs20 = latestClose != null && sma20 ? ((latestClose - sma20) / sma20) * 100 : null;
+  const priceVs50 = latestClose != null && sma50 ? ((latestClose - sma50) / sma50) * 100 : null;
+  const dmaStack = sma20 != null && sma50 != null
+    ? sma20 > sma50
+      ? '20-day average is above the 50-day average'
+      : sma20 < sma50
+      ? '20-day average is below the 50-day average'
+      : '20-day and 50-day averages are nearly flat'
+    : 'Need more trading history';
   const trendLabel = !latestClose || !sma20 || !sma50
     ? 'Building'
     : latestClose > sma20 && sma20 > sma50
@@ -560,8 +569,115 @@ function SignalSummaryPanel({
           detail={isCanadian ? 'Canadian calendar support is limited' : 'Upcoming earnings can overpower technical setups'}
         />
       </div>
+
+      <div
+        style={{
+          marginTop: 14,
+          borderTop: '1px solid var(--border-subtle)',
+          paddingTop: 14,
+        }}
+      >
+        <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          Signal Evidence
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+            <thead>
+              <tr>
+                <SignalTableHeader label="Metric" />
+                <SignalTableHeader label="Value" />
+                <SignalTableHeader label="Read" />
+              </tr>
+            </thead>
+            <tbody>
+              <SignalTableRow
+                metric="Current price"
+                value={latestClose != null ? formatPrice(latestClose, currency) : '—'}
+                read="Latest close on the chart"
+              />
+              <SignalTableRow
+                metric="20-day average"
+                value={sma20 != null ? formatPrice(sma20, currency) : '—'}
+                read={priceVs20 != null ? `${formatSignedPercent(priceVs20)} vs 20-day trend` : 'Need 20 trading days'}
+              />
+              <SignalTableRow
+                metric="50-day average"
+                value={sma50 != null ? formatPrice(sma50, currency) : '—'}
+                read={priceVs50 != null ? `${formatSignedPercent(priceVs50)} vs 50-day trend` : 'Need 50 trading days'}
+              />
+              <SignalTableRow
+                metric="Trend structure"
+                value={trendLabel}
+                read={dmaStack}
+              />
+              <SignalTableRow
+                metric="Relative volume"
+                value={rvol != null ? `${rvol.toFixed(2)}x` : '—'}
+                read={rvol != null ? `${participationLabel} volume vs 20-day average` : 'Need more volume history'}
+              />
+              <SignalTableRow
+                metric="Volume comparison"
+                value={latestVolume && averageVolume ? `${formatVolume(latestVolume)} vs ${formatVolume(averageVolume)}` : '—'}
+                read="Latest session volume versus the recent average"
+              />
+              <SignalTableRow
+                metric="Ownership activity"
+                value={catalystLabel}
+                read={isCanadian ? 'Based on insider activity' : 'Combines insider trades and 13D/13G filings'}
+              />
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
+}
+
+function SignalTableHeader({ label }: { label: string }) {
+  return (
+    <th
+      style={{
+        textAlign: 'left',
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--text-tertiary)',
+        letterSpacing: '0.07em',
+        textTransform: 'uppercase',
+        padding: '0 0 10px',
+        borderBottom: '1px solid var(--border-subtle)',
+      }}
+    >
+      {label}
+    </th>
+  );
+}
+
+function SignalTableRow({
+  metric,
+  value,
+  read,
+}: {
+  metric: string;
+  value: string;
+  read: string;
+}) {
+  return (
+    <tr>
+      <td style={{ padding: '12px 8px 12px 0', borderBottom: '1px solid var(--border-subtle)', fontSize: 13, color: 'var(--text-primary)', fontWeight: 600 }}>
+        {metric}
+      </td>
+      <td style={{ padding: '12px 8px', borderBottom: '1px solid var(--border-subtle)', fontSize: 13, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}>
+        {value}
+      </td>
+      <td style={{ padding: '12px 0 12px 8px', borderBottom: '1px solid var(--border-subtle)', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+        {read}
+      </td>
+    </tr>
+  );
+}
+
+function formatSignedPercent(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
 }
 
 function SignalPill({
