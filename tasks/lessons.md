@@ -1,3 +1,19 @@
+## Lesson: 2026-04-23 - Chart event markers must use the same time domain as the chart bars
+
+**Observation:** Stock pages started crashing with `Value is null` after adding 13D / 13G filing markers to the chart.
+**Root cause:** The marker layer mixed time formats. Some chart ranges were backed by numeric timestamps while filing markers were passed in as `YYYY-MM-DD` strings. `lightweight-charts` expects markers to live in the same time domain as the series they are attached to.
+**Rule:** Never attach event markers directly from raw provider dates. First map each event date onto the actual chart bar timestamps already present in the current series, and skip markers that do not line up with a visible bar. If a chart can render both numeric and string times depending on range/provider, normalize before calling `setMarkers`.
+
+---
+
+## Lesson: 2026-04-23 - Signal labels need an evidence layer or they read like vague jargon
+
+**Observation:** Users understood that `Mixed Trend` and `Participation` sounded important, but the labels alone were not actionable. They needed to know the actual 20-day average, 50-day average, price distance, and relative-volume context to trust the conclusion.
+**Root cause:** The first pass of the signal UI optimized for compact summaries instead of showing the data that created the summary. That made useful quantitative reads feel opaque.
+**Rule:** Any synthesized trading signal should ship with a compact evidence layer. If the UI shows a label like `Mixed Trend`, it should also expose the supporting numbers nearby: current price, 20/50-day averages, price-vs-average deltas, relative volume, and a plain-English interpretation. Summary first, evidence immediately underneath.
+
+---
+
 ## Lesson: 2026-04-19 — Auth-as-identity removes the PIN / display-name collision class
 
 **Observation:** The old league flow stored a plaintext PIN per player and treated the name string as the stable key. That meant two players could pick the same name, the PIN was an obvious leak surface, and any "whose portfolio is this?" UI had to carry both name and PIN around.

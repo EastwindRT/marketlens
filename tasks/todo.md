@@ -1,3 +1,32 @@
+## Plan: Stock signal evidence upgrade + chart reliability (2026-04-23)
+
+### Reported issue
+1. Stock pages were showing useful signal labels, but not enough supporting data to explain what `Mixed Trend`, `20DMA / 50DMA`, or `Participation` actually meant.
+2. Stock charts could crash with `Value is null` after the new filing markers shipped.
+
+### Root causes found
+- The first pass of the signal panel emphasized summaries over evidence, so users saw a conclusion before they saw the numbers that produced it.
+- The chart mixed marker time formats: ownership filings were being passed as `YYYY-MM-DD` strings while some chart ranges were using numeric timestamps, which caused `lightweight-charts` to fail.
+
+### Shipped
+- [x] `src/utils/indicators.ts` - added reusable average-volume and relative-volume helpers so the signal layer can compare current volume to a 20-day baseline.
+- [x] `src/components/chart/StockChart.tsx` - added `13D / 13G` filing markers on the stock chart.
+- [x] `src/components/chart/StockChart.tsx` - normalized insider / filing markers against the actual chart bar timestamps and skipped markers that do not map to a visible bar, fixing the `Value is null` crash.
+- [x] `src/pages/StockDetail.tsx` - added a `Signal Summary` panel with trend, participation, catalyst, and event-risk reads.
+- [x] `src/pages/StockDetail.tsx` - rewrote signal wording in plain English so `20DMA`, `50DMA`, and `participation` explain themselves on the page.
+- [x] `src/pages/StockDetail.tsx` - added a `Signal Evidence` table with current price, 20-day average, 50-day average, trend deltas, relative volume, volume-vs-average, and ownership activity context.
+- [x] `npm run build` clean after the stock signal and chart reliability changes.
+- [x] Shipped in commits `2969002`, `8cefd4e`, `7a18ccc`, and `cde7e72`.
+
+### Expected user-facing outcome
+- Stock pages now show both the signal conclusion and the evidence behind it.
+- Users can see why a stock is labeled as `Mixed Trend` instead of having to infer it from shorthand.
+- Ownership-event markers remain visible on the chart without crashing stock pages.
+
+### Open / next improvements
+- [ ] Add color-coded positive / negative deltas in the evidence table so price-vs-average reads even faster.
+- [ ] Add more evidence rows if we later introduce short interest, options positioning, or earnings-reaction data providers.
+
 ## Plan: User-reported bug fixes + performance pass (2026-04-20)
 
 ### Reported by users
