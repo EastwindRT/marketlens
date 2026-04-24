@@ -105,7 +105,7 @@ function renderMarkdown(md: string): string {
 // ── Props ──────────────────────────────────────────────────────────────────
 
 export type DeepAnalyzeTarget =
-  | { type: 'stock'; symbol: string; context: Record<string, unknown> }
+  | { type: 'stock'; symbol: string; context: Record<string, unknown>; focus?: string }
   | { type: 'filing'; filing: MarketFiling }
   | { type: 'news'; symbol?: string; news: NewsItem };
 
@@ -113,6 +113,33 @@ interface Props {
   open: boolean;
   onClose: () => void;
   target: DeepAnalyzeTarget | null;
+}
+
+function getDeepAnalyzeTitle(target: DeepAnalyzeTarget): string {
+  if (target.type === 'stock') {
+    return target.focus ? `${target.symbol} - ${target.focus}` : `${target.symbol} - Deep Dive`;
+  }
+  if (target.type === 'filing') {
+    const f = target.filing;
+    return f.subjectCompany ? `${f.formType} · ${f.subjectCompany}` : `${f.formType} · ${f.filerName}`;
+  }
+  return target.news.headline;
+}
+
+function getDeepAnalyzeSubtitle(target: DeepAnalyzeTarget): string {
+  if (target.type === 'stock') {
+    if (target.focus) {
+      return `Focused Claude briefing: ${target.focus.toLowerCase()} using live technical, ownership, and news context`;
+    }
+    return 'Live technical, fundamental, insider, and news read';
+  }
+  if (target.type === 'filing') {
+    const f = target.filing;
+    return [f.filerName, f.filedDate].filter(Boolean).join(' · ');
+  }
+  const n = target.news;
+  const date = n.datetime ? new Date(n.datetime * 1000).toISOString().slice(0, 10) : '';
+  return [n.source, date].filter(Boolean).join(' · ');
 }
 
 export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
@@ -147,7 +174,7 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
     setLoading(true);
     try {
       const body =
-        target.type === 'stock'  ? { type: 'stock',  symbol: target.symbol, context: target.context } :
+        target.type === 'stock'  ? { type: 'stock',  symbol: target.symbol, context: target.context, focus: target.focus } :
         target.type === 'filing' ? { type: 'filing', filing: target.filing } :
                                    { type: 'news',   symbol: target.symbol, news: target.news };
 
@@ -162,7 +189,12 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
       setCached(Boolean(json.cached));
       setModel(typeof json.model === 'string' ? json.model : null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      if (message.includes('ANTHROPIC_API_KEY')) {
+        setError('Deep Analyze is ready, but the Anthropic key is not configured on Render yet. Add ANTHROPIC_API_KEY to start Claude responses.');
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
     }
@@ -181,8 +213,8 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
 
   if (!open || !target) return null;
 
-  const title = getTitle(target);
-  const subtitle = getSubtitle(target);
+  const title = getDeepAnalyzeTitle(target);
+  const subtitle = getDeepAnalyzeSubtitle(target);
 
   return (
     <>
@@ -397,7 +429,7 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
 
 function targetKey(target: DeepAnalyzeTarget | null): string {
   if (!target) return '';
-  if (target.type === 'stock')  return `stock:${target.symbol}`;
+  if (target.type === 'stock') return `stock:${target.symbol}:${target.focus || 'full'}`;
   if (target.type === 'filing') return `filing:${target.filing.accessionNo || target.filing.edgarUrl}`;
   return `news:${target.news.id || target.news.url}`;
 }

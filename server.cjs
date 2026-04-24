@@ -1315,6 +1315,24 @@ function buildDeepStockContext(symbol, context) {
   return lines.join('\n');
 }
 
+function buildDeepStockFocusBlock(focus) {
+  if (!focus) return '';
+  const normalized = String(focus).toLowerCase();
+  if (normalized.includes('bull')) {
+    return `\nANALYSIS FOCUS: Bull Case\nSpend extra time on upside drivers, what supports the long thesis, and what evidence is strongest right now. Still include the bear case, but lead with the bullish setup.`;
+  }
+  if (normalized.includes('bear')) {
+    return `\nANALYSIS FOCUS: Bear Case\nSpend extra time on downside risks, broken trend evidence, valuation pressure, and what would make this fail. Still include the bull case, but lead with the bearish setup.`;
+  }
+  if (normalized.includes('2-week') || normalized.includes('two-week') || normalized.includes('near-term')) {
+    return `\nANALYSIS FOCUS: Near-Term Setup\nFrame the note for the next two weeks. Prioritize catalysts, event risk, support and resistance, volume behavior, and the most important trigger levels.`;
+  }
+  if (normalized.includes('change') || normalized.includes('thesis')) {
+    return `\nANALYSIS FOCUS: What Changes The Thesis\nEmphasize the key confirms, invalidation levels, and the specific data points that would upgrade or downgrade conviction.`;
+  }
+  return `\nANALYSIS FOCUS: ${focus}\nTilt the analysis toward this focus while still grounding every conclusion in the provided data.`;
+}
+
 function buildDeepFilingContext(filing) {
   const parts = [];
   parts.push(`FORM TYPE: ${filing?.formType || 'unknown'}`);
@@ -1341,7 +1359,7 @@ function buildDeepNewsContext(news, symbol) {
 }
 
 app.post('/api/deep-analyze', async (req, res) => {
-  const { type, symbol, context, filing, news } = req.body ?? {};
+  const { type, symbol, context, filing, news, focus } = req.body ?? {};
 
   if (!type || !['stock', 'filing', 'news'].includes(type)) {
     return res.status(400).json({ error: 'type must be "stock" | "filing" | "news"' });
@@ -1359,9 +1377,9 @@ app.post('/api/deep-analyze', async (req, res) => {
     if (type === 'stock') {
       if (!symbol) return res.status(400).json({ error: 'Missing symbol' });
       systemPrompt = DEEP_ANALYZE_STOCK_PROMPT;
-      userPrompt = `Deep dive on ${symbol}.\n\nLIVE CONTEXT:\n${buildDeepStockContext(symbol, context || {})}`;
+      userPrompt = `Deep dive on ${symbol}.${buildDeepStockFocusBlock(focus)}\n\nLIVE CONTEXT:\n${buildDeepStockContext(symbol, context || {})}`;
       const priceBucket = context?.priceRaw ? Math.round(Number(context.priceRaw)) : 0;
-      cacheParts = { route: 'deep-stock', symbol, priceBucket };
+      cacheParts = { route: 'deep-stock', symbol, priceBucket, focus: focus || 'full' };
     } else if (type === 'filing') {
       if (!filing) return res.status(400).json({ error: 'Missing filing' });
       systemPrompt = DEEP_ANALYZE_FILING_PROMPT;

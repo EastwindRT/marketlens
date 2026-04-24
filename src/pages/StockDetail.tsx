@@ -78,6 +78,34 @@ export default function StockDetail() {
   const sma50 = sma50Series.length > 0 ? sma50Series[sma50Series.length - 1].value : null;
   const latestClose = lastCandle?.close ?? null;
   const nextEarningsDate = aiFundamentals?.upcomingEarningsDate ?? null;
+  const deepAnalyzeContext = {
+    price: quote?.c ? `${currency === 'CAD' ? 'CA$' : 'US$'}${quote.c}` : undefined,
+    priceRaw: quote?.c,
+    change: quote?.dp != null ? `${quote.dp >= 0 ? '+' : ''}${quote.dp.toFixed(2)}%` : undefined,
+    marketCap,
+    volume: volumeDisplay,
+    exchange: isCanadian ? (quote?._exchange || 'TSX') : (profile?.exchange || 'NASDAQ'),
+    insiders: insiders || [],
+    candles: (candles || []).slice(-90),
+    news: (news || []).slice(0, 8),
+    fundamentals: aiFundamentals ? { ...aiFundamentals, currentPrice: quote?.c } : undefined,
+  };
+
+  const openDeepAnalysis = (focus?: string) => {
+    setDeepTarget({
+      type: 'stock',
+      symbol,
+      context: deepAnalyzeContext,
+      focus,
+    });
+  };
+
+  const deepAnalyzePresets = [
+    { label: 'Bull Case', focus: 'Bull Case', title: `Deep dive into the bullish case for ${symbol}` },
+    { label: 'Bear Case', focus: 'Bear Case', title: `Deep dive into the bearish case for ${symbol}` },
+    { label: '2-Week Setup', focus: '2-Week Setup', title: `Focus on the near-term 2-week setup for ${symbol}` },
+    { label: 'What Changes The Thesis', focus: 'What Changes The Thesis', title: `Show what would confirm or break the thesis for ${symbol}` },
+  ];
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%', background: 'var(--bg-primary)' }}>
@@ -320,25 +348,22 @@ export default function StockDetail() {
             fundamentals: aiFundamentals ? { ...aiFundamentals, currentPrice: quote?.c } : undefined,
           }}
         />
+        <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {deepAnalyzePresets.map((preset) => (
+            <DeepAnalyzeButton
+              key={preset.focus}
+              variant="compact"
+              label={preset.label}
+              title={preset.title}
+              onClick={() => openDeepAnalysis(preset.focus)}
+            />
+          ))}
+        </div>
         <div style={{ marginTop: 12 }}>
           <DeepAnalyzeButton
             variant="full"
-            onClick={() => setDeepTarget({
-              type: 'stock',
-              symbol,
-              context: {
-                price: quote?.c ? `${currency === 'CAD' ? 'CA$' : 'US$'}${quote.c}` : undefined,
-                priceRaw: quote?.c,
-                change: quote?.dp != null ? `${quote.dp >= 0 ? '+' : ''}${quote.dp.toFixed(2)}%` : undefined,
-                marketCap,
-                volume: volumeDisplay,
-                exchange: isCanadian ? (quote?._exchange || 'TSX') : (profile?.exchange || 'NASDAQ'),
-                insiders: insiders || [],
-                candles: (candles || []).slice(-90),
-                news: (news || []).slice(0, 8),
-                fundamentals: aiFundamentals ? { ...aiFundamentals, currentPrice: quote?.c } : undefined,
-              },
-            })}
+            label="Full Deep Dive with Claude"
+            onClick={() => openDeepAnalysis()}
           />
         </div>
       </div>
