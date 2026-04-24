@@ -30,6 +30,19 @@ interface StockChartProps {
   onInsiderClick?: (transaction: InsiderTransaction) => void;
 }
 
+function getBarDateKey(time: number | string): string | null {
+  if (typeof time === 'string') {
+    return time.slice(0, 10);
+  }
+
+  if (!Number.isFinite(time)) {
+    return null;
+  }
+
+  const millis = time > 1e12 ? time : time * 1000;
+  return new Date(millis).toISOString().slice(0, 10);
+}
+
 function compactValue(v: number): string {
   if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
   if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
@@ -248,6 +261,14 @@ export function StockChart({
     // ── Insider markers — grouped by date ─────────────────────────────────
     const primarySeries = areaSeriesRef.current || candleSeriesRef.current || lineSeriesRef.current;
     if (primarySeries) {
+      const timeLookup = new Map<string, number | string>();
+      data.forEach((bar) => {
+        const dateKey = getBarDateKey(bar.time);
+        if (dateKey && !timeLookup.has(dateKey)) {
+          timeLookup.set(dateKey, bar.time);
+        }
+      });
+
       const byDate = new Map<string, { buys: InsiderTransaction[]; sells: InsiderTransaction[]; grants: InsiderTransaction[]; taxSells: InsiderTransaction[] }>();
       insiders
         .filter(t => t.transactionDate && t.transactionPrice > 0)
@@ -264,9 +285,11 @@ export function StockChart({
 
       const markers: any[] = [];
       byDate.forEach(({ buys, sells, grants, taxSells }, date) => {
+        const markerTime = timeLookup.get(date);
+        if (markerTime == null) return;
         if (buys.length > 0) {
           markers.push({
-            time: date,
+            time: markerTime,
             position: 'belowBar',
             color: 'rgba(5,177,105,0.7)',
             shape: 'circle',
@@ -276,7 +299,7 @@ export function StockChart({
         }
         if (grants.length > 0) {
           markers.push({
-            time: date,
+            time: markerTime,
             position: 'belowBar',
             color: 'rgba(45,107,255,0.6)',
             shape: 'circle',
@@ -286,7 +309,7 @@ export function StockChart({
         }
         if (sells.length > 0) {
           markers.push({
-            time: date,
+            time: markerTime,
             position: 'aboveBar',
             color: 'rgba(246,70,93,0.7)',
             shape: 'circle',
@@ -296,7 +319,7 @@ export function StockChart({
         }
         if (taxSells.length > 0) {
           markers.push({
-            time: date,
+            time: markerTime,
             position: 'aboveBar',
             color: 'rgba(247,147,26,0.7)',
             shape: 'circle',
@@ -310,9 +333,11 @@ export function StockChart({
         .filter((filing) => filing?.filedDate)
         .slice(0, 12)
         .forEach((filing) => {
+          const markerTime = timeLookup.get(filing.filedDate.slice(0, 10));
+          if (markerTime == null) return;
           const is13D = filing.formType.startsWith('13D');
           markers.push({
-            time: filing.filedDate,
+            time: markerTime,
             position: 'aboveBar',
             color: is13D ? 'rgba(247,147,26,0.85)' : 'rgba(45,107,255,0.85)',
             shape: is13D ? 'square' : 'circle',
@@ -322,7 +347,12 @@ export function StockChart({
         });
 
       if (markers.length > 0) {
-        markers.sort((a, b) => a.time.localeCompare(b.time));
+        markers.sort((a, b) => {
+          if (typeof a.time === 'number' && typeof b.time === 'number') {
+            return a.time - b.time;
+          }
+          return String(a.time).localeCompare(String(b.time));
+        });
         primarySeries.setMarkers(markers);
       }
     }
