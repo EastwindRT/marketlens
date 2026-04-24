@@ -11,6 +11,7 @@ import {
 } from 'lightweight-charts';
 import type { OHLCVBar } from '../../api/types';
 import type { ChartType, InsiderTransaction } from '../../api/types';
+import type { MarketFiling } from '../../api/edgar';
 import { calculateSMA } from '../../utils/indicators';
 import { ChartSkeleton } from '../ui/LoadingSkeleton';
 import { getInsiderType } from '../../hooks/useInsiderData';
@@ -22,6 +23,7 @@ interface StockChartProps {
   showSMA50: boolean;
   showVolume: boolean;
   insiders?: InsiderTransaction[];
+  filings?: MarketFiling[];
   loading?: boolean;
   currency?: string;
   height?: number;
@@ -46,6 +48,7 @@ export function StockChart({
   showSMA50,
   showVolume,
   insiders = [],
+  filings = [],
   loading = false,
   height = 400,
 }: StockChartProps) {
@@ -244,7 +247,7 @@ export function StockChart({
 
     // ── Insider markers — grouped by date ─────────────────────────────────
     const primarySeries = areaSeriesRef.current || candleSeriesRef.current || lineSeriesRef.current;
-    if (insiders.length > 0 && primarySeries) {
+    if (primarySeries) {
       const byDate = new Map<string, { buys: InsiderTransaction[]; sells: InsiderTransaction[]; grants: InsiderTransaction[]; taxSells: InsiderTransaction[] }>();
       insiders
         .filter(t => t.transactionDate && t.transactionPrice > 0)
@@ -303,6 +306,21 @@ export function StockChart({
         }
       });
 
+      filings
+        .filter((filing) => filing?.filedDate)
+        .slice(0, 12)
+        .forEach((filing) => {
+          const is13D = filing.formType.startsWith('13D');
+          markers.push({
+            time: filing.filedDate,
+            position: 'aboveBar',
+            color: is13D ? 'rgba(247,147,26,0.85)' : 'rgba(45,107,255,0.85)',
+            shape: is13D ? 'square' : 'circle',
+            text: '',
+            size: 1,
+          });
+        });
+
       if (markers.length > 0) {
         markers.sort((a, b) => a.time.localeCompare(b.time));
         primarySeries.setMarkers(markers);
@@ -326,7 +344,7 @@ export function StockChart({
     };
     window.addEventListener('resize', handleWindowResize);
     return () => window.removeEventListener('resize', handleWindowResize);
-  }, [data, chartType, showSMA20, showSMA50, showVolume, insiders, height]);
+  }, [data, chartType, showSMA20, showSMA50, showVolume, insiders, filings, height]);
 
   useEffect(() => {
     const cleanup = initChart();

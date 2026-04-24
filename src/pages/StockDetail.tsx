@@ -6,6 +6,7 @@ import { useInsiderData } from '../hooks/useInsiderData';
 import { useRealTimeQuote } from '../hooks/useRealTimeQuote';
 import { useStockNews } from '../hooks/useStockNews';
 import { useStockAIContext } from '../hooks/useStockAIContext';
+import { useAnalystData } from '../hooks/useAnalystData';
 import { useEdgarFilings } from '../hooks/useEdgarFilings';
 import { useChartStore } from '../store/chartStore';
 import { useWatchlistStore } from '../store/watchlistStore';
@@ -24,6 +25,7 @@ import { FilingSheet } from '../components/ui/FilingSheet';
 import { PriceHeaderSkeleton } from '../components/ui/LoadingSkeleton';
 import TradeModal from '../components/trade/TradeModal';
 import { formatLargeNumber, formatVolume, formatPrice } from '../utils/formatters';
+import { calculateRelativeVolume, calculateSMA } from '../utils/indicators';
 import { isTSXTicker } from '../utils/marketHours';
 import type { MarketFiling } from '../api/edgar';
 
@@ -50,6 +52,7 @@ export default function StockDetail() {
   const { data: profile, isLoading: profileLoading } = useStockProfile(symbol);
   const { data: insiders, isLoading: insidersLoading } = useInsiderData(symbol);
   const { data: filings, isLoading: filingsLoading } = useEdgarFilings(symbol, isCanadian);
+  const { earnings } = useAnalystData(symbol);
   const { data: news } = useStockNews(symbol);
   // Fundamentals + analyst context for Ask AI chat (US stocks only)
   const { data: aiFundamentals } = useStockAIContext(symbol);
@@ -70,6 +73,13 @@ export default function StockDetail() {
 
   const dayHigh = quote?.h ? formatPrice(quote.h, currency) : '—';
   const dayLow  = quote?.l ? formatPrice(quote.l, currency) : '—';
+  const rvolStats = calculateRelativeVolume(candles || [], 20);
+  const sma20Series = candles && candles.length >= 20 ? calculateSMA(candles, 20) : [];
+  const sma50Series = candles && candles.length >= 50 ? calculateSMA(candles, 50) : [];
+  const sma20 = sma20Series.length > 0 ? sma20Series[sma20Series.length - 1].value : null;
+  const sma50 = sma50Series.length > 0 ? sma50Series[sma50Series.length - 1].value : null;
+  const latestClose = lastCandle?.close ?? null;
+  const nextEarnings = earnings.data?.[0] ?? null;
 
   return (
     <div className="flex flex-col" style={{ minHeight: '100%', background: 'var(--bg-primary)' }}>
@@ -235,6 +245,7 @@ export default function StockDetail() {
           showSMA50={showSMA50}
           showVolume={showVolume}
           insiders={insiders || []}
+          filings={filings || []}
           loading={candlesLoading}
           currency={currency}
         />
@@ -251,6 +262,23 @@ export default function StockDetail() {
           <StatCard label="Day High" value={dayHigh} positive />
           <StatCard label="Day Low" value={dayLow} negative />
         </div>
+      </div>
+
+      <div className="px-4 md:px-8 pb-4">
+        <SignalSummaryPanel
+          symbol={symbol}
+          currency={currency}
+          latestClose={latestClose}
+          sma20={sma20}
+          sma50={sma50}
+          rvol={rvolStats.rvol}
+          averageVolume={rvolStats.averageVolume}
+          latestVolume={rvolStats.latestVolume}
+          insiderCount={insiders?.length ?? 0}
+          filingCount={filings?.length ?? 0}
+          nextEarningsDate={nextEarnings?.period ?? null}
+          isCanadian={isCanadian}
+        />
       </div>
 
       {/* ── Insider Panel ── */}
@@ -359,7 +387,7 @@ export default function StockDetail() {
 
 // Measures container width and picks 280px (mobile) or 440px (desktop)
 function ChartWithResponsiveHeight({
-  data, chartType, showSMA20, showSMA50, showVolume, insiders, loading, currency,
+  data, chartType, showSMA20, showSMA50, showVolume, insiders, filings, loading, currency,
 }: {
   data: OHLCVBar[];
   chartType: ChartType;
@@ -367,6 +395,7 @@ function ChartWithResponsiveHeight({
   showSMA50: boolean;
   showVolume: boolean;
   insiders: InsiderTransaction[];
+  filings: MarketFiling[];
   loading: boolean;
   currency: string;
 }) {
@@ -394,10 +423,170 @@ function ChartWithResponsiveHeight({
         showSMA50={showSMA50}
         showVolume={showVolume}
         insiders={insiders}
+        filings={filings}
         loading={loading}
         currency={currency}
         height={height}
       />
+    </div>
+  );
+}
+
+function SignalSummaryPanel({
+  symbol,
+  currency,
+  latestClose,
+  sma20,
+  sma50,
+  rvol,
+  averageVolume,
+  latestVolume,
+  insiderCount,
+  filingCount,
+  nextEarningsDate,
+  isCanadian,
+}: {
+  symbol: string;
+  currency: string;
+  latestClose: number | null;
+  sma20: number | null;
+  sma50: number | null;
+  rvol: number | null;
+  averageVolume: number | null;
+  latestVolume: number | null;
+  insiderCount: number;
+  filingCount: number;
+  nextEarningsDate: string | null;
+  isCanadian: boolean;
+}) {
+  const trendLabel = !latestClose || !sma20 || !sma50
+    ? 'Building'
+    : latestClose > sma20 && sma20 > sma50
+    ? 'Strong Uptrend'
+    : latestClose < sma20 && sma20 < sma50
+    ? 'Weak Trend'
+    : 'Mixed Trend';
+
+  const trendTone = trendLabel === 'Strong Uptrend'
+    ? 'var(--color-up)'
+    : trendLabel === 'Weak Trend'
+    ? 'var(--color-down)'
+    : 'var(--accent-blue-light)';
+
+  const participationLabel = rvol == null
+    ? 'Normal'
+    : rvol >= 2
+    ? 'Heavy Participation'
+    : rvol >= 1.2
+    ? 'Above Average'
+    : rvol <= 0.8
+    ? 'Light Participation'
+    : 'Normal';
+
+  const participationTone = rvol == null
+    ? 'var(--text-secondary)'
+    : rvol >= 2
+    ? 'var(--color-up)'
+    : rvol <= 0.8
+    ? 'var(--color-down)'
+    : 'var(--accent-blue-light)';
+
+  const catalystParts = [];
+  if (insiderCount > 0) catalystParts.push(`${insiderCount} insider trade${insiderCount === 1 ? '' : 's'}`);
+  if (!isCanadian && filingCount > 0) catalystParts.push(`${filingCount} ownership filing${filingCount === 1 ? '' : 's'}`);
+  const catalystLabel = catalystParts.length > 0 ? catalystParts.join(' • ') : 'No major ownership events';
+
+  const earningsDate = nextEarningsDate ? new Date(nextEarningsDate) : null;
+  const earningsLabel = !earningsDate || Number.isNaN(earningsDate.getTime())
+    ? isCanadian
+      ? 'No earnings calendar feed'
+      : 'No upcoming earnings found'
+    : `Earnings ${earningsDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+
+  return (
+    <div
+      style={{
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 18,
+        padding: 18,
+      }}
+    >
+      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-2" style={{ marginBottom: 14 }}>
+        <div>
+          <p style={{ margin: '0 0 4px', fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+            Signal Summary
+          </p>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
+            Quick read on trend, participation, and ownership activity for {symbol}
+          </p>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+          {latestVolume && averageVolume
+            ? `${formatVolume(latestVolume)} vs ${formatVolume(averageVolume)} avg`
+            : `Volume context in ${currency}`}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <SignalPill
+          label="Trend"
+          value={trendLabel}
+          tone={trendTone}
+          detail={latestClose && sma20 && sma50 ? `Close ${formatPrice(latestClose, currency)} vs 20/50DMA` : 'Waiting for longer chart history'}
+        />
+        <SignalPill
+          label="Participation"
+          value={participationLabel}
+          tone={participationTone}
+          detail={rvol != null ? `${rvol.toFixed(2)}x 20-day relative volume` : 'Need more volume history'}
+        />
+        <SignalPill
+          label="Catalyst"
+          value={catalystLabel}
+          tone="var(--accent-blue-light)"
+          detail={isCanadian ? 'Includes insider activity and chart markers' : 'Includes insider trades and 13D / 13G filings'}
+        />
+        <SignalPill
+          label="Event Risk"
+          value={earningsLabel}
+          tone="var(--text-primary)"
+          detail={isCanadian ? 'Canadian calendar support is limited' : 'Upcoming earnings can overpower technical setups'}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SignalPill({
+  label,
+  value,
+  tone,
+  detail,
+}: {
+  label: string;
+  value: string;
+  tone: string;
+  detail: string;
+}) {
+  return (
+    <div
+      style={{
+        padding: 14,
+        borderRadius: 14,
+        background: 'var(--bg-elevated)',
+        border: '1px solid var(--border-subtle)',
+      }}
+    >
+      <p style={{ margin: '0 0 6px', fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+        {label}
+      </p>
+      <p style={{ margin: '0 0 6px', fontSize: 14, fontWeight: 700, color: tone }}>
+        {value}
+      </p>
+      <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+        {detail}
+      </p>
     </div>
   );
 }
