@@ -164,7 +164,7 @@ export default function App() {
       if (timeoutId !== null) window.clearTimeout(timeoutId)
       timeoutId = window.setTimeout(() => {
         console.warn('[App] signing out idle session after inactivity timeout')
-        logout()
+        void logout()
       }, IDLE_LOGOUT_MS)
     }
 

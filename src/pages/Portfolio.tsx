@@ -117,6 +117,11 @@ export default function Portfolio() {
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [showAddWatchlist, setShowAddWatchlist] = useState(false);
 
+  async function handleLogout() {
+    await logout();
+    navigate('/');
+  }
+
   useEffect(() => {
     // Don't redirect — App.tsx handles the login wall for unauthenticated users.
     // Just wait for the player to be set after the session resolves.
@@ -236,7 +241,7 @@ export default function Portfolio() {
           </div>
         </div>
         <button
-          onClick={() => { logout(); navigate('/'); }}
+          onClick={() => { void handleLogout(); }}
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium"
           style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)', color: 'var(--text-secondary)', cursor: 'pointer' }}
         >

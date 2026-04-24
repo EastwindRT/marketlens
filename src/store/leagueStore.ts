@@ -8,7 +8,7 @@ interface LeagueStore {
   playerStatus: 'idle' | 'loading' | 'ready' | 'error' | 'timed_out';
   setPlayer: (p: Player | null) => void;
   setPlayerStatus: (status: LeagueStore['playerStatus']) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 export const useLeagueStore = create<LeagueStore>()(
@@ -18,8 +18,12 @@ export const useLeagueStore = create<LeagueStore>()(
       playerStatus: 'idle',
       setPlayer: (player) => set({ player }),
       setPlayerStatus: (playerStatus) => set({ playerStatus }),
-      logout: () => {
-        signOutGoogle(); // sign out from Supabase Auth (fires SIGNED_OUT → clears player)
+      logout: async () => {
+        try {
+          await signOutGoogle(); // sign out from Supabase Auth (fires SIGNED_OUT → clears player)
+        } catch (error) {
+          console.error('[leagueStore] signOutGoogle failed:', error);
+        }
         set({ player: null, playerStatus: 'idle' });
       },
     }),
