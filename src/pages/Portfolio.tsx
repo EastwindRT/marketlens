@@ -10,6 +10,27 @@ import AddPositionModal from '../components/trade/AddPositionModal';
 import AddWatchlistModal from '../components/trade/AddWatchlistModal';
 import { useWatchlistStore } from '../store/watchlistStore';
 
+const portfolioCacheKey = (playerId: string) => `tars:portfolio-holdings:${playerId}`;
+
+function readCachedHoldings(playerId: string): Holding[] {
+  try {
+    const raw = sessionStorage.getItem(portfolioCacheKey(playerId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedHoldings(playerId: string, holdings: Holding[]) {
+  try {
+    sessionStorage.setItem(portfolioCacheKey(playerId), JSON.stringify(holdings));
+  } catch {
+    // Ignore cache-write failures; the live query is still the source of truth.
+  }
+}
+
 const HoldingRow = React.memo(function HoldingRow({ holding, quote }: { holding: Holding; quote?: { c?: number } }) {
   const currentPrice = quote?.c ?? holding.avg_cost;
   const currentValue = currentPrice * holding.shares;
@@ -126,10 +147,17 @@ export default function Portfolio() {
     // Don't redirect — App.tsx handles the login wall for unauthenticated users.
     // Just wait for the player to be set after the session resolves.
     if (!player) return;
+    const playerId = player.id;
 
     let isActive = true;
     let requestId = 0;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const cachedHoldings = readCachedHoldings(playerId);
+    if (cachedHoldings.length > 0 && !hasLoadedRef.current) {
+      setHoldings(cachedHoldings);
+      setLoading(false);
+      hasLoadedRef.current = true;
+    }
 
     async function load(showBlockingState: boolean) {
       const runId = ++requestId;
@@ -137,9 +165,10 @@ export default function Portfolio() {
         if (showBlockingState && !hasLoadedRef.current) setLoading(true);
         else setRefreshing(true);
         if (showBlockingState || !hasLoadedRef.current) setLoadError('');
-        const h = await getHoldings(player!.id);
+        const h = await getHoldings(playerId);
         if (!isActive || runId !== requestId) return;
         setHoldings(h);
+        writeCachedHoldings(playerId, h);
         setLoadError('');
         hasLoadedRef.current = true;
       } catch {
@@ -156,7 +185,7 @@ export default function Portfolio() {
     const sub = supabase
       .channel('portfolio')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'holdings',
-        filter: `player_id=eq.${player.id}` }, () => {
+        filter: `player_id=eq.${playerId}` }, () => {
           if (refreshTimer) clearTimeout(refreshTimer);
           refreshTimer = setTimeout(() => { void load(false); }, 250);
         })

@@ -7,17 +7,28 @@ import Dashboard from './pages/Dashboard'
 import LoginModal from './components/auth/LoginModal'
 import ErrorBoundary from './components/ui/ErrorBoundary'
 
+const importStockDetail = () => import('./pages/StockDetail')
+const importSearch = () => import('./pages/Search')
+const importLeaderboard = () => import('./pages/Leaderboard')
+const importPortfolio = () => import('./pages/Portfolio')
+const importPlayerPortfolio = () => import('./pages/PlayerPortfolio')
+const importAdmin = () => import('./pages/Admin')
+const importNews = () => import('./pages/News')
+const importInsiderActivity = () => import('./pages/InsiderActivity')
+const importCongress = () => import('./pages/Congress')
+const importFunds = () => import('./pages/Funds')
+
 // Lazy-load heavy pages to reduce initial bundle size
-const StockDetail         = lazyWithAutoReload(() => import('./pages/StockDetail'))
-const Search              = lazyWithAutoReload(() => import('./pages/Search'))
-const Leaderboard         = lazyWithAutoReload(() => import('./pages/Leaderboard'))
-const Portfolio           = lazyWithAutoReload(() => import('./pages/Portfolio'))
-const PlayerPortfolio     = lazyWithAutoReload(() => import('./pages/PlayerPortfolio'))
-const Admin               = lazyWithAutoReload(() => import('./pages/Admin'))
-const NewsPage            = lazyWithAutoReload(() => import('./pages/News'))
-const InsiderActivityPage = lazyWithAutoReload(() => import('./pages/InsiderActivity'))
-const CongressPage        = lazyWithAutoReload(() => import('./pages/Congress'))
-const FundsPage           = lazyWithAutoReload(() => import('./pages/Funds'))
+const StockDetail         = lazyWithAutoReload(importStockDetail)
+const Search              = lazyWithAutoReload(importSearch)
+const Leaderboard         = lazyWithAutoReload(importLeaderboard)
+const Portfolio           = lazyWithAutoReload(importPortfolio)
+const PlayerPortfolio     = lazyWithAutoReload(importPlayerPortfolio)
+const Admin               = lazyWithAutoReload(importAdmin)
+const NewsPage            = lazyWithAutoReload(importNews)
+const InsiderActivityPage = lazyWithAutoReload(importInsiderActivity)
+const CongressPage        = lazyWithAutoReload(importCongress)
+const FundsPage           = lazyWithAutoReload(importFunds)
 import { useLeagueStore } from './store/leagueStore'
 import { useWatchlistStore } from './store/watchlistStore'
 import { supabase, ensurePlayerForSession } from './api/supabase'
@@ -195,6 +206,13 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [logout, session])
+
+  useEffect(() => {
+    if (!session) return
+
+    void importPortfolio()
+    void importPlayerPortfolio()
+  }, [session])
 
   // Still loading session — show spinner instead of blank screen
   if (session === undefined) {
