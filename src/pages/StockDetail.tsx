@@ -502,6 +502,12 @@ function SignalSummaryPanel({
       ? 'No earnings calendar feed'
       : 'No upcoming earnings found'
     : `Earnings ${earningsDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+  const trendDetail = latestClose && sma20 && sma50
+    ? `20DMA is the average closing price over 20 trading days, and 50DMA is the same over 50 days. Price at ${formatPrice(latestClose, currency)} is ${latestClose > sma20 ? 'above' : 'below'} the 20-day average and ${latestClose > sma50 ? 'above' : 'below'} the 50-day average.`
+    : '20DMA and 50DMA are average closing prices over the last 20 and 50 trading days. They help show whether price is above or below its recent trend.';
+  const participationDetail = rvol != null
+    ? `Participation means how much volume showed up behind the move. ${rvol.toFixed(2)}x relative volume means today traded at ${rvol.toFixed(2)} times the recent 20-day average pace.`
+    : 'Participation means how much trading volume is backing the move. Higher relative volume usually means more conviction behind the price action.';
 
   return (
     <div
@@ -533,13 +539,13 @@ function SignalSummaryPanel({
           label="Trend"
           value={trendLabel}
           tone={trendTone}
-          detail={latestClose && sma20 && sma50 ? `Close ${formatPrice(latestClose, currency)} vs 20/50DMA` : 'Waiting for longer chart history'}
+          detail={trendDetail}
         />
         <SignalPill
           label="Participation"
           value={participationLabel}
           tone={participationTone}
-          detail={rvol != null ? `${rvol.toFixed(2)}x 20-day relative volume` : 'Need more volume history'}
+          detail={participationDetail}
         />
         <SignalPill
           label="Catalyst"
