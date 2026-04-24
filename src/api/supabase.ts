@@ -5,6 +5,39 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+const DB_STEP_TIMEOUT_MS = 8000;
+const DB_STEP_RETRIES = 1;
+
+async function withDbTimeout<T>(promise: Promise<T>, label: string, timeoutMs = DB_STEP_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function runDbStep<T>(label: string, factory: () => Promise<T>, retries = DB_STEP_RETRIES): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await withDbTimeout(factory(), label);
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries) break;
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`${label} failed`);
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface Player {
@@ -241,45 +274,63 @@ export async function executeBuy(
   tradedAt?: string | null,
   note?: string | null,
 ): Promise<{ success: boolean; error?: string }> {
-  if (!(shares > 0) || !(price > 0)) {
-    return { success: false, error: 'Shares and price must be greater than zero.' };
+  try {
+    if (!(shares > 0) || !(price > 0)) {
+      return { success: false, error: 'Shares and price must be greater than zero.' };
+    }
+    const total = shares * price;
+
+    const { data: existing, error: existingError } = await runDbStep<any>(
+      'Load existing holding',
+      async () =>
+        await supabase
+          .from('holdings')
+          .select('*')
+          .eq('player_id', player.id)
+          .eq('symbol', symbol)
+          .maybeSingle(),
+    );
+    if (existingError) return { success: false, error: existingError.message };
+
+    if (existing) {
+      const newShares = existing.shares + shares;
+      const newAvgCost = (existing.shares * existing.avg_cost + shares * price) / newShares;
+      const { error } = await runDbStep<any>(
+        'Update holding',
+        async () =>
+          await supabase
+            .from('holdings')
+            .update({ shares: newShares, avg_cost: newAvgCost, updated_at: new Date().toISOString() })
+            .eq('id', existing.id),
+      );
+      if (error) return { success: false, error: error.message };
+    } else {
+      const { error } = await runDbStep<any>(
+        'Create holding',
+        async () =>
+          await supabase
+            .from('holdings')
+            .insert({ player_id: player.id, symbol, exchange, shares, avg_cost: price }),
+      );
+      if (error) return { success: false, error: error.message };
+    }
+
+    const tradeRow: Record<string, unknown> = {
+      player_id: player.id, symbol, exchange,
+      trade_type: 'BUY', shares, price, total,
+    };
+    if (tradedAt) tradeRow.traded_at = tradedAt;
+    if (note)     tradeRow.note = note;
+    const { error: tradeError } = await runDbStep<any>(
+      'Log trade',
+      async () => await supabase.from('trades').insert(tradeRow),
+    );
+    if (tradeError) return { success: false, error: tradeError.message };
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Trade failed' };
   }
-  const total = shares * price;
-
-  // Upsert holding (merge with existing — weighted-average cost basis)
-  const { data: existing } = await supabase
-    .from('holdings')
-    .select('*')
-    .eq('player_id', player.id)
-    .eq('symbol', symbol)
-    .maybeSingle();
-
-  if (existing) {
-    const newShares = existing.shares + shares;
-    const newAvgCost = (existing.shares * existing.avg_cost + shares * price) / newShares;
-    const { error } = await supabase
-      .from('holdings')
-      .update({ shares: newShares, avg_cost: newAvgCost, updated_at: new Date().toISOString() })
-      .eq('id', existing.id);
-    if (error) return { success: false, error: error.message };
-  } else {
-    const { error } = await supabase
-      .from('holdings')
-      .insert({ player_id: player.id, symbol, exchange, shares, avg_cost: price });
-    if (error) return { success: false, error: error.message };
-  }
-
-  // Log trade (respect optional traded_at and note)
-  const tradeRow: Record<string, unknown> = {
-    player_id: player.id, symbol, exchange,
-    trade_type: 'BUY', shares, price, total,
-  };
-  if (tradedAt) tradeRow.traded_at = tradedAt;
-  if (note)     tradeRow.note = note;
-  const { error: tradeError } = await supabase.from('trades').insert(tradeRow);
-  if (tradeError) return { success: false, error: tradeError.message };
-
-  return { success: true };
 }
 
 export async function executeSell(
@@ -291,45 +342,63 @@ export async function executeSell(
   tradedAt?: string | null,
   note?: string | null,
 ): Promise<{ success: boolean; error?: string }> {
-  if (!(shares > 0) || !(price > 0)) {
-    return { success: false, error: 'Shares and price must be greater than zero.' };
+  try {
+    if (!(shares > 0) || !(price > 0)) {
+      return { success: false, error: 'Shares and price must be greater than zero.' };
+    }
+
+    const { data: existing, error: existingError } = await runDbStep<any>(
+      'Load existing holding',
+      async () =>
+        await supabase
+          .from('holdings')
+          .select('*')
+          .eq('player_id', player.id)
+          .eq('symbol', symbol)
+          .maybeSingle(),
+    );
+    if (existingError) return { success: false, error: existingError.message };
+
+    if (!existing || existing.shares < shares) {
+      return { success: false, error: `Not enough shares. Have ${existing?.shares ?? 0}, trying to sell ${shares}` };
+    }
+
+    const total = shares * price;
+    const newShares = existing.shares - shares;
+    if (newShares < 0.0001) {
+      const { error } = await runDbStep<any>(
+        'Delete holding',
+        async () => await supabase.from('holdings').delete().eq('id', existing.id),
+      );
+      if (error) return { success: false, error: error.message };
+    } else {
+      const { error } = await runDbStep<any>(
+        'Update holding',
+        async () =>
+          await supabase
+            .from('holdings')
+            .update({ shares: newShares, updated_at: new Date().toISOString() })
+            .eq('id', existing.id),
+      );
+      if (error) return { success: false, error: error.message };
+    }
+
+    const tradeRow: Record<string, unknown> = {
+      player_id: player.id, symbol, exchange,
+      trade_type: 'SELL', shares, price, total,
+    };
+    if (tradedAt) tradeRow.traded_at = tradedAt;
+    if (note)     tradeRow.note = note;
+    const { error: tradeError } = await runDbStep<any>(
+      'Log trade',
+      async () => await supabase.from('trades').insert(tradeRow),
+    );
+    if (tradeError) return { success: false, error: tradeError.message };
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Trade failed' };
   }
-
-  const { data: existing } = await supabase
-    .from('holdings')
-    .select('*')
-    .eq('player_id', player.id)
-    .eq('symbol', symbol)
-    .maybeSingle();
-
-  if (!existing || existing.shares < shares) {
-    return { success: false, error: `Not enough shares. Have ${existing?.shares ?? 0}, trying to sell ${shares}` };
-  }
-
-  const total = shares * price;
-
-  // Update or delete holding
-  const newShares = existing.shares - shares;
-  if (newShares < 0.0001) {
-    await supabase.from('holdings').delete().eq('id', existing.id);
-  } else {
-    await supabase
-      .from('holdings')
-      .update({ shares: newShares, updated_at: new Date().toISOString() })
-      .eq('id', existing.id);
-  }
-
-  // Log trade
-  const tradeRow: Record<string, unknown> = {
-    player_id: player.id, symbol, exchange,
-    trade_type: 'SELL', shares, price, total,
-  };
-  if (tradedAt) tradeRow.traded_at = tradedAt;
-  if (note)     tradeRow.note = note;
-  const { error: tradeError } = await supabase.from('trades').insert(tradeRow);
-  if (tradeError) return { success: false, error: tradeError.message };
-
-  return { success: true };
 }
 
 // ── Admin operations ──────────────────────────────────────────────────────────

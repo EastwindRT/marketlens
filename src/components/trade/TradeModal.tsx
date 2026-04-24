@@ -4,7 +4,18 @@ import { executeBuy, executeSell } from '../../api/supabase';
 import { useLeagueStore } from '../../store/leagueStore';
 import { formatPrice } from '../../utils/formatters';
 
-const TRADE_TIMEOUT_MS = 20000;
+const TRADE_TIMEOUT_MS = 12000;
+
+async function withOneRetry<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const message = String((error as Error)?.message || error);
+    if (!/timed out/i.test(message)) throw error;
+    await new Promise((resolve) => window.setTimeout(resolve, 400));
+    return run();
+  }
+}
 
 async function withTradeTimeout<T>(promise: Promise<T>, timeoutMs = TRADE_TIMEOUT_MS): Promise<T> {
   return Promise.race([
@@ -64,8 +75,8 @@ export default function TradeModal({
 
     try {
       const result = mode === 'BUY'
-        ? await withTradeTimeout(executeBuy(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined))
-        : await withTradeTimeout(executeSell(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined));
+        ? await withOneRetry(() => withTradeTimeout(executeBuy(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)))
+        : await withOneRetry(() => withTradeTimeout(executeSell(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)));
 
       if (!result.success) {
         setError(result.error ?? 'Trade failed');
@@ -77,7 +88,7 @@ export default function TradeModal({
     } catch (err) {
       const message = String((err as Error)?.message || err);
       if (/timed out/i.test(message)) {
-        setError('This trade request took too long. Please try again.');
+        setError('Trade request stalled twice. Please try again in a moment.');
       } else {
         setError('Connection error — check your network and try again');
       }
