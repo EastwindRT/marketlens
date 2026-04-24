@@ -509,13 +509,6 @@ function SignalSummaryPanel({
       ? 'No earnings calendar feed'
       : 'No upcoming earnings found'
     : `Earnings ${earningsDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
-  const trendDetail = latestClose && sma20 && sma50
-    ? `20DMA is the average closing price over 20 trading days, and 50DMA is the same over 50 days. Price at ${formatPrice(latestClose, currency)} is ${latestClose > sma20 ? 'above' : 'below'} the 20-day average and ${latestClose > sma50 ? 'above' : 'below'} the 50-day average.`
-    : '20DMA and 50DMA are average closing prices over the last 20 and 50 trading days. They help show whether price is above or below its recent trend.';
-  const participationDetail = rvol != null
-    ? `Participation means how much volume showed up behind the move. ${rvol.toFixed(2)}x relative volume means today traded at ${rvol.toFixed(2)} times the recent 20-day average pace.`
-    : 'Participation means how much trading volume is backing the move. Higher relative volume usually means more conviction behind the price action.';
-
   return (
     <div
       style={{
@@ -546,25 +539,21 @@ function SignalSummaryPanel({
           label="Trend"
           value={trendLabel}
           tone={trendTone}
-          detail={trendDetail}
         />
         <SignalPill
           label="Participation"
           value={participationLabel}
           tone={participationTone}
-          detail={participationDetail}
         />
         <SignalPill
           label="Catalyst"
           value={catalystLabel}
           tone="var(--accent-blue-light)"
-          detail={isCanadian ? 'Includes insider activity and chart markers' : 'Includes insider trades and 13D / 13G filings'}
         />
         <SignalPill
           label="Event Risk"
           value={earningsLabel}
           tone="var(--text-primary)"
-          detail={isCanadian ? 'Canadian calendar support is limited' : 'Upcoming earnings can overpower technical setups'}
         />
       </div>
 
@@ -682,12 +671,10 @@ function SignalPill({
   label,
   value,
   tone,
-  detail,
 }: {
   label: string;
   value: string;
   tone: string;
-  detail: string;
 }) {
   return (
     <div
@@ -703,9 +690,6 @@ function SignalPill({
       </p>
       <p style={{ margin: '0 0 6px', fontSize: 14, fontWeight: 700, color: tone }}>
         {value}
-      </p>
-      <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
-        {detail}
       </p>
     </div>
   );
