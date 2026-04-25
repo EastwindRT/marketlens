@@ -6,24 +6,20 @@ import { formatPrice } from '../../utils/formatters';
 
 const TRADE_TIMEOUT_MS = 12000;
 
-async function withOneRetry<T>(run: () => Promise<T>): Promise<T> {
-  try {
-    return await run();
-  } catch (error) {
-    const message = String((error as Error)?.message || error);
-    if (!/timed out/i.test(message)) throw error;
-    await new Promise((resolve) => window.setTimeout(resolve, 400));
-    return run();
-  }
-}
-
 async function withTradeTimeout<T>(promise: Promise<T>, timeoutMs = TRADE_TIMEOUT_MS): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      window.setTimeout(() => reject(new Error('Trade request timed out')), timeoutMs);
-    }),
-  ]);
+  let timer: number | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = window.setTimeout(() => reject(new Error('Trade request timed out')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== null) {
+      window.clearTimeout(timer);
+    }
+  }
 }
 
 interface TradeModalProps {
@@ -74,9 +70,10 @@ export default function TradeModal({
     setError('');
 
     try {
-      const result = mode === 'BUY'
-        ? await withOneRetry(() => withTradeTimeout(executeBuy(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)))
-        : await withOneRetry(() => withTradeTimeout(executeSell(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)));
+      const tradePromise = mode === 'BUY'
+        ? executeBuy(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)
+        : executeSell(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined);
+      const result = await withTradeTimeout(tradePromise);
 
       if (!result.success) {
         setError(result.error ?? 'Trade failed');
@@ -88,7 +85,7 @@ export default function TradeModal({
     } catch (err) {
       const message = String((err as Error)?.message || err);
       if (/timed out/i.test(message)) {
-        setError('Trade request stalled twice. Please try again in a moment.');
+        setError('Trade request is taking too long. The button has been reset so you can try again. Refresh your portfolio before retrying in case the first request completes late.');
       } else {
         setError('Connection error — check your network and try again');
       }
