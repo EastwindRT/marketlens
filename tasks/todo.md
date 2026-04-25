@@ -1,3 +1,41 @@
+## Plan: Agent-ready stock intelligence foundation (2026-04-25)
+
+### Goal
+1. Start turning the app into something agents can consume directly instead of forcing them to scrape UI cards.
+2. Expose one structured stock payload that aggregates the existing quote, trend, insider, filing, congress, and event context into a normalized JSON response.
+
+### Root causes / context found
+- The site already has meaningful signal data, but it is spread across many independent UI surfaces and endpoints.
+- That makes the product useful for humans, but weaker for agents that need one stable object describing what is happening around a stock.
+- The biggest missing primitive was a single machine-friendly endpoint that can answer "what matters about this symbol right now?" without extra scraping or orchestration.
+
+### Shipped
+- [x] `server.cjs` - added `GET /api/stock-intelligence?symbol=...`.
+- [x] The endpoint returns a normalized stock intelligence payload with:
+  - company identity and market
+  - price and participation metrics
+  - trend metrics (20/50/200 day averages and deltas)
+  - event counts and earnings timing
+  - insider summary and recent insider trades
+  - recent 13D / 13G ownership filings
+  - congress trading summary
+  - available fundamentals
+  - derived signal labels and plain-English explanations
+  - source / data-availability metadata for agent consumers
+- [x] `server.cjs` - added 10-minute in-memory caching plus in-flight dedupe for the new stock-intelligence builder.
+- [x] `server.cjs` - reused existing data sources where possible: Yahoo candles, Finnhub quote/fundamentals/news/earnings, SEC insider cache, SEC ownership filings, Quiver congress data, and TMX quote context for Canadian tickers.
+- [x] `npm run build` clean after the endpoint work.
+- [x] `node --check server.cjs` clean after the endpoint work.
+
+### Expected outcome
+- Agents now have a single structured entry point for stock-level reasoning instead of scraping multiple pages.
+- This creates the foundation for future agent workflows like watchlist scanning, daily briefs, ranked signals, and alert generation.
+
+### Open / next improvements
+- [ ] Add a client-side helper or admin/dev docs page showing the exact schema and example response for `/api/stock-intelligence`.
+- [ ] Expand the payload with stock-level 13F ownership aggregation once there is a clean "which tracked funds own this symbol" path.
+- [ ] Add short-interest and options-positioning fields when a reliable provider is introduced.
+
 ## Plan: Portfolio + filings speed cleanup (2026-04-25)
 
 ### Reported issue

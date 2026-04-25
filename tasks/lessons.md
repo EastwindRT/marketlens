@@ -1,3 +1,11 @@
+## Lesson: 2026-04-25 - Agent value comes from normalized context, not just more pages
+
+**Observation:** The app already had real signal data — insiders, congress, 13D/13G, trend evidence, AI summaries — but an agent would still have to hop across multiple endpoints and UI surfaces to form one opinion about a stock.
+**Root cause:** We optimized for human navigation first. That is good product work, but it leaves agent workflows weak because the system has no single machine-friendly stock object to reason over.
+**Rule:** When you want AI agents to extract value from a product, expose one normalized domain object first. In this app, that means a stock-intelligence payload with raw facts, derived metrics, signal labels, explanations, source metadata, and explicit gaps. Agents benefit more from one stable schema than from five extra UI widgets.
+
+---
+
 ## Lesson: 2026-04-25 - Public portfolio pages need the same fast-path cache treatment as private portfolio pages
 
 **Observation:** Private portfolio navigation had become reasonably snappy because it could seed from a holdings session cache, but public portfolios still felt slow on repeat visits because they always waited for fresh `player + holdings + watchlist` queries.

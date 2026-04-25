@@ -268,6 +268,557 @@ app.get('/api/congress-trades', async (req, res) => {
   }
 });
 
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY || process.env.VITE_FINNHUB_API_KEY || '';
+const STOCK_INTELLIGENCE_TTL = 10 * 60 * 1000;
+const stockIntelligenceCache = new Map();
+const stockIntelligenceBuilds = new Map();
+
+function normalizeSymbol(symbol) {
+  return String(symbol || '').trim().toUpperCase();
+}
+
+function isCanadianTicker(symbol) {
+  return /\.TO$/i.test(symbol);
+}
+
+function baseTicker(symbol) {
+  return normalizeSymbol(symbol).replace(/\.TO$/i, '');
+}
+
+function finiteNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function average(values) {
+  const nums = values.map(finiteNumber).filter((value) => value != null);
+  if (!nums.length) return null;
+  return nums.reduce((sum, value) => sum + value, 0) / nums.length;
+}
+
+function latestSma(closes, period) {
+  if (!Array.isArray(closes) || closes.length < period) return null;
+  return average(closes.slice(-period));
+}
+
+function pctDiff(value, basis) {
+  if (!Number.isFinite(value) || !Number.isFinite(basis) || basis === 0) return null;
+  return ((value / basis) - 1) * 100;
+}
+
+function describeTrend(close, sma20, sma50, sma200) {
+  if (!Number.isFinite(close)) {
+    return { trendState: 'unknown', trendExplanation: 'Price data unavailable.' };
+  }
+
+  const above20 = Number.isFinite(sma20) ? close > sma20 : null;
+  const above50 = Number.isFinite(sma50) ? close > sma50 : null;
+  const above200 = Number.isFinite(sma200) ? close > sma200 : null;
+
+  if (above20 && above50 && above200) {
+    return {
+      trendState: 'bullish',
+      trendExplanation: 'Price is above the 20, 50, and 200 day averages.',
+    };
+  }
+
+  if (above20 === false && above50 === false && above200 === false) {
+    return {
+      trendState: 'bearish',
+      trendExplanation: 'Price is below the 20, 50, and 200 day averages.',
+    };
+  }
+
+  if (above20 && above50 === false) {
+    return {
+      trendState: 'mixed',
+      trendExplanation: 'Short-term price is improving, but it remains below the 50 day average.',
+    };
+  }
+
+  if (above20 === false && above50) {
+    return {
+      trendState: 'pullback',
+      trendExplanation: 'Price is below the 20 day average but still above the 50 day average.',
+    };
+  }
+
+  return {
+    trendState: 'mixed',
+    trendExplanation: 'Trend is not clearly aligned across the key moving averages.',
+  };
+}
+
+function describeParticipation(relativeVolume) {
+  if (!Number.isFinite(relativeVolume)) return 'unknown';
+  if (relativeVolume >= 2) return 'very high';
+  if (relativeVolume >= 1.3) return 'high';
+  if (relativeVolume >= 0.8) return 'normal';
+  return 'light';
+}
+
+function inferOwnershipSignal(filings) {
+  if (!Array.isArray(filings) || filings.length === 0) return 'none';
+  if (filings.some((filing) => filing.formType === '13D' || filing.formType === '13D/A')) return 'activist';
+  if (filings.some((filing) => filing.formType === '13G' || filing.formType === '13G/A')) return 'passive';
+  return 'neutral';
+}
+
+function buildWhyMoving(price, trend, eventCounts) {
+  const reasons = [];
+  if (Number.isFinite(price.relativeVolume) && price.relativeVolume >= 1.3) {
+    reasons.push(`Trading at ${price.relativeVolume.toFixed(2)}x normal volume.`);
+  }
+  if (trend.trendState === 'bullish') {
+    reasons.push('Price is above the 20, 50, and 200 day averages.');
+  } else if (trend.trendState === 'bearish') {
+    reasons.push('Price is below the major moving averages.');
+  } else if (trend.trendExplanation) {
+    reasons.push(trend.trendExplanation);
+  }
+  if (eventCounts.daysToEarnings != null && eventCounts.daysToEarnings >= 0 && eventCounts.daysToEarnings <= 30) {
+    reasons.push(`Upcoming earnings are ${eventCounts.daysToEarnings} days away.`);
+  }
+  if ((eventCounts.recentOwnershipFilings || 0) > 0) {
+    reasons.push('Recent 13D/13G ownership filings are on record.');
+  }
+  return reasons.slice(0, 4);
+}
+
+function htmlDecode(text) {
+  return String(text || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function extractXmlTag(block, tag) {
+  const match = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i').exec(block);
+  if (!match) return '';
+  const raw = match[1].trim();
+  const cdata = raw.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
+  return htmlDecode((cdata ? cdata[1] : raw).trim());
+}
+
+function parseCompanyOwnershipFeed(xml) {
+  const subjectCompanyMatch = xml.match(/<company-info>[\s\S]*?<conformed-name>([\s\S]*?)<\/conformed-name>/i);
+  const subjectCompany = htmlDecode(subjectCompanyMatch?.[1] || '').trim();
+  const filings = [];
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/gi;
+  let match;
+  while ((match = entryRe.exec(xml)) !== null) {
+    const entry = match[1];
+    const filingType = extractXmlTag(entry, 'filing-type');
+    if (!/^SCHEDULE\s+13[DG](?:\/A)?$/i.test(filingType)) continue;
+    const filingDate = extractXmlTag(entry, 'filing-date');
+    const accessionNo = extractXmlTag(entry, 'accession-number');
+    const filingHref = extractXmlTag(entry, 'filing-href');
+    filings.push({
+      accessionNo,
+      formType: filingType.replace(/^SCHEDULE\s+/i, '').toUpperCase(),
+      filedDate: filingDate,
+      edgarUrl: filingHref,
+      filerName: '',
+      subjectCompany,
+    });
+  }
+  return filings
+    .filter((filing) => filing.filedDate)
+    .sort((a, b) => b.filedDate.localeCompare(a.filedDate));
+}
+
+async function fetchCompanyOwnershipFilings(symbol) {
+  if (isCanadianTicker(symbol)) return [];
+  const url = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(baseTicker(symbol))}&type=SCHEDULE+13&dateb=&owner=include&count=20&output=atom`;
+  try {
+    const xml = await httpsGet(url);
+    return parseCompanyOwnershipFeed(xml).slice(0, 10);
+  } catch (err) {
+    console.error('[stock-intelligence/ownership]', err.message);
+    return [];
+  }
+}
+
+async function fetchYahooChart(symbol, range = '3mo', interval = '1d') {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
+  const raw = await httpsGet(url);
+  const json = JSON.parse(raw);
+  const result = json?.chart?.result?.[0];
+  if (!result) return { bars: [], dayQuote: null };
+
+  const timestamps = Array.isArray(result.timestamp) ? result.timestamp : [];
+  const quote = result.indicators?.quote?.[0] || {};
+  const opens = Array.isArray(quote.open) ? quote.open : [];
+  const highs = Array.isArray(quote.high) ? quote.high : [];
+  const lows = Array.isArray(quote.low) ? quote.low : [];
+  const closes = Array.isArray(quote.close) ? quote.close : [];
+  const volumes = Array.isArray(quote.volume) ? quote.volume : [];
+
+  const bars = timestamps.map((ts, index) => {
+    const open = finiteNumber(opens[index]);
+    const high = finiteNumber(highs[index]);
+    const low = finiteNumber(lows[index]);
+    const close = finiteNumber(closes[index]);
+    const volume = finiteNumber(volumes[index]) ?? 0;
+    if (open == null || high == null || low == null || close == null) return null;
+    return { time: ts, open, high, low, close, volume };
+  }).filter(Boolean);
+
+  const meta = result.meta || {};
+  const dayQuote = meta.regularMarketPrice ? {
+    dayHigh: finiteNumber(meta.regularMarketDayHigh),
+    dayLow: finiteNumber(meta.regularMarketDayLow),
+    open: finiteNumber(meta.regularMarketOpen),
+    prevClose: finiteNumber(meta.regularMarketPreviousClose),
+    volume: finiteNumber(meta.regularMarketVolume),
+  } : null;
+
+  return { bars, dayQuote };
+}
+
+async function fetchFinnhubJson(endpoint, params = {}) {
+  if (!FINNHUB_KEY) return null;
+  const url = new URL(`https://finnhub.io/api/v1${endpoint}`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value != null && value !== '') url.searchParams.set(key, String(value));
+  }
+  url.searchParams.set('token', FINNHUB_KEY);
+  try {
+    const raw = await httpsGet(url.toString());
+    const json = JSON.parse(raw);
+    if (json && json.error) throw new Error(json.error);
+    return json;
+  } catch (err) {
+    console.error('[stock-intelligence/finnhub]', endpoint, err.message);
+    return null;
+  }
+}
+
+async function fetchQuoteProfileAndContext(symbol) {
+  const today = new Date();
+  const fromDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const toDate = today.toISOString().slice(0, 10);
+  const earningsTo = new Date(today.getTime() + 120 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const candlesPromise = fetchYahooChart(symbol, '3mo', '1d').catch(() => ({ bars: [], dayQuote: null }));
+
+  if (isCanadianTicker(symbol)) {
+    const ticker = baseTicker(symbol);
+    const quotePromise = httpsPost(TMX_GQL_URL, {
+      query: `{ getQuoteBySymbol(symbol: "${ticker}", locale: "en") {
+        symbol name price priceChange percentChange prevClose openPrice
+        exchangeCode exchangeName MarketCap volume weeks52high weeks52low
+      } }`,
+    }, TMX_HEADERS).then((raw) => {
+      const json = JSON.parse(raw);
+      return json?.data?.getQuoteBySymbol || null;
+    }).catch(() => null);
+
+    const newsPromise = fetchFinnhubJson('/company-news', { symbol, from: fromDate, to: toDate }).then((data) => Array.isArray(data) ? data : []);
+
+    const [quote, candlesData, news] = await Promise.all([quotePromise, candlesPromise, newsPromise]);
+    return {
+      quote: quote ? {
+        c: finiteNumber(quote.price),
+        d: finiteNumber(quote.priceChange),
+        dp: finiteNumber(quote.percentChange),
+        pc: finiteNumber(quote.prevClose),
+        o: finiteNumber(candlesData.dayQuote?.open ?? quote.openPrice),
+        h: finiteNumber(candlesData.dayQuote?.dayHigh),
+        l: finiteNumber(candlesData.dayQuote?.dayLow),
+        volume: finiteNumber(candlesData.dayQuote?.volume ?? quote.volume),
+      } : null,
+      profile: quote ? {
+        name: quote.name,
+        exchange: quote.exchangeCode,
+        marketCapitalization: finiteNumber(quote.MarketCap),
+        currency: 'CAD',
+      } : null,
+      candles: candlesData.bars,
+      news,
+      basics: null,
+      earningsCalendar: [],
+    };
+  }
+
+  const [quote, profile, basics, news, earningsCalendar, candlesData] = await Promise.all([
+    fetchFinnhubJson('/quote', { symbol }),
+    fetchFinnhubJson('/stock/profile2', { symbol }),
+    fetchFinnhubJson('/stock/metric', { symbol, metric: 'all' }),
+    fetchFinnhubJson('/company-news', { symbol, from: fromDate, to: toDate }).then((data) => Array.isArray(data) ? data : []),
+    fetchFinnhubJson('/calendar/earnings', { symbol, from: toDate, to: earningsTo }).then((data) => Array.isArray(data?.earningsCalendar) ? data.earningsCalendar : []),
+    candlesPromise,
+  ]);
+
+  return {
+    quote: quote ? {
+      c: finiteNumber(quote.c),
+      d: finiteNumber(quote.d),
+      dp: finiteNumber(quote.dp),
+      pc: finiteNumber(quote.pc),
+      o: finiteNumber(quote.o),
+      h: finiteNumber(quote.h),
+      l: finiteNumber(quote.l),
+      volume: finiteNumber(candlesData.dayQuote?.volume),
+    } : null,
+    profile: profile ? {
+      name: profile.name,
+      exchange: profile.exchange,
+      marketCapitalization: Number.isFinite(profile.marketCapitalization) ? profile.marketCapitalization * 1e6 : null,
+      currency: profile.currency,
+      finnhubIndustry: profile.finnhubIndustry,
+    } : null,
+    candles: candlesData.bars,
+    news,
+    basics: basics?.metric || null,
+    earningsCalendar,
+  };
+}
+
+async function ensureCongressData() {
+  const now = Date.now();
+  if (!congressCache || now - congressLastFetch > CONGRESS_CACHE_TTL) {
+    congressCache = await fetchCongressData();
+    congressLastFetch = now;
+  }
+  return congressCache;
+}
+
+async function buildStockIntelligence(symbol) {
+  const normalized = normalizeSymbol(symbol);
+  const market = isCanadianTicker(normalized) ? 'CA' : 'US';
+
+  try {
+    if (!Array.isArray(insiderActivityCaches[30]) || insiderActivityCaches[30].length === 0) {
+      await buildInsiderActivityCache(30);
+    }
+  } catch (err) {
+    console.error('[stock-intelligence/insiders]', err.message);
+  }
+
+  const [marketData, ownershipFilings, congressData] = await Promise.all([
+    fetchQuoteProfileAndContext(normalized),
+    fetchCompanyOwnershipFilings(normalized),
+    ensureCongressData().catch(() => []),
+  ]);
+
+  const closeSeries = marketData.candles.map((bar) => finiteNumber(bar.close)).filter((value) => value != null);
+  const volumeSeries = marketData.candles.map((bar) => finiteNumber(bar.volume)).filter((value) => value != null);
+  const latestClose = closeSeries.length ? closeSeries[closeSeries.length - 1] : finiteNumber(marketData.quote?.c);
+  const latestVolume = volumeSeries.length ? volumeSeries[volumeSeries.length - 1] : finiteNumber(marketData.quote?.volume);
+  const avgVolume20d = volumeSeries.length >= 20 ? average(volumeSeries.slice(-20)) : average(volumeSeries);
+  const relativeVolume = (Number.isFinite(latestVolume) && Number.isFinite(avgVolume20d) && avgVolume20d > 0)
+    ? latestVolume / avgVolume20d
+    : null;
+
+  const trend = (() => {
+    const sma20 = latestSma(closeSeries, 20);
+    const sma50 = latestSma(closeSeries, 50);
+    const sma200 = latestSma(closeSeries, 200);
+    const description = describeTrend(latestClose, sma20, sma50, sma200);
+    return {
+      close: latestClose,
+      dma20: sma20,
+      dma50: sma50,
+      dma200: sma200,
+      priceVs20dPct: pctDiff(latestClose, sma20),
+      priceVs50dPct: pctDiff(latestClose, sma50),
+      priceVs200dPct: pctDiff(latestClose, sma200),
+      ...description,
+    };
+  })();
+
+  const insiderTrades = (() => {
+    const cacheWindow = insiderActivityCaches[30]?.length ? insiderActivityCaches[30] : [];
+    return cacheWindow
+      .filter((trade) => normalizeSymbol(trade.symbol) === baseTicker(normalized))
+      .slice(0, 10);
+  })();
+
+  const insiderSummary = (() => {
+    const buyTrades = insiderTrades.filter((trade) => trade.type === 'BUY');
+    const sellTrades = insiderTrades.filter((trade) => trade.type === 'SELL');
+    const buyValue = buyTrades.reduce((sum, trade) => sum + (finiteNumber(trade.totalValue) || 0), 0);
+    const sellValue = sellTrades.reduce((sum, trade) => sum + (finiteNumber(trade.totalValue) || 0), 0);
+    return {
+      last30d: {
+        buyCount: buyTrades.length,
+        sellCount: sellTrades.length,
+        netValue: buyValue - sellValue,
+      },
+      recent: insiderTrades.map((trade) => ({
+        filingDate: trade.filingDate || null,
+        transactionDate: trade.transactionDate || null,
+        insiderName: trade.insiderName || '',
+        title: trade.title || '',
+        type: trade.type,
+        shares: finiteNumber(trade.shares),
+        pricePerShare: finiteNumber(trade.pricePerShare),
+        totalValue: finiteNumber(trade.totalValue),
+        filingUrl: trade.filingUrl || '',
+      })),
+    };
+  })();
+
+  const normalizedCongress = (Array.isArray(congressData) ? congressData : [])
+    .map(mapQuiverCongressTrade)
+    .filter(Boolean)
+    .filter((trade) => trade.ticker === baseTicker(normalized))
+    .sort((a, b) => (b.transactionDate || '').localeCompare(a.transactionDate || ''));
+
+  const nextEarnings = Array.isArray(marketData.earningsCalendar) && marketData.earningsCalendar.length
+    ? marketData.earningsCalendar
+        .filter((item) => item?.date)
+        .sort((a, b) => a.date.localeCompare(b.date))[0]
+    : null;
+  const daysToEarnings = nextEarnings?.date
+    ? Math.round((new Date(nextEarnings.date) - new Date()) / (1000 * 60 * 60 * 24))
+    : null;
+
+  const ownershipSummary = {
+    recent: ownershipFilings.map((filing) => ({
+      accessionNo: filing.accessionNo || '',
+      formType: filing.formType,
+      filedDate: filing.filedDate,
+      subjectCompany: filing.subjectCompany || marketData.profile?.name || '',
+      edgarUrl: filing.edgarUrl || '',
+    })),
+    hasActivistSignal: ownershipFilings.some((filing) => filing.formType === '13D' || filing.formType === '13D/A'),
+    hasPassiveStakeSignal: ownershipFilings.some((filing) => filing.formType === '13G' || filing.formType === '13G/A'),
+  };
+
+  const eventCounts = {
+    earningsDate: nextEarnings?.date || null,
+    daysToEarnings,
+    recentNewsCount: Array.isArray(marketData.news) ? marketData.news.length : 0,
+    recentInsiderTrades: insiderTrades.length,
+    recentOwnershipFilings: ownershipFilings.length,
+    recentCongressTrades: normalizedCongress.length,
+  };
+
+  const price = {
+    last: finiteNumber(marketData.quote?.c ?? latestClose),
+    change: finiteNumber(marketData.quote?.d),
+    changePct: finiteNumber(marketData.quote?.dp),
+    volume: latestVolume,
+    avgVolume20d,
+    relativeVolume,
+    participation: describeParticipation(relativeVolume),
+    currency: marketData.profile?.currency || (market === 'CA' ? 'CAD' : 'USD'),
+  };
+
+  const signals = {
+    participation: price.participation,
+    ownershipSignal: inferOwnershipSignal(ownershipFilings),
+    eventRisk: daysToEarnings != null && daysToEarnings >= 0 && daysToEarnings <= 14 ? 'high' : daysToEarnings != null && daysToEarnings <= 30 ? 'medium' : 'low',
+    squeezeRisk: 'unknown',
+    compositeScore: [
+      trend.trendState === 'bullish' ? 30 : trend.trendState === 'mixed' || trend.trendState === 'pullback' ? 18 : 8,
+      price.relativeVolume >= 2 ? 25 : price.relativeVolume >= 1.3 ? 18 : price.relativeVolume >= 0.8 ? 12 : 5,
+      ownershipSummary.hasActivistSignal ? 20 : ownershipSummary.hasPassiveStakeSignal ? 12 : 6,
+      insiderSummary.last30d.buyCount > insiderSummary.last30d.sellCount ? 15 : 8,
+      normalizedCongress.length > 0 ? 10 : 5,
+    ].reduce((sum, value) => sum + value, 0),
+  };
+
+  const payload = {
+    symbol: normalized,
+    asOf: new Date().toISOString(),
+    market,
+    company: {
+      name: marketData.profile?.name || baseTicker(normalized),
+      exchange: marketData.profile?.exchange || (market === 'CA' ? 'TSX' : null),
+      industry: marketData.profile?.finnhubIndustry || null,
+      marketCap: finiteNumber(marketData.profile?.marketCapitalization),
+    },
+    price,
+    trend,
+    events: eventCounts,
+    insiders: insiderSummary,
+    ownershipFilings: ownershipSummary,
+    congress: {
+      recent: normalizedCongress.slice(0, 10),
+      buyCount90d: normalizedCongress.filter((trade) => trade.type === 'purchase').length,
+      sellCount90d: normalizedCongress.filter((trade) => trade.type === 'sale').length,
+    },
+    fundamentals: marketData.basics ? {
+      peRatio: finiteNumber(marketData.basics.peNormalizedAnnual ?? marketData.basics.peTTM ?? marketData.basics.peBasicExclExtraTTM),
+      pegRatio: finiteNumber(marketData.basics.pegRatioTTM),
+      psRatio: finiteNumber(marketData.basics.psTTM),
+      epsTTM: finiteNumber(marketData.basics.epsNormalizedAnnual ?? marketData.basics.epsTTM),
+      revenueGrowthYoy: finiteNumber(marketData.basics.revenueGrowthTTMYoy ?? marketData.basics.revenueGrowthQuarterlyYoy),
+      epsGrowthYoy: finiteNumber(marketData.basics.epsGrowthTTMYoy ?? marketData.basics.epsGrowthQuarterlyYoy),
+      grossMargin: finiteNumber(marketData.basics.grossMarginTTM),
+      operatingMargin: finiteNumber(marketData.basics.operatingMarginTTM),
+      netMargin: finiteNumber(marketData.basics.netProfitMarginTTM),
+      roe: finiteNumber(marketData.basics.roeTTM ?? marketData.basics.roeRfy),
+      weeks52high: finiteNumber(marketData.basics['52WeekHigh']),
+      weeks52low: finiteNumber(marketData.basics['52WeekLow']),
+    } : null,
+    signals,
+    explanations: {
+      whyMoving: buildWhyMoving(price, trend, eventCounts),
+      bullCase: [
+        trend.trendState === 'bullish' ? 'Trend is aligned above key moving averages.' : 'Trend is not fully aligned yet.',
+        Number.isFinite(price.relativeVolume) && price.relativeVolume >= 1.3 ? 'Participation is above average.' : 'Volume participation is not elevated yet.',
+        ownershipSummary.hasActivistSignal ? 'Recent 13D activity suggests an activist ownership angle.' : ownershipSummary.hasPassiveStakeSignal ? 'Recent 13G activity shows notable ownership disclosure.' : 'No recent ownership-filing catalyst is present.',
+      ],
+      bearCase: [
+        insiderSummary.last30d.sellCount > insiderSummary.last30d.buyCount ? 'Recent insider selling outweighs buying.' : 'Insider flow does not show heavy accumulation.',
+        signals.eventRisk === 'high' ? 'Upcoming earnings create near-term event risk.' : 'No immediate earnings catalyst is forcing the timeline.',
+        trend.trendState === 'bearish' ? 'Price remains below key moving averages.' : 'Trend is not decisively bearish, but it is not risk-free.',
+      ],
+    },
+    dataAvailability: {
+      shortInterest: null,
+      optionsPositioning: null,
+      fundOwnershipByStock: null,
+    },
+    sources: {
+      quote: market === 'CA' ? 'TMX / Yahoo Finance' : 'Finnhub / Yahoo Finance',
+      candles: 'Yahoo Finance',
+      insiders: 'SEC Form 4 cache',
+      ownershipFilings: market === 'CA' ? 'Unavailable' : 'SEC EDGAR Schedule 13D/13G',
+      congress: 'Quiver',
+      fundamentals: market === 'CA' ? 'Unavailable' : 'Finnhub',
+    },
+  };
+
+  stockIntelligenceCache.set(normalized, { ts: Date.now(), payload });
+  return payload;
+}
+
+app.get('/api/stock-intelligence', async (req, res) => {
+  const symbol = normalizeSymbol(req.query.symbol);
+  if (!symbol) {
+    return res.status(400).json({ error: 'symbol query param is required' });
+  }
+
+  try {
+    const cached = stockIntelligenceCache.get(symbol);
+    if (cached && Date.now() - cached.ts < STOCK_INTELLIGENCE_TTL) {
+      return res.json(cached.payload);
+    }
+
+    if (!stockIntelligenceBuilds.has(symbol)) {
+      stockIntelligenceBuilds.set(
+        symbol,
+        buildStockIntelligence(symbol).finally(() => {
+          stockIntelligenceBuilds.delete(symbol);
+        })
+      );
+    }
+
+    const payload = await stockIntelligenceBuilds.get(symbol);
+    res.json(payload);
+  } catch (err) {
+    console.error('[stock-intelligence]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 function normaliseDate(d) {
   if (!d) return '';
   const s = String(d);
