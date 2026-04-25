@@ -1,3 +1,19 @@
+## Lesson: 2026-04-25 - Public portfolio pages need the same fast-path cache treatment as private portfolio pages
+
+**Observation:** Private portfolio navigation had become reasonably snappy because it could seed from a holdings session cache, but public portfolios still felt slow on repeat visits because they always waited for fresh `player + holdings + watchlist` queries.
+**Root cause:** We optimized only the owner path and left the public-view path to start cold every time, even though the same user often opens the same public portfolio repeatedly in one session.
+**Rule:** Any high-traffic read-heavy page with stable last-known data should seed from a lightweight session snapshot first, then refresh in place. Do not limit this pattern to the signed-in owner view if the public view has the same perceived-latency problem.
+
+---
+
+## Lesson: 2026-04-25 - Expired cache should not automatically mean blocked UI
+
+**Observation:** Both `13F recent filers` and `13F recent filings` felt slow when their caches expired, even though slightly stale data would have been perfectly acceptable to show first.
+**Root cause:** The endpoints treated cache expiry as "rebuild before responding" instead of "serve stale and refresh in background." That turns a maintenance refresh into a user-facing stall.
+**Rule:** For market-data endpoints where minute-level precision is not critical, prefer stale-while-revalidate plus in-flight dedupe. Users get a fast response, overlapping requests do not stampede the provider, and freshness still recovers in the background.
+
+---
+
 ## Lesson: 2026-04-24 - Presence tracking should be heartbeat-based and throttled
 
 **Observation:** Admin wanted a useful `online now / last active` view, but blindly writing on every click, scroll, or keypress would create noisy and unnecessary Supabase churn.

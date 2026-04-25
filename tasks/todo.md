@@ -1,3 +1,31 @@
+## Plan: Portfolio + filings speed cleanup (2026-04-25)
+
+### Reported issue
+1. Portfolio pages still feel delayed when opened, especially public portfolios.
+2. Filings surfaces still feel slow when their caches expire or when users revisit them after navigation.
+
+### Root causes found
+- Private portfolio already had a holdings session cache, but public portfolios always started cold and waited on fresh `player + holdings + watchlist` Supabase queries.
+- Market Signals 13D/13G results relied on React Query memory only, so revisits after route changes or reloads had no immediate fast path.
+- `/api/13f/recent-filers` and `/api/13f/recent-filings` blocked on rebuild whenever their caches were stale, instead of serving stale data first and refreshing in the background.
+
+### Shipped
+- [x] `src/pages/PlayerPortfolio.tsx` - added session-backed snapshot caching for public portfolios so repeat visits can render immediately from the last good `player + holdings + watchlist` state.
+- [x] `src/pages/PlayerPortfolio.tsx` - public portfolio refresh still reconciles against live Supabase data, but the cached snapshot stays visible while the fresh load resolves.
+- [x] `src/pages/News.tsx` - added a session cache for market filings keyed by selected day window and wired it into React Query `initialData` / `initialDataUpdatedAt`.
+- [x] `server.cjs` - added stale-while-revalidate plus in-flight dedupe for `/api/13f/recent-filers`.
+- [x] `server.cjs` - added stale-while-revalidate plus in-flight dedupe for `/api/13f/recent-filings`.
+- [x] `npm run build` clean after the performance pass.
+
+### Expected user-facing outcome
+- Public portfolios should open much faster on repeat visits instead of flashing a cold load every time.
+- The Market Signals filings list should feel immediate on revisits within the same session.
+- 13F recent-filers and recent-filings should stop feeling hung when their server caches expire.
+
+### Open / next improvements
+- [ ] If portfolio lag is still noticeable on first signed-in load, move holdings aggregation to a server/RPC path so the app can fetch one compact payload instead of piecing it together client-side.
+- [ ] If Market Signals still feels slow on first hit, move market-wide 13D/13G aggregation behind a dedicated cached server endpoint instead of relying on browser-side SEC fanout.
+
 ## Plan: Deep Analyze activation + admin activity tracking (2026-04-24)
 
 ### Reported goals

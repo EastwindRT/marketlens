@@ -2138,67 +2138,91 @@ const KNOWN_FUNDS = [
 // Cached recent-filers response
 let recentFilersCache = null;
 let recentFilersFetch = 0;
+let recentFilersInFlight = null;
 const RECENT_FILERS_TTL = 6 * 60 * 60 * 1000; // 6h
+
+function isCacheFresh(lastFetch, ttl) {
+  return Boolean(lastFetch) && Date.now() - lastFetch < ttl;
+}
+
+async function buildRecentFilersCache() {
+  const categories = {
+    '102909':  'Index / Mega', '1315066': 'Index / Mega', '813672': 'Index / Mega',
+    '1067983': 'Value',         '1166559': 'Foundation',
+    '1037389': 'Quant',         '1273087': 'Multi-Strat',  '1423053': 'Multi-Strat',
+    '1275014': 'Quant',         '1595882': 'Quant',         '1540159': 'Multi-Strat',
+    '1167557': 'Quant',         '1649339': 'Quant',         '1218710': 'Multi-Strat',
+    '1612063': 'Quant',         '1637460': 'Multi-Strat',
+    '1350694': 'Macro',         '1167483': 'Long/Short',    '1466373': 'Long/Short',
+    '1040273': 'Long/Short',    '1336489': 'Long/Short',    '1056931': 'Long/Short',
+    '875956':  'Long/Short',    '1536411': 'Family Office', '1318757': 'Long/Short',
+    '1602189': 'Growth',        '923093':  'Macro',
+    '1336528': 'Activist',      '1040570': 'Activist',      '1079114': 'Activist',
+    '814180':  'Activist',      '1162175': 'Activist',      '892416':  'Activist',
+    '1486671': 'Activist',      '2045724': 'AI / Tech',
+  };
+
+  async function getLatestDate(cik) {
+    try {
+      const pad = cik.padStart(10, '0');
+      const data = await httpsGet(`https://data.sec.gov/submissions/CIK${pad}.json`, { 'User-Agent': 'TARS admin@tars.app' });
+      const json = JSON.parse(data);
+      const forms = json.filings?.recent?.form ?? [];
+      const dates = json.filings?.recent?.filingDate ?? [];
+      for (let i = 0; i < forms.length; i++) {
+        if (forms[i] === '13F-HR') return dates[i] ?? '';
+      }
+    } catch {}
+    return '';
+  }
+
+  const batchSize = 5;
+  const results = [];
+  for (let i = 0; i < KNOWN_FUNDS.length; i += batchSize) {
+    const batch = KNOWN_FUNDS.slice(i, i + batchSize);
+    const batchResults = await Promise.all(
+      batch.map(async f => ({
+        cik: f.cik,
+        name: f.name,
+        lastFiled: await getLatestDate(f.cik),
+        category: categories[f.cik] || 'Other',
+      }))
+    );
+    results.push(...batchResults);
+  }
+
+  results.sort((a, b) => b.lastFiled.localeCompare(a.lastFiled));
+  recentFilersCache = { funds: results };
+  recentFilersFetch = Date.now();
+  return recentFilersCache;
+}
+
+function ensureRecentFilersCache(force = false) {
+  if (!force && recentFilersCache && isCacheFresh(recentFilersFetch, RECENT_FILERS_TTL)) {
+    return Promise.resolve(recentFilersCache);
+  }
+  if (recentFilersInFlight) return recentFilersInFlight;
+  recentFilersInFlight = buildRecentFilersCache()
+    .catch((err) => {
+      if (recentFilersCache) return recentFilersCache;
+      throw err;
+    })
+    .finally(() => {
+      recentFilersInFlight = null;
+    });
+  return recentFilersInFlight;
+}
 
 app.get('/api/13f/recent-filers', async (req, res) => {
   try {
-    const now = Date.now();
-    if (recentFilersCache && now - recentFilersFetch < RECENT_FILERS_TTL) {
+    if (recentFilersCache && isCacheFresh(recentFilersFetch, RECENT_FILERS_TTL)) {
       return res.json(recentFilersCache);
     }
-
-    const categories = {
-      '102909':  'Index / Mega', '1315066': 'Index / Mega', '813672': 'Index / Mega',
-      '1067983': 'Value',         '1166559': 'Foundation',
-      '1037389': 'Quant',         '1273087': 'Multi-Strat',  '1423053': 'Multi-Strat',
-      '1275014': 'Quant',         '1595882': 'Quant',         '1540159': 'Multi-Strat',
-      '1167557': 'Quant',         '1649339': 'Quant',         '1218710': 'Multi-Strat',
-      '1612063': 'Quant',         '1637460': 'Multi-Strat',
-      '1350694': 'Macro',         '1167483': 'Long/Short',    '1466373': 'Long/Short',
-      '1040273': 'Long/Short',    '1336489': 'Long/Short',    '1056931': 'Long/Short',
-      '875956':  'Long/Short',    '1536411': 'Family Office', '1318757': 'Long/Short',
-      '1602189': 'Growth',        '923093':  'Macro',
-      '1336528': 'Activist',      '1040570': 'Activist',      '1079114': 'Activist',
-      '814180':  'Activist',      '1162175': 'Activist',      '892416':  'Activist',
-      '1486671': 'Activist',      '2045724': 'AI / Tech',
-    };
-
-    async function getLatestDate(cik) {
-      try {
-        const pad = cik.padStart(10, '0');
-        const data = await httpsGet(`https://data.sec.gov/submissions/CIK${pad}.json`, { 'User-Agent': 'TARS admin@tars.app' });
-        const json = JSON.parse(data);
-        const forms = json.filings?.recent?.form ?? [];
-        const dates = json.filings?.recent?.filingDate ?? [];
-        for (let i = 0; i < forms.length; i++) {
-          if (forms[i] === '13F-HR') return dates[i] ?? '';
-        }
-      } catch {}
-      return '';
+    if (recentFilersCache) {
+      void ensureRecentFilersCache(true);
+      return res.json(recentFilersCache);
     }
-
-    // Batch 5 at a time to avoid overwhelming EDGAR
-    const batchSize = 5;
-    const results = [];
-    for (let i = 0; i < KNOWN_FUNDS.length; i += batchSize) {
-      const batch = KNOWN_FUNDS.slice(i, i + batchSize);
-      const batchResults = await Promise.all(
-        batch.map(async f => ({
-          cik: f.cik,
-          name: f.name,
-          lastFiled: await getLatestDate(f.cik),
-          category: categories[f.cik] || 'Other',
-        }))
-      );
-      results.push(...batchResults);
-    }
-
-    // Sort by most recently filed
-    results.sort((a, b) => b.lastFiled.localeCompare(a.lastFiled));
-
-    recentFilersCache = { funds: results };
-    recentFilersFetch = now;
-    res.json(recentFilersCache);
+    res.json(await ensureRecentFilersCache(true));
   } catch (err) {
     console.error('[13f/recent-filers]', err.message);
     res.status(502).json({ error: err.message, funds: [] });
@@ -2248,16 +2272,40 @@ async function fetchRecent13FFilings(daysBack = 60) {
 
 const recent13FCaches = {};  // keyed by daysBack
 const recent13FFetchTimes = {};
+const recent13FInFlight = {};
+
+async function ensureRecent13FCache(daysBack, force = false) {
+  if (!force && recent13FCaches[daysBack] && isCacheFresh(recent13FFetchTimes[daysBack], RECENT_13F_TTL)) {
+    return recent13FCaches[daysBack];
+  }
+  if (recent13FInFlight[daysBack]) return recent13FInFlight[daysBack];
+  recent13FInFlight[daysBack] = fetchRecent13FFilings(daysBack)
+    .then((filings) => {
+      recent13FCaches[daysBack] = filings;
+      recent13FFetchTimes[daysBack] = Date.now();
+      return filings;
+    })
+    .catch((err) => {
+      if (recent13FCaches[daysBack]) return recent13FCaches[daysBack];
+      throw err;
+    })
+    .finally(() => {
+      delete recent13FInFlight[daysBack];
+    });
+  return recent13FInFlight[daysBack];
+}
 
 app.get('/api/13f/recent-filings', async (req, res) => {
   const daysBack = Math.min(60, Math.max(7, Number(req.query.days) || 14));
   try {
-    const now = Date.now();
-    if (!recent13FCaches[daysBack] || now - (recent13FFetchTimes[daysBack] || 0) > RECENT_13F_TTL) {
-      recent13FCaches[daysBack] = await fetchRecent13FFilings(daysBack);
-      recent13FFetchTimes[daysBack] = now;
+    if (recent13FCaches[daysBack] && isCacheFresh(recent13FFetchTimes[daysBack], RECENT_13F_TTL)) {
+      return res.json({ filings: recent13FCaches[daysBack] });
     }
-    res.json({ filings: recent13FCaches[daysBack] });
+    if (recent13FCaches[daysBack]) {
+      void ensureRecent13FCache(daysBack, true);
+      return res.json({ filings: recent13FCaches[daysBack] });
+    }
+    res.json({ filings: await ensureRecent13FCache(daysBack, true) });
   } catch (err) {
     console.error('[13f/recent-filings]', err.message);
     res.status(502).json({ error: err.message, filings: [] });

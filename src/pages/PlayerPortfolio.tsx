@@ -6,6 +6,38 @@ import { useStockQuotes } from '../hooks/useStockData';
 import type { Holding, Player, WatchlistInput } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
 
+type CachedPlayerPortfolio = {
+  player: Player | null;
+  holdings: Holding[];
+  watchlist: WatchlistInput[];
+};
+
+const playerPortfolioCacheKey = (playerId: string) => `tars:player-portfolio:${playerId}`;
+
+function readCachedPortfolio(playerId: string): CachedPlayerPortfolio | null {
+  try {
+    const raw = sessionStorage.getItem(playerPortfolioCacheKey(playerId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      player: parsed.player ?? null,
+      holdings: Array.isArray(parsed.holdings) ? parsed.holdings : [],
+      watchlist: Array.isArray(parsed.watchlist) ? parsed.watchlist : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedPortfolio(playerId: string, snapshot: CachedPlayerPortfolio) {
+  try {
+    sessionStorage.setItem(playerPortfolioCacheKey(playerId), JSON.stringify(snapshot));
+  } catch {
+    // Ignore cache write failures and rely on the live snapshot.
+  }
+}
+
 const HoldingRow = React.memo(function HoldingRow({ holding, quote }: { holding: Holding; quote?: { c?: number } }) {
   const currentPrice = quote?.c ?? holding.avg_cost;
   const currentValue = currentPrice * holding.shares;
@@ -120,9 +152,18 @@ export default function PlayerPortfolio() {
 
   useEffect(() => {
     if (!playerId) return;
+    const activePlayerId = playerId;
     let isActive = true;
     let requestId = 0;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const cachedSnapshot = readCachedPortfolio(activePlayerId);
+    if (cachedSnapshot?.player && !hasLoadedRef.current) {
+      setPlayer(cachedSnapshot.player);
+      setHoldings(cachedSnapshot.holdings);
+      setWatchlist(cachedSnapshot.watchlist);
+      setLoading(false);
+      hasLoadedRef.current = true;
+    }
 
     async function load(showBlockingState: boolean) {
       const runId = ++requestId;
@@ -136,8 +177,8 @@ export default function PlayerPortfolio() {
         // Use allSettled so a failed watchlist/holdings fetch doesn't kill the whole page
         const [pRes, hRes, wRes] = await Promise.allSettled([
           getPlayerById(playerId!),
-          getHoldings(playerId!),
-          getWatchlist(playerId!),
+          getHoldings(activePlayerId),
+          getWatchlist(activePlayerId),
         ]);
         if (!isActive || runId !== requestId) return;
 
@@ -160,6 +201,11 @@ export default function PlayerPortfolio() {
           console.warn('[PlayerPortfolio] watchlist load failed:', wRes.reason);
           setWatchlist([]);
         }
+        writeCachedPortfolio(activePlayerId, {
+          player: p,
+          holdings: hRes.status === 'fulfilled' ? hRes.value : [],
+          watchlist: wRes.status === 'fulfilled' ? wRes.value : [],
+        });
         hasLoadedRef.current = true;
       } catch {
         if (!isActive || runId !== requestId) return;
@@ -175,12 +221,12 @@ export default function PlayerPortfolio() {
     const sub = supabase
       .channel(`player-portfolio-${playerId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'holdings',
-        filter: `player_id=eq.${playerId}` }, () => {
+        filter: `player_id=eq.${activePlayerId}` }, () => {
           if (refreshTimer) clearTimeout(refreshTimer);
           refreshTimer = setTimeout(() => { void load(false); }, 250);
         })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlists',
-        filter: `player_id=eq.${playerId}` }, () => {
+        filter: `player_id=eq.${activePlayerId}` }, () => {
           if (refreshTimer) clearTimeout(refreshTimer);
           refreshTimer = setTimeout(() => { void load(false); }, 250);
         })

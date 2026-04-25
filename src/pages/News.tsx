@@ -25,6 +25,39 @@ interface FlatTrade extends InsiderTransaction {
   tradeType: 'BUY' | 'SELL' | 'GRANT' | 'TAX_SELL';
 }
 
+type CachedFilingsPayload = {
+  filings: MarketFiling[];
+  fetchedAt: number;
+};
+
+const marketFilingsCacheKey = (days: number) => `tars:market-filings:${days}`;
+
+function readCachedFilings(days: number): CachedFilingsPayload | null {
+  try {
+    const raw = sessionStorage.getItem(marketFilingsCacheKey(days));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.filings)) return null;
+    return {
+      filings: parsed.filings,
+      fetchedAt: typeof parsed.fetchedAt === 'number' ? parsed.fetchedAt : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedFilings(days: number, filings: MarketFiling[]) {
+  try {
+    sessionStorage.setItem(
+      marketFilingsCacheKey(days),
+      JSON.stringify({ filings, fetchedAt: Date.now() })
+    );
+  } catch {
+    // Ignore cache write failures and rely on the live query.
+  }
+}
+
 function formStyle(formType: string): { bg: string; color: string; border: string } {
   if (formType === '13D') return { bg: 'rgba(247,147,26,0.15)', color: '#F7931A', border: 'rgba(247,147,26,0.5)' };
   if (formType === '13D/A') return { bg: 'rgba(247,147,26,0.08)', color: '#F7931A', border: 'rgba(247,147,26,0.3)' };
@@ -125,10 +158,17 @@ export default function NewsPage() {
     () => [...new Set(watchlist.map((item) => item.symbol))],
     [watchlist]
   );
+  const cachedFilings = useMemo(() => readCachedFilings(days), [days]);
 
   const { data: filings, isLoading: filingsLoading, error: filingsError } = useQuery({
     queryKey: ['market-filings', days],
-    queryFn: () => edgar.getRecentFilings(days),
+    queryFn: async () => {
+      const next = await edgar.getRecentFilings(days);
+      writeCachedFilings(days, next);
+      return next;
+    },
+    initialData: cachedFilings?.filings,
+    initialDataUpdatedAt: cachedFilings?.fetchedAt,
     staleTime: 60 * 60 * 1000,
     retry: 1,
   });
