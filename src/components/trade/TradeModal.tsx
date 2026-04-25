@@ -4,7 +4,7 @@ import { executeBuy, executeSell } from '../../api/supabase';
 import { useLeagueStore } from '../../store/leagueStore';
 import { formatPrice } from '../../utils/formatters';
 
-const TRADE_TIMEOUT_MS = 12000;
+const TRADE_TIMEOUT_MS = 30000;
 
 async function withTradeTimeout<T>(promise: Promise<T>, timeoutMs = TRADE_TIMEOUT_MS): Promise<T> {
   let timer: number | null = null;
