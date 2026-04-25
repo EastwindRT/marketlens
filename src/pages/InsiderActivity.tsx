@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { ExternalLink } from 'lucide-react';
-import type { InsiderFeedItem } from '../api/types';
+import type { InsiderFeedItem, InsiderOverview } from '../api/types';
 import { useWatchlistStore } from '../store/watchlistStore';
 import { formatLargeNumber, formatPrice } from '../utils/formatters';
 
@@ -16,6 +16,28 @@ type SymbolMetadata = {
   industry: string | null;
   companyName: string;
 };
+
+type InsiderResponse = {
+  trades: InsiderFeedItem[];
+  overview?: InsiderOverview;
+};
+
+function formatSignalLabel(signal?: string | null): string {
+  switch (signal) {
+    case 'net_buy':
+      return 'Net Buy';
+    case 'buy_skew':
+      return 'Buy Skew';
+    case 'net_sell':
+      return 'Net Sell';
+    case 'sell_skew':
+      return 'Sell Skew';
+    case 'tax_heavy':
+      return 'Tax Heavy';
+    default:
+      return 'Mixed';
+  }
+}
 
 export default function InsiderActivityPage() {
   const navigate = useNavigate();
@@ -36,7 +58,7 @@ export default function InsiderActivityPage() {
     error: usError,
   } = useQuery({
     queryKey: ['insider-activity-feed', days],
-    queryFn: async (): Promise<{ trades: InsiderFeedItem[] }> => {
+    queryFn: async (): Promise<InsiderResponse> => {
       const response = await fetch(`/api/insider-activity?days=${days}&limit=250`);
       if (!response.ok) throw new Error(`Feed error ${response.status}`);
       return response.json();
@@ -54,7 +76,7 @@ export default function InsiderActivityPage() {
     error: caError,
   } = useQuery({
     queryKey: ['ca-insider-activity', days, caMode],
-    queryFn: async (): Promise<{ trades: InsiderFeedItem[] }> => {
+    queryFn: async (): Promise<InsiderResponse> => {
       const response = await fetch(`/api/ca-insider-activity?days=${days}&mode=${caMode}&limit=250`);
       if (!response.ok) throw new Error(`CA feed error ${response.status}`);
       return response.json();
@@ -66,6 +88,7 @@ export default function InsiderActivityPage() {
   });
 
   const rawTrades = marketTab === 'us' ? (usData?.trades ?? []) : (caData?.trades ?? []);
+  const overview = marketTab === 'us' ? usData?.overview : caData?.overview;
   const isLoading = marketTab === 'us' ? usLoading : caLoading;
   const isFetching = marketTab === 'us' ? usFetching : caFetching;
   const error = marketTab === 'us' ? usError : caError;
@@ -210,6 +233,50 @@ export default function InsiderActivityPage() {
             ))}
           </select>
         </div>
+
+        {overview && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, marginBottom: 16 }}>
+            <OverviewCard label="Market Read" value={formatSignalLabel(overview.market.signal)} tone={overview.market.signal} />
+            <OverviewCard label="Net Flow" value={formatLargeNumber(overview.market.netValue)} tone={overview.market.netValue >= 0 ? 'net_buy' : 'net_sell'} />
+            <OverviewCard label="Buy Value" value={formatLargeNumber(overview.market.buyValue)} tone="net_buy" />
+            <OverviewCard label="Sell Value" value={formatLargeNumber(overview.market.sellValue)} tone="net_sell" />
+            <OverviewCard label="Tax / Other" value={formatLargeNumber(overview.market.taxValue + overview.market.otherValue)} tone="tax_heavy" />
+          </div>
+        )}
+
+        {overview && overview.bySymbol.length > 0 && (
+          <div style={{ marginBottom: 18 }}>
+            <p style={{ margin: '0 0 8px', fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>
+              Quick Read By Symbol
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {overview.bySymbol.slice(0, 8).map((item) => (
+                <button
+                  key={item.symbol}
+                  onClick={() => navigate(`/stock/${item.symbol}`)}
+                  style={{
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-elevated)',
+                    borderRadius: 12,
+                    padding: '9px 12px',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}>
+                    {item.symbol}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                    {formatSignalLabel(item.signal)}
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+                    {item.tradeCount} trades · {formatLargeNumber(item.netValue)}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {marketTab !== 'us' && isLoading && (
           <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: -12, marginBottom: 16 }}>
@@ -406,6 +473,25 @@ function SegmentedControl<T extends string>({
           {option.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+function OverviewCard({ label, value, tone }: { label: string; value: string; tone?: string | null }) {
+  const color = tone === 'net_buy' || tone === 'buy_skew'
+    ? 'var(--color-up)'
+    : tone === 'net_sell' || tone === 'sell_skew'
+      ? 'var(--color-down)'
+      : 'var(--text-primary)';
+
+  return (
+    <div style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)', padding: 12 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 16, fontWeight: 700, color }}>
+        {value}
+      </div>
     </div>
   );
 }

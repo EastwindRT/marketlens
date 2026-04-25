@@ -51,6 +51,33 @@
 - [x] Congress returns are estimated, not exact realized portfolio returns.
 - [x] They are derived from stock performance since each disclosed trade date and weighted by disclosed trade-size ranges, because STOCK Act data does not include exact position sizes or a continuously reconciled holdings ledger.
 
+## Plan: US insider speed + summary layer (2026-04-25)
+
+### Goal
+1. Remove the main remaining insider performance weak spot by giving US insiders the same DB-backed fast path as Congress and Canada.
+2. Make insider data easier to scan for both humans and future agents by adding a compact net buy / sell / tax-heavy summary layer.
+
+### Root causes / context found
+- US insider activity was still only memory-cached, not persisted to Supabase.
+- On cold rebuilds, the server still had to scan recent SEC daily indexes and then fetch multiple Form 4 XML files from EDGAR.
+- The UI showed rows well, but it did not summarize whether the overall picture was net buy, net sell, tax-heavy, or mixed.
+
+### Shipped
+- [x] `server.cjs` - added optional Supabase persistence for US insider trades via `us_insider_trades`.
+- [x] `server.cjs` - `/api/insider-activity` now prefers DB-backed reads when available and still falls back safely to the current SEC rebuild path.
+- [x] `server.cjs` - widened US insider parsing to retain normalized event categories like `tax_withholding`, `grant`, `gift`, and `conversion_or_exercise` instead of only open-market buys/sells.
+- [x] `server.cjs` - `/api/insider-activity` and `/api/ca-insider-activity` now return an `overview` object with:
+  - market-level signal
+  - buy / sell / tax / other value buckets
+  - per-symbol quick-read summaries
+- [x] `src/api/types.ts` - added `transactionCode`, `eventCategory`, and `InsiderOverview` typing.
+- [x] `src/pages/InsiderActivity.tsx` - added a quick-read overview strip plus top-symbol summary chips so users can see `Net Buy`, `Net Sell`, `Tax Heavy`, or `Mixed` without reading every row.
+- [x] `supabase_migration_market_data_cache.sql` - extended to include `us_insider_trades`.
+- [x] `npm run build` clean after the insider speed + summary pass.
+
+### Required rollout step
+- [ ] Re-run `supabase_migration_market_data_cache.sql` in the live Supabase project so the new `us_insider_trades` table exists in production.
+
 ## Plan: Congress rankings + sector filters + RSI signal pass (2026-04-25)
 
 ### Requested improvements

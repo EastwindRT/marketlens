@@ -129,6 +129,8 @@ export interface InsiderFeedItem {
   insiderName: string;
   title?: string;
   type: 'BUY' | 'SELL' | 'OTHER';
+  transactionCode?: string | null;
+  eventCategory?: string | null;
   transactionDate: string;
   filingDate?: string;
   shares: number;
@@ -138,4 +140,34 @@ export interface InsiderFeedItem {
   exchange: string;
   source: string;
   filingUrl?: string;
+}
+
+export interface InsiderOverviewBucket {
+  symbol: string;
+  companyName: string;
+  tradeCount: number;
+  buyCount: number;
+  sellCount: number;
+  taxCount: number;
+  otherCount: number;
+  buyValue: number;
+  sellValue: number;
+  taxValue: number;
+  otherValue: number;
+  netValue: number;
+  signal: string;
+  latestFilingDate: string;
+}
+
+export interface InsiderOverview {
+  market: {
+    signal: string;
+    tradeCount: number;
+    buyValue: number;
+    sellValue: number;
+    taxValue: number;
+    otherValue: number;
+    netValue: number;
+  };
+  bySymbol: InsiderOverviewBucket[];
 }

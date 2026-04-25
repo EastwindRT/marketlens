@@ -22,6 +22,14 @@
 
 ---
 
+## Lesson: 2026-04-25 - A good insider feed needs both row data and a summary taxonomy
+
+**Observation:** Users do not always want to read dozens of insider rows to answer the basic question: is this net buying, net selling, tax-related noise, or mixed behavior?
+**Root cause:** Raw trade rows are useful for detail, but they do not surface the aggregate pattern quickly enough for scanning or agent workflows.
+**Rule:** Insider endpoints should return both the normalized trade list and a compact overview layer. At minimum, expose market-level and per-symbol buckets for buy value, sell value, tax-withholding value, other activity, net value, and a simple signal label like `net_buy`, `net_sell`, `tax_heavy`, or `mixed`.
+
+---
+
 ## Lesson: 2026-04-25 - Congress disclosures support strong activity rankings, not perfect live portfolios
 
 **Observation:** Users wanted “the full stock portfolio for all members and rank them,” but the underlying Quiver / STOCK Act feed is a disclosure stream of trades, not a continuously reconciled holdings ledger.

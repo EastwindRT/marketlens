@@ -51,9 +51,36 @@ create index if not exists ca_insider_filings_symbol_idx on public.ca_insider_fi
 create index if not exists ca_insider_filings_filing_date_idx on public.ca_insider_filings (filing_date desc);
 create index if not exists ca_insider_filings_open_market_idx on public.ca_insider_filings (open_market, filing_date desc);
 
+create table if not exists public.us_insider_trades (
+  id text primary key,
+  symbol text not null,
+  company_name text,
+  insider_name text,
+  title text,
+  type text not null,
+  transaction_code text,
+  event_category text,
+  transaction_date date,
+  filing_date date,
+  shares numeric,
+  price_per_share numeric,
+  total_value numeric,
+  market text not null default 'US',
+  exchange text not null default 'SEC',
+  source text not null default 'SEC Form 4',
+  filing_url text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists us_insider_trades_symbol_idx on public.us_insider_trades (symbol);
+create index if not exists us_insider_trades_filing_date_idx on public.us_insider_trades (filing_date desc);
+create index if not exists us_insider_trades_event_category_idx on public.us_insider_trades (event_category, filing_date desc);
+
 alter table public.market_data_sync_state enable row level security;
 alter table public.congress_trades enable row level security;
 alter table public.ca_insider_filings enable row level security;
+alter table public.us_insider_trades enable row level security;
 
 drop policy if exists "No direct market data sync state access" on public.market_data_sync_state;
 create policy "No direct market data sync state access"
@@ -72,6 +99,13 @@ create policy "No direct congress trades access"
 drop policy if exists "No direct CA insider filings access" on public.ca_insider_filings;
 create policy "No direct CA insider filings access"
   on public.ca_insider_filings
+  for all
+  using (false)
+  with check (false);
+
+drop policy if exists "No direct US insider trades access" on public.us_insider_trades;
+create policy "No direct US insider trades access"
+  on public.us_insider_trades
   for all
   using (false)
   with check (false);

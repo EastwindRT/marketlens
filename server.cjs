@@ -151,6 +151,9 @@ function toFiniteNumber(value) {
 
 const MARKET_DATA_DATASETS = {
   congress: 'congress_trades',
+  usInsiders(days) {
+    return `us_insider_${days}`;
+  },
   caInsiders(days, mode) {
     return `ca_insider_${days}_${mode}`;
   },
@@ -335,6 +338,77 @@ async function writeCaInsiderTradesToDb(trades) {
     .upsert(rows, { onConflict: 'id' });
   if (error) {
     throw new Error(`ca insider db write failed: ${error.message}`);
+  }
+}
+
+async function readUsInsiderTradesFromDb(days) {
+  if (!hasMarketDataDb()) return [];
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  const { data, error } = await serverSupabase
+    .from('us_insider_trades')
+    .select('id,symbol,company_name,insider_name,title,type,transaction_code,event_category,transaction_date,filing_date,shares,price_per_share,total_value,market,exchange,source,filing_url')
+    .gte('filing_date', cutoffStr)
+    .order('filing_date', { ascending: false })
+    .order('transaction_date', { ascending: false })
+    .order('total_value', { ascending: false });
+  if (error) {
+    throw new Error(`us insider db read failed: ${error.message}`);
+  }
+
+  return (data || []).map((trade) => ({
+    id: trade.id,
+    symbol: trade.symbol,
+    companyName: trade.company_name || '',
+    insiderName: trade.insider_name || '',
+    title: trade.title || '',
+    type: trade.type || 'OTHER',
+    transactionCode: trade.transaction_code || null,
+    eventCategory: trade.event_category || 'other',
+    transactionDate: trade.transaction_date || '',
+    filingDate: trade.filing_date || '',
+    shares: toFiniteNumber(trade.shares) || 0,
+    pricePerShare: toFiniteNumber(trade.price_per_share),
+    totalValue: toFiniteNumber(trade.total_value),
+    market: trade.market || 'US',
+    exchange: trade.exchange || 'SEC',
+    source: trade.source || 'SEC Form 4',
+    filingUrl: trade.filing_url || '',
+  }));
+}
+
+async function writeUsInsiderTradesToDb(trades) {
+  if (!hasMarketDataDb() || !Array.isArray(trades) || trades.length === 0) return;
+
+  const rows = trades.map((trade) => ({
+    id: trade.id,
+    symbol: trade.symbol,
+    company_name: trade.companyName || null,
+    insider_name: trade.insiderName || null,
+    title: trade.title || null,
+    type: trade.type || 'OTHER',
+    transaction_code: trade.transactionCode || null,
+    event_category: trade.eventCategory || 'other',
+    transaction_date: trade.transactionDate || null,
+    filing_date: trade.filingDate || null,
+    shares: trade.shares,
+    price_per_share: trade.pricePerShare,
+    total_value: trade.totalValue,
+    market: trade.market || 'US',
+    exchange: trade.exchange || 'SEC',
+    source: trade.source || 'SEC Form 4',
+    filing_url: trade.filingUrl || null,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const { error } = await serverSupabase
+    .from('us_insider_trades')
+    .upsert(rows, { onConflict: 'id' });
+  if (error) {
+    throw new Error(`us insider db write failed: ${error.message}`);
   }
 }
 
@@ -1981,7 +2055,10 @@ app.get('/api/ca-insider-activity', async (req, res) => {
             });
             res.setHeader('X-Data-Stale', '1');
           }
-          return res.json({ trades: dbTrades });
+          return res.json({
+            trades: dbTrades,
+            overview: buildInsiderOverview(dbTrades),
+          });
         }
       } catch (err) {
         console.error(`[ca-insider-db-fallback:${cacheKey}]`, err.message);
@@ -2000,7 +2077,10 @@ app.get('/api/ca-insider-activity', async (req, res) => {
     return res.status(502).json({ error: err.message, trades: [] });
   }
 
-  res.json({ trades: caInsiderCaches[cacheKey].trades });
+  res.json({
+    trades: caInsiderCaches[cacheKey].trades,
+    overview: buildInsiderOverview(caInsiderCaches[cacheKey].trades),
+  });
 });
 
 const insiderActivityCaches = { 7: null, 14: null, 30: null };
@@ -2040,6 +2120,119 @@ function inferOwnerTitle(xml) {
   const otherText = xmlMatch(xml, /<otherText>\s*([^<]*)\s*<\/otherText>/i);
   if (otherText) bits.push(otherText);
   return bits.join(' · ');
+}
+
+function classifyUsInsiderEvent(code) {
+  switch ((code || '').toUpperCase()) {
+    case 'P':
+      return { type: 'BUY', category: 'open_market_buy' };
+    case 'S':
+    case 'S-':
+      return { type: 'SELL', category: 'open_market_sell' };
+    case 'F':
+      return { type: 'OTHER', category: 'tax_withholding' };
+    case 'A':
+      return { type: 'OTHER', category: 'grant' };
+    case 'G':
+      return { type: 'OTHER', category: 'gift' };
+    case 'M':
+    case 'X':
+    case 'C':
+      return { type: 'OTHER', category: 'conversion_or_exercise' };
+    default:
+      return { type: 'OTHER', category: 'other' };
+  }
+}
+
+function buildInsiderOverview(trades) {
+  const list = Array.isArray(trades) ? trades : [];
+  const summaryMap = new Map();
+  let buyValue = 0;
+  let sellValue = 0;
+  let taxValue = 0;
+  let otherValue = 0;
+
+  for (const trade of list) {
+    const eventCategory = trade.eventCategory || 'other';
+    const value = Number(trade.totalValue || 0);
+    if (trade.type === 'BUY') buyValue += value;
+    else if (trade.type === 'SELL') sellValue += value;
+    else if (eventCategory === 'tax_withholding') taxValue += value;
+    else otherValue += value;
+
+    if (!summaryMap.has(trade.symbol)) {
+      summaryMap.set(trade.symbol, {
+        symbol: trade.symbol,
+        companyName: trade.companyName || '',
+        tradeCount: 0,
+        buyCount: 0,
+        sellCount: 0,
+        taxCount: 0,
+        otherCount: 0,
+        buyValue: 0,
+        sellValue: 0,
+        taxValue: 0,
+        otherValue: 0,
+        netValue: 0,
+        signal: 'mixed',
+        latestFilingDate: '',
+      });
+    }
+
+    const bucket = summaryMap.get(trade.symbol);
+    bucket.tradeCount += 1;
+    bucket.latestFilingDate = bucket.latestFilingDate > (trade.filingDate || '') ? bucket.latestFilingDate : (trade.filingDate || '');
+    if (trade.type === 'BUY') {
+      bucket.buyCount += 1;
+      bucket.buyValue += value;
+      bucket.netValue += value;
+    } else if (trade.type === 'SELL') {
+      bucket.sellCount += 1;
+      bucket.sellValue += value;
+      bucket.netValue -= value;
+    } else if (eventCategory === 'tax_withholding') {
+      bucket.taxCount += 1;
+      bucket.taxValue += value;
+    } else {
+      bucket.otherCount += 1;
+      bucket.otherValue += value;
+    }
+  }
+
+  const bySymbol = [...summaryMap.values()]
+    .map((bucket) => {
+      let signal = 'mixed';
+      if (bucket.buyValue > 0 && bucket.sellValue === 0 && bucket.taxValue === 0) signal = 'net_buy';
+      else if (bucket.sellValue > 0 && bucket.buyValue === 0 && bucket.taxValue === 0) signal = 'net_sell';
+      else if (bucket.taxValue > 0 && bucket.buyValue === 0 && bucket.sellValue === 0) signal = 'tax_heavy';
+      else if (bucket.buyValue > bucket.sellValue * 1.5 && bucket.buyValue > 0) signal = 'buy_skew';
+      else if (bucket.sellValue > bucket.buyValue * 1.5 && bucket.sellValue > 0) signal = 'sell_skew';
+      return { ...bucket, signal };
+    })
+    .sort((a, b) =>
+      Math.abs(b.netValue) - Math.abs(a.netValue)
+      || b.tradeCount - a.tradeCount
+      || b.latestFilingDate.localeCompare(a.latestFilingDate)
+    );
+
+  const netValue = buyValue - sellValue;
+  let marketSignal = 'mixed';
+  if (buyValue > sellValue * 1.5 && buyValue > 0) marketSignal = 'net_buy';
+  else if (sellValue > buyValue * 1.5 && sellValue > 0) marketSignal = 'net_sell';
+  else if (taxValue > buyValue + sellValue && taxValue > 0) marketSignal = 'tax_heavy';
+
+  return {
+    market: {
+      signal: marketSignal,
+      tradeCount: list.length,
+      buyValue,
+      sellValue,
+      taxValue,
+      otherValue,
+      netValue,
+    },
+    bySymbol,
+  };
 }
 
 async function fetchRecentForm4Entries(daysBack = 7) {
@@ -2125,13 +2318,15 @@ async function fetchSecInsiderActivityItem(entry) {
   return transactions.map((match, index) => {
     const block = match[1];
     const code = xmlMatch(block, /<transactionCode>\s*([^<]+)\s*<\/transactionCode>/i).toUpperCase();
-    if (code !== 'P' && code !== 'S' && code !== 'S-') return null;
+    const { type, category } = classifyUsInsiderEvent(code);
+    if (!code) return null;
 
     const transactionDate = xmlMatch(block, /<transactionDate>[\s\S]*?<value>\s*([^<]+)\s*<\/value>/i);
     const shares = parseNumber(xmlMatch(block, /<transactionShares>[\s\S]*?<value>\s*([^<]+)\s*<\/value>/i));
     const pricePerShare = parseNumber(xmlMatch(block, /<transactionPricePerShare>[\s\S]*?<value>\s*([^<]+)\s*<\/value>/i));
     const totalValue = shares * pricePerShare;
-    if (!transactionDate || shares <= 0 || pricePerShare <= 0 || totalValue <= 0) return null;
+    if (!transactionDate || shares <= 0) return null;
+    if ((type === 'BUY' || type === 'SELL' || category === 'tax_withholding') && (!pricePerShare || pricePerShare <= 0 || totalValue <= 0)) return null;
 
     return {
       id: `${entry.accession}-${index}`,
@@ -2139,12 +2334,14 @@ async function fetchSecInsiderActivityItem(entry) {
       companyName,
       insiderName,
       title,
-      type: code === 'P' ? 'BUY' : 'SELL',
+      type,
+      transactionCode: code,
+      eventCategory: category,
       transactionDate: transactionDate.slice(0, 10),
       filingDate: entry.filedDate,
       shares,
-      pricePerShare,
-      totalValue,
+      pricePerShare: pricePerShare > 0 ? pricePerShare : null,
+      totalValue: totalValue > 0 ? totalValue : null,
       market: 'US',
       exchange: 'SEC',
       source: 'SEC Form 4',
@@ -2206,6 +2403,16 @@ async function buildInsiderActivityCache(days) {
   insiderActivityBuilds[days] = (async () => {
     try {
       const trades = await fetchLatestInsiderActivity(days);
+      if (hasMarketDataDb()) {
+        try {
+          if (trades.length) {
+            await writeUsInsiderTradesToDb(trades);
+          }
+          await setMarketDataSyncState(MARKET_DATA_DATASETS.usInsiders(days), trades.length);
+        } catch (err) {
+          console.error(`[us-insider-db-write:${days}]`, err.message);
+        }
+      }
       insiderActivityCaches[days] = trades;
       insiderActivityLastFetch[days] = Date.now();
       return trades;
@@ -2220,6 +2427,32 @@ async function buildInsiderActivityCache(days) {
 app.get('/api/insider-activity', async (req, res) => {
   try {
     const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+    if (hasMarketDataDb()) {
+      try {
+        const [dbTrades, syncState] = await Promise.all([
+          readUsInsiderTradesFromDb(days),
+          getMarketDataSyncState(MARKET_DATA_DATASETS.usInsiders(days)),
+        ]);
+        const dbFresh = isSyncStateFresh(syncState, INSIDER_ACTIVITY_TTL);
+        if (dbTrades.length) {
+          if (!dbFresh) {
+            buildInsiderActivityCache(days).catch((err) => {
+              console.error('[insider-activity-db-refresh]', err.message);
+            });
+            res.setHeader('X-Data-Stale', '1');
+          }
+          const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
+          const limitedTrades = dbTrades.slice(0, limit);
+          return res.json({
+            trades: limitedTrades,
+            overview: buildInsiderOverview(dbTrades),
+          });
+        }
+      } catch (err) {
+        console.error(`[us-insider-db-fallback:${days}]`, err.message);
+      }
+    }
+
     const hasCache = Array.isArray(insiderActivityCaches[days]) && insiderActivityCaches[days].length > 0;
     const isFresh = hasCache && (Date.now() - insiderActivityLastFetch[days] <= INSIDER_ACTIVITY_TTL);
 
@@ -2233,7 +2466,11 @@ app.get('/api/insider-activity', async (req, res) => {
     }
 
     const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
-    res.json({ trades: insiderActivityCaches[days].slice(0, limit) });
+    const trades = insiderActivityCaches[days].slice(0, limit);
+    res.json({
+      trades,
+      overview: buildInsiderOverview(insiderActivityCaches[days]),
+    });
   } catch (err) {
     console.error('[insider-activity]', err.message);
     res.status(502).json({ error: err.message, trades: [] });
