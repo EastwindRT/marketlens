@@ -1,3 +1,19 @@
+## Lesson: 2026-04-24 - Presence tracking should be heartbeat-based and throttled
+
+**Observation:** Admin wanted a useful `online now / last active` view, but blindly writing on every click, scroll, or keypress would create noisy and unnecessary Supabase churn.
+**Root cause:** Presence is a UI concept, not an audit-log concept. Treating every interaction as a distinct database event is wasteful when the real question is simply whether the user has been active recently.
+**Rule:** Track presence with a lightweight heartbeat (`last_active_at`) and throttle it aggressively. A one-minute minimum interval is enough for "online now" style admin views and avoids turning normal navigation into write amplification.
+
+---
+
+## Lesson: 2026-04-24 - Admin analytics should start with narrow, explicit capture points
+
+**Observation:** It is tempting to add broad session analytics once an admin asks "what are people doing?", but the most actionable first layer was much narrower: stock search terms and whether a selected symbol was opened.
+**Root cause:** Broad event capture creates privacy creep and maintenance burden fast, while still often failing to answer the concrete product questions the admin actually has.
+**Rule:** Start admin analytics with intentional, product-specific events. For this app, in-app stock search terms plus selected symbols are useful and understandable; full clickstream logging is not. Expand only when there is a clear decision the extra data would improve.
+
+---
+
 ## Lesson: 2026-04-23 - Chart event markers must use the same time domain as the chart bars
 
 **Observation:** Stock pages started crashing with `Value is null` after adding 13D / 13G filing markers to the chart.

@@ -1,3 +1,35 @@
+## Plan: Deep Analyze activation + admin activity tracking (2026-04-24)
+
+### Reported goals
+1. Finish setting up Deep Analyze so the Anthropic-backed stock briefing flow is actually usable live.
+2. Add admin visibility into who is active and what people are searching inside the app.
+
+### Root causes / context found
+- Deep Analyze already existed in code, but the stock page only exposed a single generic button and the Render env did not explicitly advertise `ANTHROPIC_API_KEY`.
+- The app had no presence or search telemetry layer at all, so `/admin` could not show online state, last active times, or recent stock searches.
+
+### Shipped
+- [x] `src/pages/StockDetail.tsx` - added Deep Analyze presets for `Bull Case`, `Bear Case`, `2-Week Setup`, and `What Changes The Thesis`, while keeping the full deep-dive button.
+- [x] `src/components/ai/DeepAnalyzeDrawer.tsx` - added stock-analysis `focus` support and clearer Anthropic-key setup errors.
+- [x] `server.cjs` - `/api/deep-analyze` now accepts stock `focus` and adjusts the prompt framing accordingly.
+- [x] `render.yaml` - added `ANTHROPIC_API_KEY` so the deployment config reflects the live Deep Analyze feature.
+- [x] Live verification: `POST https://marketlens-jn9s.onrender.com/api/deep-analyze` returned `200` on 2026-04-24 with a real Claude response after the key was added.
+- [x] `src/App.tsx` - added throttled player activity heartbeats tied to the signed-in player.
+- [x] `src/pages/Search.tsx` - logs search terms and selected result symbols for signed-in users.
+- [x] `src/api/supabase.ts` - added `touchPlayerActivity`, `recordSearchLog`, and `getRecentSearchLogs`, plus support for `players.last_active_at`.
+- [x] `src/pages/Admin.tsx` - rebuilt the admin surface to include online count, last-active state per player, and a recent-search log section.
+- [x] `supabase_migration_admin_activity.sql` - added migration for `players.last_active_at` and `search_logs`.
+- [x] `npm run build` clean after both the Deep Analyze and admin activity work.
+- [x] Shipped in commits `94577c8` and `594c4d8`.
+
+### Expected user-facing outcome
+- Deep Analyze is now genuinely live and more useful on stock pages.
+- Admin can see who has been active recently and what search activity is happening in-app.
+
+### Open / next improvements
+- [ ] Run `supabase_migration_admin_activity.sql` in the live Supabase project so the new admin activity data persists in production.
+- [ ] Cost-tune Deep Analyze by moving preset analyses to a cheaper Claude tier and reserving Sonnet for the full deep-dive path.
+
 ## Plan: Stock signal evidence upgrade + chart reliability (2026-04-23)
 
 ### Reported issue
