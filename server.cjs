@@ -224,6 +224,157 @@ app.get('/api/latest-congress', async (req, res) => {
   }
 });
 
+function groupCongressMemberActivity(trades) {
+  const members = new Map();
+
+  for (const trade of trades) {
+    const memberId = `${slugify(trade.member)}:${trade.chamber}:${(trade.state || '').toUpperCase()}`;
+    if (!members.has(memberId)) {
+      members.set(memberId, {
+        memberId,
+        member: trade.member,
+        party: trade.party || '',
+        state: trade.state || '',
+        chamber: trade.chamber,
+        totalTrades: 0,
+        purchaseCount: 0,
+        saleCount: 0,
+        exchangeCount: 0,
+        buyAmountMin: 0,
+        sellAmountMin: 0,
+        totalAmountMin: 0,
+        latestTradeDate: '',
+        topTickers: new Map(),
+        recentTrades: [],
+      });
+    }
+
+    const bucket = members.get(memberId);
+    bucket.totalTrades += 1;
+    bucket.totalAmountMin += trade.amountMin || 0;
+    bucket.latestTradeDate = bucket.latestTradeDate > trade.transactionDate ? bucket.latestTradeDate : trade.transactionDate;
+    if (trade.type === 'purchase') {
+      bucket.purchaseCount += 1;
+      bucket.buyAmountMin += trade.amountMin || 0;
+    } else if (trade.type === 'sale') {
+      bucket.saleCount += 1;
+      bucket.sellAmountMin += trade.amountMin || 0;
+    } else if (trade.type === 'exchange') {
+      bucket.exchangeCount += 1;
+    }
+
+    const tickerKey = trade.ticker;
+    if (!bucket.topTickers.has(tickerKey)) {
+      bucket.topTickers.set(tickerKey, {
+        ticker: trade.ticker,
+        tradeCount: 0,
+        purchaseCount: 0,
+        saleCount: 0,
+        estimatedGrossAmountMin: 0,
+        estimatedNetAmountMin: 0,
+        latestTradeDate: '',
+      });
+    }
+    const tickerBucket = bucket.topTickers.get(tickerKey);
+    tickerBucket.tradeCount += 1;
+    tickerBucket.estimatedGrossAmountMin += trade.amountMin || 0;
+    tickerBucket.latestTradeDate = tickerBucket.latestTradeDate > trade.transactionDate ? tickerBucket.latestTradeDate : trade.transactionDate;
+    if (trade.type === 'purchase') {
+      tickerBucket.purchaseCount += 1;
+      tickerBucket.estimatedNetAmountMin += trade.amountMin || 0;
+    } else if (trade.type === 'sale') {
+      tickerBucket.saleCount += 1;
+      tickerBucket.estimatedNetAmountMin -= trade.amountMin || 0;
+    }
+
+    if (bucket.recentTrades.length < 8) {
+      bucket.recentTrades.push(trade);
+    }
+  }
+
+  return [...members.values()].map((member) => ({
+    memberId: member.memberId,
+    member: member.member,
+    party: member.party,
+    state: member.state,
+    chamber: member.chamber,
+    totalTrades: member.totalTrades,
+    purchaseCount: member.purchaseCount,
+    saleCount: member.saleCount,
+    exchangeCount: member.exchangeCount,
+    buyAmountMin: member.buyAmountMin,
+    sellAmountMin: member.sellAmountMin,
+    netAmountMin: member.buyAmountMin - member.sellAmountMin,
+    totalAmountMin: member.totalAmountMin,
+    latestTradeDate: member.latestTradeDate,
+    topTickers: [...member.topTickers.values()]
+      .sort((a, b) => b.estimatedGrossAmountMin - a.estimatedGrossAmountMin || b.tradeCount - a.tradeCount)
+      .slice(0, 10),
+    recentTrades: [...member.recentTrades]
+      .sort((a, b) => b.transactionDate.localeCompare(a.transactionDate) || (b.amountMin || 0) - (a.amountMin || 0))
+      .slice(0, 8),
+  }));
+}
+
+async function buildCongressMemberActivity(days) {
+  const cacheKey = String(days);
+  const cached = congressMemberCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CONGRESS_MEMBER_TTL) {
+    return cached.payload;
+  }
+
+  const allTrades = (await ensureCongressData())
+    .map(mapQuiverCongressTrade)
+    .filter(Boolean);
+
+  const cutoff = new Date();
+  cutoff.setUTCDate(cutoff.getUTCDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const filtered = allTrades.filter((trade) => trade.transactionDate && trade.transactionDate >= cutoffStr);
+  const members = groupCongressMemberActivity(filtered).sort((a, b) =>
+    b.totalAmountMin - a.totalAmountMin
+    || b.totalTrades - a.totalTrades
+    || b.latestTradeDate.localeCompare(a.latestTradeDate)
+  );
+
+  const payload = {
+    asOf: new Date().toISOString(),
+    days,
+    memberCount: members.length,
+    members,
+  };
+
+  congressMemberCache.set(cacheKey, { ts: Date.now(), payload });
+  return payload;
+}
+
+app.get('/api/congress-members', async (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days || '180', 10), 30), 365);
+  const cacheKey = String(days);
+
+  try {
+    const cached = congressMemberCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < CONGRESS_MEMBER_TTL) {
+      return res.json(cached.payload);
+    }
+
+    if (!congressMemberBuilds.has(cacheKey)) {
+      congressMemberBuilds.set(
+        cacheKey,
+        buildCongressMemberActivity(days).finally(() => {
+          congressMemberBuilds.delete(cacheKey);
+        })
+      );
+    }
+
+    const payload = await congressMemberBuilds.get(cacheKey);
+    res.json(payload);
+  } catch (err) {
+    console.error('[congress-members]', err.message);
+    res.status(502).json({ error: err.message, members: [] });
+  }
+});
+
 app.get('/api/congress-trades', async (req, res) => {
   try {
     const now = Date.now();
@@ -268,10 +419,107 @@ app.get('/api/congress-trades', async (req, res) => {
   }
 });
 
+app.get('/api/symbol-metadata', async (req, res) => {
+  const symbols = String(req.query.symbols || '')
+    .split(',')
+    .map((symbol) => normalizeSymbol(symbol))
+    .filter(Boolean);
+  const uniqueSymbols = [...new Set(symbols)];
+  if (uniqueSymbols.length === 0) {
+    return res.json({ items: [] });
+  }
+
+  try {
+    const items = await Promise.all(uniqueSymbols.map((symbol) => getSymbolMetadata(symbol)));
+    res.json({ items });
+  } catch (err) {
+    console.error('[symbol-metadata]', err.message);
+    res.status(502).json({ error: err.message, items: [] });
+  }
+});
+
+app.get('/api/company-metadata', async (req, res) => {
+  const subjects = String(req.query.subjects || '')
+    .split('||')
+    .map((subject) => subject.trim())
+    .filter(Boolean);
+  if (subjects.length === 0) {
+    return res.json({ items: [] });
+  }
+
+  try {
+    const directory = await loadSecCompanyTickerDirectory();
+    const normalizedSubjects = [...new Set(subjects)];
+    const resolved = await Promise.all(normalizedSubjects.map(async (subjectCompany) => {
+      const match = directory.byNormalizedName.get(normalizeCompanyName(subjectCompany));
+      if (!match?.ticker) {
+        return { subjectCompany, symbol: null, sector: null, industry: null };
+      }
+      const metadata = await getSymbolMetadata(match.ticker, subjectCompany);
+      return {
+        subjectCompany,
+        symbol: match.ticker,
+        sector: metadata.sector,
+        industry: metadata.industry,
+      };
+    }));
+    res.json({ items: resolved });
+  } catch (err) {
+    console.error('[company-metadata]', err.message);
+    res.status(502).json({ error: err.message, items: [] });
+  }
+});
+
+app.get('/api/market-filings', async (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days || '14', 10), 7), 30);
+  const cacheKey = String(days);
+
+  try {
+    const cached = marketFilingsCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < MARKET_FILINGS_TTL) {
+      return res.json(cached.payload);
+    }
+
+    if (!marketFilingsBuilds.has(cacheKey)) {
+      marketFilingsBuilds.set(
+        cacheKey,
+        fetchMarketFilings(days)
+          .then((filings) => {
+            const payload = { filings };
+            marketFilingsCache.set(cacheKey, { ts: Date.now(), payload });
+            return payload;
+          })
+          .finally(() => {
+            marketFilingsBuilds.delete(cacheKey);
+          })
+      );
+    }
+
+    const payload = await marketFilingsBuilds.get(cacheKey);
+    res.json(payload);
+  } catch (err) {
+    console.error('[market-filings]', err.message);
+    res.status(502).json({ error: err.message, filings: [] });
+  }
+});
+
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY || process.env.VITE_FINNHUB_API_KEY || '';
 const STOCK_INTELLIGENCE_TTL = 10 * 60 * 1000;
 const stockIntelligenceCache = new Map();
 const stockIntelligenceBuilds = new Map();
+const SYMBOL_METADATA_TTL = 24 * 60 * 60 * 1000;
+const symbolMetadataCache = new Map();
+const symbolMetadataBuilds = new Map();
+const CONGRESS_MEMBER_TTL = 30 * 60 * 1000;
+const congressMemberCache = new Map();
+const congressMemberBuilds = new Map();
+const MARKET_FILINGS_TTL = 60 * 60 * 1000;
+const marketFilingsCache = new Map();
+const marketFilingsBuilds = new Map();
+let secCompanyTickerDirectory = null;
+let secCompanyTickerDirectoryFetch = 0;
+let secCompanyTickerDirectoryBuild = null;
+const SEC_COMPANY_DIRECTORY_TTL = 24 * 60 * 60 * 1000;
 
 function normalizeSymbol(symbol) {
   return String(symbol || '').trim().toUpperCase();
@@ -283,6 +531,23 @@ function isCanadianTicker(symbol) {
 
 function baseTicker(symbol) {
   return normalizeSymbol(symbol).replace(/\.TO$/i, '');
+}
+
+function slugify(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function normalizeCompanyName(value) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/&/g, ' AND ')
+    .replace(/\b(INCORPORATED|INC|CORPORATION|CORP|COMPANY|CO|LIMITED|LTD|PLC|HOLDINGS|HOLDING)\b/g, ' ')
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function finiteNumber(value) {
@@ -575,6 +840,192 @@ async function fetchQuoteProfileAndContext(symbol) {
     basics: basics?.metric || null,
     earningsCalendar,
   };
+}
+
+async function buildSymbolMetadata(symbol, fallbackName = '') {
+  const normalized = normalizeSymbol(symbol);
+  const cached = symbolMetadataCache.get(normalized);
+  if (cached && Date.now() - cached.ts < SYMBOL_METADATA_TTL) {
+    return cached.payload;
+  }
+
+  const profile = FINNHUB_KEY
+    ? await fetchFinnhubJson('/stock/profile2', { symbol: normalized })
+    : null;
+
+  const payload = {
+    symbol: normalized,
+    baseSymbol: baseTicker(normalized),
+    market: isCanadianTicker(normalized) ? 'CA' : 'US',
+    companyName: profile?.name || fallbackName || baseTicker(normalized),
+    sector: profile?.finnhubIndustry || null,
+    industry: profile?.finnhubIndustry || null,
+    exchange: profile?.exchange || (isCanadianTicker(normalized) ? 'TSX' : null),
+  };
+
+  symbolMetadataCache.set(normalized, { ts: Date.now(), payload });
+  return payload;
+}
+
+async function getSymbolMetadata(symbol, fallbackName = '') {
+  const normalized = normalizeSymbol(symbol);
+  const cached = symbolMetadataCache.get(normalized);
+  if (cached && Date.now() - cached.ts < SYMBOL_METADATA_TTL) {
+    return cached.payload;
+  }
+
+  if (!symbolMetadataBuilds.has(normalized)) {
+    symbolMetadataBuilds.set(
+      normalized,
+      buildSymbolMetadata(normalized, fallbackName).finally(() => {
+        symbolMetadataBuilds.delete(normalized);
+      })
+    );
+  }
+
+  return symbolMetadataBuilds.get(normalized);
+}
+
+async function loadSecCompanyTickerDirectory() {
+  const isFresh = secCompanyTickerDirectory && Date.now() - secCompanyTickerDirectoryFetch < SEC_COMPANY_DIRECTORY_TTL;
+  if (isFresh) return secCompanyTickerDirectory;
+  if (secCompanyTickerDirectoryBuild) return secCompanyTickerDirectoryBuild;
+
+  secCompanyTickerDirectoryBuild = (async () => {
+    const raw = await httpsGet('https://www.sec.gov/files/company_tickers.json', { 'User-Agent': 'TARS admin@tars.app' });
+    const values = Object.values(JSON.parse(raw));
+    const byNormalizedName = new Map();
+    const byCik = new Map();
+    for (const item of values) {
+      const normalizedName = normalizeCompanyName(item.title);
+      const entry = {
+        ticker: String(item.ticker || '').toUpperCase(),
+        title: String(item.title || ''),
+        cik: String(item.cik_str || ''),
+      };
+      if (normalizedName && !byNormalizedName.has(normalizedName)) {
+        byNormalizedName.set(normalizedName, entry);
+      }
+      if (entry.cik) byCik.set(entry.cik, entry);
+    }
+    secCompanyTickerDirectory = { byNormalizedName, byCik };
+    secCompanyTickerDirectoryFetch = Date.now();
+    return secCompanyTickerDirectory;
+  })().finally(() => {
+    secCompanyTickerDirectoryBuild = null;
+  });
+
+  return secCompanyTickerDirectoryBuild;
+}
+
+function parseMarketFilingsFeed(xml) {
+  const filings = [];
+  const parsed = [];
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/gi;
+  let match;
+  while ((match = entryRe.exec(xml)) !== null) {
+    const block = match[1];
+    const title = extractXmlTag(block, 'title');
+    const summaryRaw = extractXmlTag(block, 'summary').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    const hrefMatch = /<link[^>]+href="([^"]+)"/i.exec(block);
+    const href = hrefMatch ? htmlDecode(hrefMatch[1]) : '';
+
+    const titleMatch = title.match(/^SCHEDULE\s+(13[DG](?:\/A)?)\s+-\s+(.+?)\s+\((\d+)\)\s+\((Filed by|Subject)\)$/i);
+    if (!titleMatch) continue;
+
+    const dateMatch = summaryRaw.match(/Filed:\s*(\d{4}-\d{2}-\d{2})/i);
+    const accMatch = summaryRaw.match(/AccNo:\s*([\d]+-[\d]+-[\d]+)/i);
+    parsed.push({
+      accessionNo: accMatch?.[1] ?? '',
+      formType: titleMatch[1].toUpperCase(),
+      companyName: titleMatch[2].trim(),
+      cik: titleMatch[3],
+      role: titleMatch[4].toLowerCase() === 'subject' ? 'subject' : 'filer',
+      filedDate: dateMatch?.[1] ?? '',
+      edgarUrl: href,
+    });
+  }
+
+  const byAccession = new Map();
+  for (const entry of parsed) {
+    if (!byAccession.has(entry.accessionNo)) byAccession.set(entry.accessionNo, {});
+    const bucket = byAccession.get(entry.accessionNo);
+    if (entry.role === 'subject') bucket.subject = entry;
+    else bucket.filer = entry;
+  }
+
+  for (const [, bucket] of byAccession) {
+    const base = bucket.subject ?? bucket.filer;
+    if (!base?.filedDate) continue;
+    filings.push({
+      accessionNo: base.accessionNo,
+      formType: base.formType,
+      filedDate: base.filedDate,
+      edgarUrl: base.edgarUrl,
+      filerName: bucket.filer?.companyName ?? '—',
+      subjectCompany: bucket.subject?.companyName,
+      subjectCik: bucket.subject?.cik ?? '',
+    });
+  }
+
+  return filings.sort((a, b) => b.filedDate.localeCompare(a.filedDate));
+}
+
+async function fetchMarketFilings(days = 14) {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const [d, g, da, ga] = await Promise.allSettled([
+    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13D')}&dateb=&owner=include&count=80&output=atom`),
+    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13G')}&dateb=&owner=include&count=80&output=atom`),
+    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13D/A')}&dateb=&owner=include&count=80&output=atom`),
+    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13G/A')}&dateb=&owner=include&count=80&output=atom`),
+  ]);
+
+  const merged = [
+    ...(d.status === 'fulfilled' ? parseMarketFilingsFeed(d.value) : []),
+    ...(g.status === 'fulfilled' ? parseMarketFilingsFeed(g.value) : []),
+    ...(da.status === 'fulfilled' ? parseMarketFilingsFeed(da.value) : []),
+    ...(ga.status === 'fulfilled' ? parseMarketFilingsFeed(ga.value) : []),
+  ];
+
+  if (merged.length === 0) throw new Error('No market filings returned from SEC EDGAR');
+
+  const directory = await loadSecCompanyTickerDirectory().catch(() => null);
+  const deduped = [];
+  const seen = new Set();
+  for (const filing of merged) {
+    const key = filing.accessionNo || `${filing.filerName}-${filing.filedDate}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!filing.filedDate || filing.filedDate < cutoff) continue;
+    deduped.push(filing);
+  }
+
+  const symbolMap = new Map();
+  for (const filing of deduped) {
+    const subjectName = normalizeCompanyName(filing.subjectCompany || '');
+    const subjectCik = String(filing.subjectCik || '');
+    const match = directory?.byCik?.get(subjectCik) || directory?.byNormalizedName?.get(subjectName) || null;
+    if (match?.ticker) {
+      symbolMap.set(match.ticker, filing.subjectCompany || match.title);
+      filing.symbol = match.ticker;
+    } else {
+      filing.symbol = null;
+    }
+  }
+
+  const metadataEntries = await Promise.all(
+    [...symbolMap.entries()].map(([symbol, fallbackName]) => getSymbolMetadata(symbol, fallbackName))
+  );
+  const metadataMap = new Map(metadataEntries.map((entry) => [entry.symbol, entry]));
+
+  return deduped.map((filing) => {
+    const meta = filing.symbol ? metadataMap.get(filing.symbol) : null;
+    return {
+      ...filing,
+      sector: meta?.sector || null,
+      industry: meta?.industry || null,
+    };
+  });
 }
 
 async function ensureCongressData() {

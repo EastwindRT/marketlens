@@ -35,3 +35,12 @@ export function useLatestCongressTrades(limit = 50) {
     retry: 1,
   });
 }
+
+export function useCongressMemberActivity(days = 180) {
+  return useQuery({
+    queryKey: ['congress-member-activity', days],
+    queryFn: () => congress.getMemberActivity(days),
+    staleTime: 30 * 60 * 1000,
+    retry: 1,
+  });
+}

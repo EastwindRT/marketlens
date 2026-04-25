@@ -1,3 +1,27 @@
+## Lesson: 2026-04-25 - Congress disclosures support strong activity rankings, not perfect live portfolios
+
+**Observation:** Users wanted “the full stock portfolio for all members and rank them,” but the underlying Quiver / STOCK Act feed is a disclosure stream of trades, not a continuously reconciled holdings ledger.
+**Root cause:** Trade disclosures tell us what members bought or sold and the rough value range, but they do not prove what is still held today or whether a position was later exited outside the current view.
+**Rule:** When building portfolio-like views on top of congress disclosures, label them as inferred activity portfolios or disclosed trading activity. Rank members by disclosed activity, show top traded names and net buy/sell behavior, but do not present the result as a guaranteed live brokerage portfolio.
+
+---
+
+## Lesson: 2026-04-25 - Sector filtering needs an enrichment layer, not ad hoc per-row lookups
+
+**Observation:** Insider and filing pages needed sector filters, but their base datasets did not consistently carry sector fields.
+**Root cause:** Sector lives in a different provider path than the event feed itself. If each row fetches its own profile on demand, list pages become slow and fragile.
+**Rule:** For list-level filtering on metadata that is not present in the event feed, add a shared cached enrichment layer first. Resolve symbol/company → sector once, cache it, then filter locally against the enriched payload. This keeps the page responsive and avoids per-row network fanout.
+
+---
+
+## Lesson: 2026-04-25 - RSI works best as a plain-language momentum label plus evidence
+
+**Observation:** Users asking “is this stock overbought or oversold?” rarely want a raw oscillator number alone.
+**Root cause:** RSI is useful, but the number `74.2` or `28.7` is less actionable without a simple interpretation.
+**Rule:** When exposing RSI on a stock page, show both the label and the evidence: `Overbought / Neutral / Oversold` plus the RSI value in the evidence table. Keep thresholds explicit (`>70`, `<30`) and avoid presenting RSI as a standalone trading verdict.
+
+---
+
 ## Lesson: 2026-04-25 - Agent value comes from normalized context, not just more pages
 
 **Observation:** The app already had real signal data — insiders, congress, 13D/13G, trend evidence, AI summaries — but an agent would still have to hop across multiple endpoints and UI surfaces to form one opinion about a stock.

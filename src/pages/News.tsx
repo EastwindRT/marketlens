@@ -151,6 +151,7 @@ export default function NewsPage() {
   const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
   const [filingsSort, setFilingsSort] = useState<'date' | 'filer' | 'subject'>('date');
   const [formFilter, setFormFilter] = useState<'all' | '13D' | '13D/A' | '13G' | '13G/A'>('all');
+  const [sectorFilter, setSectorFilter] = useState('All sectors');
   const [confSort, setConfSort] = useState<'date' | 'trades'>('date');
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
@@ -225,15 +226,54 @@ export default function NewsPage() {
     return correlations;
   }, [confSort, correlations]);
 
+  const subjectCompanies = useMemo(
+    () => [...new Set((filings ?? []).map((filing) => filing.subjectCompany).filter(Boolean))] as string[],
+    [filings]
+  );
+
+  const { data: filingMetadata } = useQuery({
+    queryKey: ['filing-company-metadata', subjectCompanies.join('||')],
+    queryFn: async (): Promise<{ items: Array<{ subjectCompany: string; symbol: string | null; sector: string | null; industry: string | null }> }> => {
+      const response = await fetch(`/api/company-metadata?subjects=${encodeURIComponent(subjectCompanies.join('||'))}`);
+      if (!response.ok) throw new Error(`Company metadata ${response.status}`);
+      return response.json();
+    },
+    enabled: subjectCompanies.length > 0,
+    staleTime: 24 * 60 * 60 * 1000,
+    retry: 1,
+  });
+
+  const filingMetadataMap = useMemo(() => {
+    return new Map((filingMetadata?.items ?? []).map((item) => [item.subjectCompany, item]));
+  }, [filingMetadata]);
+
+  const enrichedFilings = useMemo(() => {
+    return (filings ?? []).map((filing) => ({
+      ...filing,
+      symbol: filingMetadataMap.get(filing.subjectCompany || '')?.symbol ?? filing.symbol ?? null,
+      sector: filingMetadataMap.get(filing.subjectCompany || '')?.sector ?? filing.sector ?? null,
+      industry: filingMetadataMap.get(filing.subjectCompany || '')?.industry ?? filing.industry ?? null,
+    }));
+  }, [filings, filingMetadataMap]);
+
+  const filingSectors = useMemo(() => {
+    const values = new Set<string>();
+    for (const filing of enrichedFilings) {
+      if (filing.sector) values.add(filing.sector);
+    }
+    return ['All sectors', ...[...values].sort((a, b) => a.localeCompare(b))];
+  }, [enrichedFilings]);
+
   const sortedFilings = useMemo(() => {
-    let list = filings ?? [];
+    let list = enrichedFilings;
     if (formFilter !== 'all') list = list.filter((filing) => filing.formType === formFilter);
+    if (sectorFilter !== 'All sectors') list = list.filter((filing) => (filing.sector || 'Unknown') === sectorFilter);
     return [...list].sort((a, b) => {
       if (filingsSort === 'filer') return (a.filerName ?? '').localeCompare(b.filerName ?? '');
       if (filingsSort === 'subject') return (a.subjectCompany ?? 'ZZZ').localeCompare(b.subjectCompany ?? 'ZZZ');
       return b.filedDate.localeCompare(a.filedDate);
     });
-  }, [filings, filingsSort, formFilter]);
+  }, [enrichedFilings, filingsSort, formFilter, sectorFilter]);
 
   const fromDate = format(subDays(new Date(), days), 'MMM d');
   const toDate = format(new Date(), 'MMM d');
@@ -459,6 +499,28 @@ export default function NewsPage() {
             })}
           </div>
 
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+            <select
+              value={sectorFilter}
+              onChange={(event) => setSectorFilter(event.target.value)}
+              style={{
+                minWidth: 180,
+                padding: '8px 10px',
+                borderRadius: 10,
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--text-primary)',
+                fontSize: 12,
+              }}
+            >
+              {filingSectors.map((sector) => (
+                <option key={sector} value={sector}>
+                  {sector}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {filingsLoading && <FilingsSkeleton />}
 
           {filingsError && (
@@ -535,6 +597,8 @@ export default function NewsPage() {
                         </p>
                         <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
                           {filing.filedDate}
+                          {filing.symbol ? ` · ${filing.symbol}` : ''}
+                          {filing.sector ? ` · ${filing.sector}` : ''}
                           {filing.periodOfReport && filing.periodOfReport !== filing.filedDate ? ` · Period: ${filing.periodOfReport}` : ''}
                         </p>
                       </div>

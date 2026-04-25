@@ -2,6 +2,9 @@ import type { Edgar13DFiling } from './types';
 
 export interface MarketFiling extends Edgar13DFiling {
   subjectCompany?: string; // the company whose shares are being reported on
+  symbol?: string | null;
+  sector?: string | null;
+  industry?: string | null;
 }
 
 // ── Atom feed parsing ─────────────────────────────────────────────────────────

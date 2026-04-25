@@ -10,6 +10,12 @@ type SortMode = 'value' | 'date';
 type FilterMode = 'all' | 'buy' | 'sell';
 type PeriodMode = '7d' | '14d' | '30d';
 type MarketTab = 'us' | 'ca-insiders' | 'ca-filings';
+type SymbolMetadata = {
+  symbol: string;
+  sector: string | null;
+  industry: string | null;
+  companyName: string;
+};
 
 export default function InsiderActivityPage() {
   const navigate = useNavigate();
@@ -17,6 +23,7 @@ export default function InsiderActivityPage() {
   const [sortMode, setSortMode] = useState<SortMode>('date');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [periodMode, setPeriodMode] = useState<PeriodMode>('30d');
+  const [sectorFilter, setSectorFilter] = useState('All sectors');
   const watchlistSymbols = useWatchlistStore((state) => state.items.map((item) => item.symbol));
 
   const days = periodMode === '7d' ? 7 : periodMode === '14d' ? 14 : 30;
@@ -62,13 +69,41 @@ export default function InsiderActivityPage() {
   const isLoading = marketTab === 'us' ? usLoading : caLoading;
   const isFetching = marketTab === 'us' ? usFetching : caFetching;
   const error = marketTab === 'us' ? usError : caError;
+  const tradeSymbols = useMemo(() => [...new Set(rawTrades.map((trade) => trade.symbol).filter(Boolean))], [rawTrades]);
 
-  const trades = useMemo(() => {
+  const { data: symbolMetadata } = useQuery({
+    queryKey: ['symbol-metadata', tradeSymbols.join(',')],
+    queryFn: async (): Promise<{ items: SymbolMetadata[] }> => {
+      const response = await fetch(`/api/symbol-metadata?symbols=${encodeURIComponent(tradeSymbols.join(','))}`);
+      if (!response.ok) throw new Error(`Metadata error ${response.status}`);
+      return response.json();
+    },
+    enabled: tradeSymbols.length > 0,
+    staleTime: 24 * 60 * 60 * 1000,
+    retry: 1,
+  });
+
+  const metadataMap = useMemo(() => new Map((symbolMetadata?.items ?? []).map((item) => [item.symbol, item])), [symbolMetadata]);
+  const sectorOptions = useMemo(() => {
+    const values = new Set<string>();
+    for (const item of symbolMetadata?.items ?? []) {
+      values.add(item.sector || 'Unknown');
+    }
+    return ['All sectors', ...[...values].sort((a, b) => a.localeCompare(b))];
+  }, [symbolMetadata]);
+
+  const trades = useMemo<Array<InsiderFeedItem & { sector: string | null }>>(() => {
     const filtered = rawTrades.filter((trade) => {
       if (filterMode === 'buy') return trade.type === 'BUY';
       if (filterMode === 'sell') return trade.type === 'SELL';
       return true;
-    });
+    }).filter((trade) => {
+      if (sectorFilter === 'All sectors') return true;
+      return (metadataMap.get(trade.symbol)?.sector || 'Unknown') === sectorFilter;
+    }).map((trade) => ({
+      ...trade,
+      sector: metadataMap.get(trade.symbol)?.sector || null,
+    }));
 
     return [...filtered].sort((a, b) => {
       if (sortMode === 'date') {
@@ -78,7 +113,7 @@ export default function InsiderActivityPage() {
       }
       return (b.totalValue ?? 0) - (a.totalValue ?? 0);
     });
-  }, [filterMode, rawTrades, sortMode]);
+  }, [filterMode, metadataMap, rawTrades, sectorFilter, sortMode]);
 
   const tabLabel = {
     us: 'US · SEC Form 4',
@@ -152,6 +187,28 @@ export default function InsiderActivityPage() {
               ]}
             />
           )}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+          <select
+            value={sectorFilter}
+            onChange={(event) => setSectorFilter(event.target.value)}
+            style={{
+              minWidth: 180,
+              padding: '8px 10px',
+              borderRadius: 10,
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)',
+              color: 'var(--text-primary)',
+              fontSize: 12,
+            }}
+          >
+            {sectorOptions.map((sector) => (
+              <option key={sector} value={sector}>
+                {sector}
+              </option>
+            ))}
+          </select>
         </div>
 
         {marketTab !== 'us' && isLoading && (
@@ -251,6 +308,11 @@ export default function InsiderActivityPage() {
                             {trade.symbol}
                           </span>
                           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{trade.companyName}</span>
+                          {trade.sector && (
+                            <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: 'var(--bg-hover)', color: 'var(--text-tertiary)' }}>
+                              {trade.sector}
+                            </span>
+                          )}
                           {inWatchlist && (
                             <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: 'rgba(22,82,240,0.12)', color: 'var(--accent-blue-light)' }}>
                               WATCHLIST

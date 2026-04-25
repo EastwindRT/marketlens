@@ -1,3 +1,44 @@
+## Plan: Congress rankings + sector filters + RSI signal pass (2026-04-25)
+
+### Requested improvements
+1. Under Congress, show ranked member portfolios / broader activity context instead of only a flat latest-trades feed.
+2. Add sector filters to `Market Signals` filings and `Insider Activity`.
+3. Show whether a stock is overbought or oversold.
+4. Keep the architecture clean so the new features do not make loading worse.
+
+### Root causes / context found
+- Congress only exposed latest trade rows, even though the Quiver feed was rich enough to group members and infer activity portfolios.
+- `Insider Activity` and `Market Signals` had no sector metadata layer, so filtering by sector was impossible.
+- Stock pages had trend and volume context, but no momentum oscillator to classify overbought / oversold conditions.
+- A naive implementation would have created per-row symbol/profile fetch fanout and made the pages feel slower.
+
+### Shipped
+- [x] `server.cjs` - added cached `/api/congress-members?days=...` aggregation for ranked member activity portfolios over disclosed trading activity.
+- [x] `src/api/congress.ts` + `src/hooks/useCongressTrades.ts` - added typed client support for the new congress-member aggregation endpoint.
+- [x] `src/pages/Congress.tsx` - upgraded Congress to show:
+  - ranked member activity cards
+  - sort modes for most active / biggest buyers / biggest sellers
+  - an inferred activity portfolio detail view with top tickers and recent disclosures
+  - the original latest-trades tape still intact below
+- [x] `server.cjs` - added shared cached `/api/symbol-metadata` support for symbol → sector/industry enrichment.
+- [x] `server.cjs` - added `/api/company-metadata` so filing subject companies can be resolved to ticker + sector metadata without forcing server-side SEC browse-edgar fetches from cloud IPs.
+- [x] `src/pages/InsiderActivity.tsx` - added a sector filter driven by cached symbol metadata and surfaced sector tags on insider cards where available.
+- [x] `src/pages/News.tsx` - kept the browser-side EDGAR filings fetch path, then enriched filings with cached company metadata and added a sector filter plus symbol/sector labels in the filing rows.
+- [x] `src/utils/indicators.ts` - added RSI(14) calculation.
+- [x] `src/pages/StockDetail.tsx` - added a Momentum pill and RSI evidence row so the stock page now shows `Overbought / Neutral / Oversold` status.
+- [x] `npm run build` clean.
+- [x] `node --check server.cjs` clean.
+
+### Expected user-facing outcome
+- Congress is now useful as both a live tape and a ranked “who is trading what?” surface.
+- Insider and filing pages can be narrowed by sector without adding per-row network stalls.
+- Stock pages now provide a clearer momentum read instead of only trend and participation.
+
+### Open / next improvements
+- [ ] Add explicit “Unknown sector” UI language for Canadian names that do not resolve cleanly through current metadata providers.
+- [ ] Consider a dedicated Congress member detail route if users start wanting persistent sharable member pages.
+- [ ] If users want stronger overbought/oversold confirmation, add Stochastic or distance-from-20DMA next to RSI instead of relying on RSI alone.
+
 ## Plan: Agent-ready stock intelligence foundation (2026-04-25)
 
 ### Goal

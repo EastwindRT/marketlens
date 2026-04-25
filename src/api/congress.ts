@@ -19,6 +19,35 @@ export interface CongressTrade {
   filingUrl: string;
 }
 
+export interface CongressTickerActivity {
+  ticker: string;
+  tradeCount: number;
+  purchaseCount: number;
+  saleCount: number;
+  estimatedGrossAmountMin: number;
+  estimatedNetAmountMin: number;
+  latestTradeDate: string;
+}
+
+export interface CongressMemberActivity {
+  memberId: string;
+  member: string;
+  party: string;
+  state: string;
+  chamber: 'house' | 'senate';
+  totalTrades: number;
+  purchaseCount: number;
+  saleCount: number;
+  exchangeCount: number;
+  buyAmountMin: number;
+  sellAmountMin: number;
+  netAmountMin: number;
+  totalAmountMin: number;
+  latestTradeDate: string;
+  topTickers: CongressTickerActivity[];
+  recentTrades: CongressTrade[];
+}
+
 // ── Module-level caches ───────────────────────────────────────────────────────
 
 interface SenateEntry {
@@ -271,5 +300,11 @@ export const congress = {
     if (!res.ok) throw new Error(`Congress data ${res.status}`);
     const json = await res.json();
     return (json.trades ?? []) as CongressTrade[];
+  },
+
+  getMemberActivity: async (days = 180): Promise<{ asOf: string; days: number; memberCount: number; members: CongressMemberActivity[] }> => {
+    const res = await fetch(`/api/congress-members?days=${days}`);
+    if (!res.ok) throw new Error(`Congress member data ${res.status}`);
+    return res.json();
   },
 };

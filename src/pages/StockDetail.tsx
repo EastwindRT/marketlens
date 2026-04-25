@@ -24,7 +24,7 @@ import { FilingSheet } from '../components/ui/FilingSheet';
 import { PriceHeaderSkeleton } from '../components/ui/LoadingSkeleton';
 import TradeModal from '../components/trade/TradeModal';
 import { formatLargeNumber, formatVolume, formatPrice } from '../utils/formatters';
-import { calculateRelativeVolume, calculateSMA } from '../utils/indicators';
+import { calculateRelativeVolume, calculateRSI, calculateSMA } from '../utils/indicators';
 import { isTSXTicker } from '../utils/marketHours';
 import type { MarketFiling } from '../api/edgar';
 
@@ -74,8 +74,10 @@ export default function StockDetail() {
   const rvolStats = calculateRelativeVolume(candles || [], 20);
   const sma20Series = candles && candles.length >= 20 ? calculateSMA(candles, 20) : [];
   const sma50Series = candles && candles.length >= 50 ? calculateSMA(candles, 50) : [];
+  const rsiSeries = candles && candles.length >= 15 ? calculateRSI(candles, 14) : [];
   const sma20 = sma20Series.length > 0 ? sma20Series[sma20Series.length - 1].value : null;
   const sma50 = sma50Series.length > 0 ? sma50Series[sma50Series.length - 1].value : null;
+  const rsi14 = rsiSeries.length > 0 ? rsiSeries[rsiSeries.length - 1].value : null;
   const latestClose = lastCandle?.close ?? null;
   const nextEarningsDate = aiFundamentals?.upcomingEarningsDate ?? null;
   const deepAnalyzeContext = {
@@ -300,6 +302,7 @@ export default function StockDetail() {
           rvol={rvolStats.rvol}
           averageVolume={rvolStats.averageVolume}
           latestVolume={rvolStats.latestVolume}
+          rsi14={rsi14}
           insiderCount={insiders?.length ?? 0}
           filingCount={filings?.length ?? 0}
           nextEarningsDate={nextEarningsDate}
@@ -464,6 +467,7 @@ function SignalSummaryPanel({
   rvol,
   averageVolume,
   latestVolume,
+  rsi14,
   insiderCount,
   filingCount,
   nextEarningsDate,
@@ -477,6 +481,7 @@ function SignalSummaryPanel({
   rvol: number | null;
   averageVolume: number | null;
   latestVolume: number | null;
+  rsi14: number | null;
   insiderCount: number;
   filingCount: number;
   nextEarningsDate: string | null;
@@ -522,6 +527,20 @@ function SignalSummaryPanel({
     : rvol <= 0.8
     ? 'var(--color-down)'
     : 'var(--accent-blue-light)';
+  const momentumLabel = rsi14 == null
+    ? 'Building'
+    : rsi14 >= 70
+    ? 'Overbought'
+    : rsi14 <= 30
+    ? 'Oversold'
+    : 'Neutral';
+  const momentumTone = rsi14 == null
+    ? 'var(--text-secondary)'
+    : rsi14 >= 70
+    ? 'var(--color-down)'
+    : rsi14 <= 30
+    ? 'var(--color-up)'
+    : 'var(--accent-blue-light)';
 
   const catalystParts = [];
   if (insiderCount > 0) catalystParts.push(`${insiderCount} insider trade${insiderCount === 1 ? '' : 's'}`);
@@ -559,7 +578,7 @@ function SignalSummaryPanel({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
         <SignalPill
           label="Trend"
           value={trendLabel}
@@ -579,6 +598,11 @@ function SignalSummaryPanel({
           label="Event Risk"
           value={earningsLabel}
           tone="var(--text-primary)"
+        />
+        <SignalPill
+          label="Momentum"
+          value={momentumLabel}
+          tone={momentumTone}
         />
       </div>
 
@@ -626,6 +650,11 @@ function SignalSummaryPanel({
                 metric="Relative volume"
                 value={rvol != null ? `${rvol.toFixed(2)}x` : '—'}
                 read={rvol != null ? `${participationLabel} volume vs 20-day average` : 'Need more volume history'}
+              />
+              <SignalTableRow
+                metric="RSI (14)"
+                value={rsi14 != null ? rsi14.toFixed(1) : 'â€”'}
+                read={rsi14 == null ? 'Need 14 trading sessions' : rsi14 >= 70 ? 'Momentum is in overbought territory' : rsi14 <= 30 ? 'Momentum is in oversold territory' : 'Momentum is in a neutral range'}
               />
               <SignalTableRow
                 metric="Volume comparison"
