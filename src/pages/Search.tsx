@@ -3,6 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search as SearchIcon, AlertCircle } from 'lucide-react';
 import { finnhub } from '../api/finnhub';
 import { Skeleton } from '../components/ui/LoadingSkeleton';
+import { recordSearchLog } from '../api/supabase';
+import { useLeagueStore } from '../store/leagueStore';
 
 export default function Search() {
   const [searchParams] = useSearchParams();
@@ -11,6 +13,8 @@ export default function Search() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const player = useLeagueStore((state) => state.player);
+  const [loggedQuery, setLoggedQuery] = useState('');
 
   useEffect(() => {
     if (!query) { setResults([]); setError(null); return; }
@@ -37,6 +41,22 @@ export default function Search() {
       finally { setLoading(false); }
     }, 300);
     return () => clearTimeout(timeout);
+  }, [query]);
+
+  useEffect(() => {
+    const cleanQuery = query.trim();
+    if (!player?.id || loading || error || cleanQuery.length < 2 || cleanQuery === loggedQuery) return;
+
+    setLoggedQuery(cleanQuery);
+    void recordSearchLog(player.id, cleanQuery, null).catch((logError) => {
+      console.warn('[Search] failed to record search log:', logError);
+    });
+  }, [player?.id, query, loading, error, loggedQuery]);
+
+  useEffect(() => {
+    if (!query.trim()) {
+      setLoggedQuery('');
+    }
   }, [query]);
 
   return (
@@ -81,7 +101,14 @@ export default function Search() {
                 borderBottom: i < results.length - 1 ? '1px solid var(--border-subtle)' : 'none',
                 background: 'var(--bg-surface)',
               }}
-              onClick={() => navigate(`/stock/${r.symbol}`)}
+              onClick={() => {
+                if (player?.id) {
+                  void recordSearchLog(player.id, query.trim(), r.symbol).catch((logError) => {
+                    console.warn('[Search] failed to record selected result:', logError);
+                  });
+                }
+                navigate(`/stock/${r.symbol}`);
+              }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
             >

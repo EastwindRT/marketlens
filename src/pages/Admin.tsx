@@ -1,25 +1,48 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trash2, RotateCcw, LogOut, Shield } from 'lucide-react';
+import { Trash2, RotateCcw, LogOut, Shield, Activity, Search as SearchIcon } from 'lucide-react';
 import {
-  getAllPlayers, getPlayerTrades,
-  adminResetPlayer, adminResetAll, adminDeletePlayer, adminUndoTrade,
+  getAllPlayers,
+  getPlayerTrades,
+  adminResetPlayer,
+  adminResetAll,
+  adminDeletePlayer,
+  adminUndoTrade,
+  getRecentSearchLogs,
 } from '../api/supabase';
-import type { Player, Trade } from '../api/supabase';
+import type { Player, Trade, SearchLog } from '../api/supabase';
 import { useLeagueStore } from '../store/leagueStore';
 
-// ─── Admin allow-list — set VITE_ADMIN_EMAILS in .env (comma separated) ─────
 const ADMIN_EMAILS: string[] = (import.meta.env.VITE_ADMIN_EMAILS ?? 'renjith914@gmail.com')
   .split(',')
   .map((e: string) => e.trim().toLowerCase())
   .filter(Boolean);
+
+const ONLINE_WINDOW_MS = 5 * 60 * 1000;
 
 function isAdminEmail(email?: string | null): boolean {
   if (!email) return false;
   return ADMIN_EMAILS.includes(email.toLowerCase());
 }
 
-// ─── Generic confirm ────────────────────────────────────────────────────────
+function formatRelativeTime(timestamp?: string | null): string {
+  if (!timestamp) return 'Never';
+  const diffMs = Date.now() - new Date(timestamp).getTime();
+  if (!Number.isFinite(diffMs) || diffMs < 0) return 'Just now';
+  const diffMinutes = Math.floor(diffMs / 60000);
+  if (diffMinutes < 1) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
+function isPlayerOnline(player: Player): boolean {
+  if (!player.last_active_at) return false;
+  return Date.now() - new Date(player.last_active_at).getTime() <= ONLINE_WINDOW_MS;
+}
+
 function ConfirmDialog({
   message, onConfirm, onCancel,
 }: { message: string; onConfirm: () => void; onCancel: () => void }) {
@@ -48,7 +71,6 @@ function ConfirmDialog({
   );
 }
 
-// ─── Player row ─────────────────────────────────────────────────────────────
 function PlayerAdminRow({
   player, onChanged,
 }: { player: Player; onChanged: () => void }) {
@@ -90,7 +112,7 @@ function PlayerAdminRow({
       padding: 14, border: '1px solid var(--border)', borderRadius: 8,
       marginBottom: 10, background: 'var(--bg-panel)',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
         <div>
           <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
             {player.display_name || player.name}
@@ -98,9 +120,12 @@ function PlayerAdminRow({
           <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
             {player.google_email || '—'}
           </div>
+          <div style={{ marginTop: 4, fontSize: 11, color: isPlayerOnline(player) ? 'var(--success)' : 'var(--text-tertiary)' }}>
+            {isPlayerOnline(player) ? 'Online now' : `Last active ${formatRelativeTime(player.last_active_at)}`}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
-          <button onClick={() => setShowTrades(v => !v)} style={{
+          <button onClick={() => setShowTrades((v) => !v)} style={{
             padding: '6px 10px', fontSize: 12, background: 'transparent',
             border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-secondary)',
           }}>{showTrades ? 'Hide' : 'Trades'}</button>
@@ -119,7 +144,7 @@ function PlayerAdminRow({
         <div style={{ marginTop: 10, maxHeight: 260, overflowY: 'auto' }}>
           {trades.length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No trades</div>
-          ) : trades.map(t => (
+          ) : trades.map((t) => (
             <div key={t.id} style={{
               display: 'flex', justifyContent: 'space-between',
               padding: '6px 0', borderBottom: '1px solid var(--border)',
@@ -162,24 +187,82 @@ function PlayerAdminRow({
   );
 }
 
-// ─── Main Admin page ────────────────────────────────────────────────────────
+function SearchLogTable({ logs }: { logs: SearchLog[] }) {
+  if (logs.length === 0) {
+    return (
+      <div style={{ padding: 14, color: 'var(--text-tertiary)', fontSize: 13 }}>
+        No search activity logged yet.
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {logs.slice(0, 40).map((log, index) => (
+        <div
+          key={log.id}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(120px, 1.2fr) minmax(140px, 1fr) minmax(140px, 0.9fr) auto',
+            gap: 10,
+            padding: '12px 14px',
+            borderBottom: index < Math.min(logs.length, 40) - 1 ? '1px solid var(--border)' : 'none',
+            fontSize: 12,
+            alignItems: 'center',
+          }}
+        >
+          <div>
+            <div style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{log.player_name || 'Unknown'}</div>
+            <div style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>{log.player_email || 'No email'}</div>
+          </div>
+          <div style={{ color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}>
+            {log.query}
+          </div>
+          <div style={{ color: 'var(--text-secondary)' }}>
+            {log.selected_symbol ? `Opened ${log.selected_symbol}` : 'Search only'}
+          </div>
+          <div style={{ color: 'var(--text-tertiary)', textAlign: 'right' }}>
+            {formatRelativeTime(log.created_at)}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
 export default function Admin() {
   const navigate = useNavigate();
   const sessionPlayer = useLeagueStore((s) => s.player);
   const [players, setPlayers] = useState<Player[]>([]);
+  const [searchLogs, setSearchLogs] = useState<SearchLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmResetAll, setConfirmResetAll] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const all = await getAllPlayers();
-    setPlayers(all);
-    setLoading(false);
+    try {
+      const [all, recentSearches] = await Promise.all([
+        getAllPlayers(),
+        getRecentSearchLogs(80),
+      ]);
+      setPlayers(all);
+      setSearchLogs(recentSearches);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void load();
+    }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [load]);
+
   const isAdmin = isAdminEmail(sessionPlayer?.google_email);
+  const onlineCount = players.filter(isPlayerOnline).length;
 
   if (!sessionPlayer) {
     return (
@@ -217,7 +300,7 @@ export default function Admin() {
   }
 
   return (
-    <div style={{ maxWidth: 560, margin: '0 auto', paddingBottom: 40 }}>
+    <div style={{ maxWidth: 900, margin: '0 auto', paddingBottom: 40 }}>
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         padding: '16px 0',
@@ -249,19 +332,55 @@ export default function Admin() {
         >Reset ALL players (wipe trades + holdings)</button>
       </div>
 
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: 12,
+          marginBottom: 20,
+        }}
+      >
+        <div style={{ padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-panel)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, color: 'var(--text-secondary)', fontSize: 12 }}>
+            <Activity size={14} />
+            Active now
+          </div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>{onlineCount}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Seen in the last 5 minutes</div>
+        </div>
+
+        <div style={{ padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-panel)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, color: 'var(--text-secondary)', fontSize: 12 }}>
+            <SearchIcon size={14} />
+            Recent searches
+          </div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>{searchLogs.length}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Latest terms captured in-app</div>
+        </div>
+      </div>
+
       <h2 style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 10 }}>
         Players ({players.length})
       </h2>
 
       {loading ? (
-        <div style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Loading…</div>
+        <div style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Loading...</div>
       ) : players.length === 0 ? (
         <div style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>No players yet.</div>
       ) : (
-        players.map(p => (
+        players.map((p) => (
           <PlayerAdminRow key={p.id} player={p} onChanged={load} />
         ))
       )}
+
+      <div style={{ marginTop: 24 }}>
+        <h2 style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 10 }}>
+          Recent Searches
+        </h2>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-panel)' }}>
+          <SearchLogTable logs={searchLogs} />
+        </div>
+      </div>
 
       {confirmResetAll && (
         <ConfirmDialog

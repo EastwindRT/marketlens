@@ -31,7 +31,7 @@ const CongressPage        = lazyWithAutoReload(importCongress)
 const FundsPage           = lazyWithAutoReload(importFunds)
 import { useLeagueStore } from './store/leagueStore'
 import { useWatchlistStore } from './store/watchlistStore'
-import { supabase, ensurePlayerForSession } from './api/supabase'
+import { supabase, ensurePlayerForSession, touchPlayerActivity } from './api/supabase'
 
 const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -39,6 +39,7 @@ const SUPABASE_CONFIGURED =
 const LAZY_RELOAD_KEY = 'tars:lazy-reload'
 const BOOTSTRAP_RETRY_DELAY_MS = 1200
 const IDLE_LOGOUT_MS = 30 * 60 * 1000
+const ACTIVITY_HEARTBEAT_MS = 60 * 1000
 
 function lazyWithAutoReload<T extends { default: ComponentType<any> }>(
   importer: () => Promise<T>
@@ -170,6 +171,17 @@ export default function App() {
     if (!SUPABASE_CONFIGURED || !session) return
 
     let timeoutId: number | null = null
+    let lastHeartbeatAt = 0
+
+    const sendHeartbeat = () => {
+      if (!player?.id) return
+      const now = Date.now()
+      if (now - lastHeartbeatAt < ACTIVITY_HEARTBEAT_MS) return
+      lastHeartbeatAt = now
+      void touchPlayerActivity(player.id).catch((error) => {
+        console.warn('[App] failed to update activity heartbeat:', error)
+      })
+    }
 
     const resetIdleTimer = () => {
       if (timeoutId !== null) window.clearTimeout(timeoutId)
@@ -177,6 +189,7 @@ export default function App() {
         console.warn('[App] signing out idle session after inactivity timeout')
         void logout()
       }, IDLE_LOGOUT_MS)
+      sendHeartbeat()
     }
 
     const handleVisibilityChange = () => {
@@ -193,6 +206,7 @@ export default function App() {
     ]
 
     resetIdleTimer()
+    sendHeartbeat()
     activityEvents.forEach((eventName) => {
       window.addEventListener(eventName, resetIdleTimer, { passive: true })
     })
@@ -205,7 +219,7 @@ export default function App() {
       })
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [logout, session])
+  }, [logout, player?.id, session])
 
   useEffect(() => {
     if (!session) return

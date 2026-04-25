@@ -49,6 +49,7 @@ export interface Player {
   avatar_color: string;
   cash?: number | null;           // legacy — ignored; unlimited theoretical dollars
   created_at: string;
+  last_active_at?: string | null;
 }
 
 export interface Holding {
@@ -87,6 +88,16 @@ export interface WatchlistInput {
   symbol: string;
   name?: string;
   exchange?: string;
+}
+
+export interface SearchLog {
+  id: string;
+  player_id: string;
+  query: string;
+  selected_symbol?: string | null;
+  created_at: string;
+  player_name?: string;
+  player_email?: string | null;
 }
 
 // ── Google OAuth auth ─────────────────────────────────────────────────────────
@@ -144,6 +155,7 @@ export async function ensurePlayerForSession(session: {
       display_name: displayName,
       google_email: email,
       avatar_color: avatarColor,
+      last_active_at: new Date().toISOString(),
     })
     .select('*')
     .single();
@@ -176,6 +188,51 @@ export async function getPlayerById(playerId: string): Promise<Player | null> {
     .maybeSingle();
   if (error) return null;
   return data;
+}
+
+export async function touchPlayerActivity(playerId: string): Promise<void> {
+  const { error } = await supabase
+    .from('players')
+    .update({ last_active_at: new Date().toISOString() })
+    .eq('id', playerId);
+  if (error) throw error;
+}
+
+export async function recordSearchLog(
+  playerId: string,
+  query: string,
+  selectedSymbol?: string | null,
+): Promise<void> {
+  const cleanQuery = query.trim();
+  if (!cleanQuery) return;
+
+  const { error } = await supabase
+    .from('search_logs')
+    .insert({
+      player_id: playerId,
+      query: cleanQuery.slice(0, 120),
+      selected_symbol: selectedSymbol?.trim().toUpperCase() || null,
+    });
+  if (error) throw error;
+}
+
+export async function getRecentSearchLogs(limit = 100): Promise<SearchLog[]> {
+  const { data, error } = await supabase
+    .from('search_logs')
+    .select('id, player_id, query, selected_symbol, created_at, players(name, google_email)')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+
+  return (data ?? []).map((row: any) => ({
+    id: row.id,
+    player_id: row.player_id,
+    query: row.query,
+    selected_symbol: row.selected_symbol,
+    created_at: row.created_at,
+    player_name: row.players?.name ?? 'Unknown',
+    player_email: row.players?.google_email ?? null,
+  }));
 }
 
 // ── Holdings queries ──────────────────────────────────────────────────────────
