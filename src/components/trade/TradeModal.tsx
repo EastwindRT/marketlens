@@ -4,23 +4,7 @@ import { executeBuy, executeSell } from '../../api/supabase';
 import { useLeagueStore } from '../../store/leagueStore';
 import { formatPrice } from '../../utils/formatters';
 
-const TRADE_TIMEOUT_MS = 30000;
-
-async function withTradeTimeout<T>(promise: Promise<T>, timeoutMs = TRADE_TIMEOUT_MS): Promise<T> {
-  let timer: number | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = window.setTimeout(() => reject(new Error('Trade request timed out')), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer !== null) {
-      window.clearTimeout(timer);
-    }
-  }
-}
+const SLOW_TRADE_NOTICE_MS = 10000;
 
 interface TradeModalProps {
   symbol: string;
@@ -40,13 +24,15 @@ export default function TradeModal({
   const [priceMode, setPriceMode] = useState<'MARKET' | 'CUSTOM'>('MARKET');
   const [sharesInput, setSharesInput] = useState('');
   const [customPriceInput, setCustomPriceInput] = useState('');
-  const [customDateInput, setCustomDateInput] = useState(''); // YYYY-MM-DD
+  const [customDateInput, setCustomDateInput] = useState('');
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
+  const [slowProcessing, setSlowProcessing] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
 
   if (!player) return null;
+  const currentPlayer = player;
 
   const shares = parseFloat(sharesInput) || 0;
   const customPrice = parseFloat(customPriceInput) || 0;
@@ -54,26 +40,36 @@ export default function TradeModal({
   const total = shares * effectivePrice;
 
   async function handleTrade() {
-    if (!shares || shares <= 0) { setError('Enter a valid number of shares'); return; }
+    if (!shares || shares <= 0) {
+      setError('Enter a valid number of shares');
+      return;
+    }
     if (priceMode === 'CUSTOM' && (!customPrice || customPrice <= 0)) {
-      setError('Enter a valid custom price'); return;
+      setError('Enter a valid custom price');
+      return;
     }
 
     let tradedAt: string | undefined;
     if (priceMode === 'CUSTOM' && customDateInput) {
       const d = new Date(customDateInput);
-      if (isNaN(d.getTime())) { setError('Invalid date'); return; }
+      if (isNaN(d.getTime())) {
+        setError('Invalid date');
+        return;
+      }
       tradedAt = d.toISOString();
     }
 
     setLoading(true);
+    setSlowProcessing(false);
     setError('');
+    const slowNoticeTimer = window.setTimeout(() => {
+      setSlowProcessing(true);
+    }, SLOW_TRADE_NOTICE_MS);
 
     try {
-      const tradePromise = mode === 'BUY'
-        ? executeBuy(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)
-        : executeSell(player!, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined);
-      const result = await withTradeTimeout(tradePromise);
+      const result = mode === 'BUY'
+        ? await executeBuy(currentPlayer, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)
+        : await executeSell(currentPlayer, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined);
 
       if (!result.success) {
         setError(result.error ?? 'Trade failed');
@@ -81,16 +77,17 @@ export default function TradeModal({
       }
 
       setDone(true);
-      setTimeout(() => { onSuccess?.(); onClose(); }, 1200);
+      window.setTimeout(() => {
+        onSuccess?.();
+        onClose();
+      }, 1200);
     } catch (err) {
       const message = String((err as Error)?.message || err);
-      if (/timed out/i.test(message)) {
-        setError('Trade request is taking too long. The button has been reset so you can try again. Refresh your portfolio before retrying in case the first request completes late.');
-      } else {
-        setError('Connection error — check your network and try again');
-      }
+      setError(`Connection error - ${message || 'check your network and try again'}`);
     } finally {
+      window.clearTimeout(slowNoticeTimer);
       setLoading(false);
+      setSlowProcessing(false);
     }
   }
 
@@ -120,14 +117,16 @@ export default function TradeModal({
 
   return (
     <Overlay onClose={onClose}>
-      {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <div>
           <div className="flex items-center gap-2">
             <span className="font-bold text-base" style={{ color: 'var(--text-primary)' }}>{symbol}</span>
-            <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+            <span
+              className="text-xs px-2 py-0.5 rounded-full font-medium"
               style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}
-            >{exchange}</span>
+            >
+              {exchange}
+            </span>
           </div>
           <p className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>{companyName}</p>
         </div>
@@ -136,7 +135,6 @@ export default function TradeModal({
         </button>
       </div>
 
-      {/* Buy / Sell toggle */}
       <div className="flex rounded-xl p-1 mb-4" style={{ background: 'var(--bg-elevated)' }}>
         {(['BUY', 'SELL'] as const).map((m) => (
           <button
@@ -146,7 +144,8 @@ export default function TradeModal({
             style={{
               background: mode === m ? (m === 'BUY' ? 'var(--color-up)' : 'var(--color-down)') : 'transparent',
               color: mode === m ? '#fff' : 'var(--text-secondary)',
-              border: 'none', cursor: 'pointer',
+              border: 'none',
+              cursor: 'pointer',
             }}
           >
             {m}
@@ -154,7 +153,6 @@ export default function TradeModal({
         ))}
       </div>
 
-      {/* Market / Custom price toggle */}
       <div className="flex rounded-xl p-1 mb-4" style={{ background: 'var(--bg-elevated)' }}>
         {(['MARKET', 'CUSTOM'] as const).map((pm) => (
           <button
@@ -164,7 +162,8 @@ export default function TradeModal({
             style={{
               background: priceMode === pm ? 'var(--accent-blue)' : 'transparent',
               color: priceMode === pm ? '#fff' : 'var(--text-secondary)',
-              border: 'none', cursor: 'pointer',
+              border: 'none',
+              cursor: 'pointer',
             }}
           >
             {pm === 'MARKET' ? 'Market price' : 'Custom entry'}
@@ -172,7 +171,6 @@ export default function TradeModal({
         ))}
       </div>
 
-      {/* Price info */}
       {priceMode === 'MARKET' ? (
         <div className="flex justify-between items-center mb-4">
           <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Current Price</span>
@@ -194,7 +192,8 @@ export default function TradeModal({
             style={{
               background: 'var(--bg-elevated)',
               border: '1px solid var(--border-default)',
-              height: 44, color: 'var(--text-primary)',
+              height: 44,
+              color: 'var(--text-primary)',
             }}
           />
           <label className="text-xs font-medium mt-1" style={{ color: 'var(--text-secondary)' }}>DATE (optional)</label>
@@ -207,13 +206,13 @@ export default function TradeModal({
             style={{
               background: 'var(--bg-elevated)',
               border: '1px solid var(--border-default)',
-              height: 44, color: 'var(--text-primary)',
+              height: 44,
+              color: 'var(--text-primary)',
             }}
           />
         </div>
       )}
 
-      {/* Shares input */}
       <div className="flex flex-col gap-2 mb-4">
         <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>SHARES</label>
         <div
@@ -230,7 +229,7 @@ export default function TradeModal({
             step="0.01"
             value={sharesInput}
             onChange={(e) => { setSharesInput(e.target.value); setError(''); }}
-            onKeyDown={(e) => e.key === 'Enter' && handleTrade()}
+            onKeyDown={(e) => e.key === 'Enter' && void handleTrade()}
             placeholder="0"
             className="flex-1 bg-transparent outline-none text-base font-mono"
             style={{ color: 'var(--text-primary)' }}
@@ -238,7 +237,6 @@ export default function TradeModal({
         </div>
       </div>
 
-      {/* Note */}
       <div className="flex flex-col gap-2 mb-4">
         <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>NOTE (optional)</label>
         <input
@@ -251,12 +249,12 @@ export default function TradeModal({
           style={{
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border-default)',
-            height: 44, color: 'var(--text-primary)',
+            height: 44,
+            color: 'var(--text-primary)',
           }}
         />
       </div>
 
-      {/* Total */}
       {shares > 0 && effectivePrice > 0 && (
         <div
           className="flex justify-between items-center px-4 py-3 rounded-xl mb-4"
@@ -273,9 +271,14 @@ export default function TradeModal({
         <p className="text-sm mb-3" style={{ color: 'var(--color-down)' }}>{error}</p>
       )}
 
-      {/* Submit */}
+      {loading && slowProcessing && !error && (
+        <p className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
+          Still processing your trade. The request is alive, but Supabase is responding slowly right now.
+        </p>
+      )}
+
       <button
-        onClick={handleTrade}
+        onClick={() => void handleTrade()}
         disabled={loading || !shares}
         className="w-full py-3.5 rounded-xl text-sm font-semibold"
         style={{
@@ -286,7 +289,7 @@ export default function TradeModal({
           border: 'none',
         }}
       >
-        {loading ? 'Processing…' : `${mode === 'BUY' ? 'Buy' : 'Sell'} ${symbol}`}
+        {loading ? 'Processing...' : `${mode === 'BUY' ? 'Buy' : 'Sell'} ${symbol}`}
       </button>
     </Overlay>
   );
