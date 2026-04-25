@@ -1,9 +1,15 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const path = require('path');
+const { createClient: createSupabaseClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const SERVICE_SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const SERVICE_SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const serverSupabase = SERVICE_SUPABASE_URL && SERVICE_SUPABASE_KEY
+  ? createSupabaseClient(SERVICE_SUPABASE_URL, SERVICE_SUPABASE_KEY, { auth: { persistSession: false } })
+  : null;
 
 // Proxy: /api/tmx → app-money.tmx.com (SEDI insider data + TSX quotes)
 app.use(
@@ -143,8 +149,198 @@ function toFiniteNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+const MARKET_DATA_DATASETS = {
+  congress: 'congress_trades',
+  caInsiders(days, mode) {
+    return `ca_insider_${days}_${mode}`;
+  },
+};
+
+function hasMarketDataDb() {
+  return Boolean(serverSupabase);
+}
+
+async function getMarketDataSyncState(dataset) {
+  if (!hasMarketDataDb()) return null;
+  const { data, error } = await serverSupabase
+    .from('market_data_sync_state')
+    .select('dataset,synced_at,row_count')
+    .eq('dataset', dataset)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`sync state read failed for ${dataset}: ${error.message}`);
+  }
+  return data || null;
+}
+
+async function setMarketDataSyncState(dataset, rowCount) {
+  if (!hasMarketDataDb()) return;
+  const payload = {
+    dataset,
+    synced_at: new Date().toISOString(),
+    row_count: Number.isFinite(rowCount) ? rowCount : 0,
+  };
+  const { error } = await serverSupabase
+    .from('market_data_sync_state')
+    .upsert(payload, { onConflict: 'dataset' });
+  if (error) {
+    throw new Error(`sync state write failed for ${dataset}: ${error.message}`);
+  }
+}
+
+function isSyncStateFresh(syncState, ttlMs) {
+  if (!syncState?.synced_at) return false;
+  const syncedAtMs = Date.parse(syncState.synced_at);
+  if (!Number.isFinite(syncedAtMs)) return false;
+  return Date.now() - syncedAtMs <= ttlMs;
+}
+
+async function readCongressTradesFromDb({ tickers = null, cutoff = null, limit = null } = {}) {
+  if (!hasMarketDataDb()) return [];
+
+  let query = serverSupabase
+    .from('congress_trades')
+    .select('id,member,party,state,ticker,asset_description,type,amount,amount_min,transaction_date,disclosure_date,filing_url,chamber')
+    .order('transaction_date', { ascending: false })
+    .order('amount_min', { ascending: false });
+
+  if (Array.isArray(tickers) && tickers.length) {
+    query = query.in('ticker', tickers);
+  }
+  if (cutoff) {
+    query = query.gte('transaction_date', cutoff);
+  }
+  if (Number.isFinite(limit) && limit > 0) {
+    query = query.limit(limit);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`congress db read failed: ${error.message}`);
+  }
+
+  return (data || []).map((trade) => ({
+    id: trade.id,
+    member: trade.member,
+    party: trade.party || '',
+    state: trade.state || '',
+    ticker: trade.ticker,
+    assetDescription: trade.asset_description || '',
+    type: trade.type,
+    amount: trade.amount || '',
+    amountMin: Number(trade.amount_min || 0),
+    transactionDate: trade.transaction_date || '',
+    disclosureDate: trade.disclosure_date || '',
+    filingUrl: trade.filing_url || '',
+    chamber: trade.chamber || 'house',
+  }));
+}
+
+async function writeCongressTradesToDb(trades) {
+  if (!hasMarketDataDb() || !Array.isArray(trades) || trades.length === 0) return;
+
+  const rows = trades.map((trade) => ({
+    id: trade.id,
+    member: trade.member,
+    party: trade.party || null,
+    state: trade.state || null,
+    ticker: trade.ticker,
+    asset_description: trade.assetDescription || null,
+    type: trade.type,
+    amount: trade.amount || null,
+    amount_min: Number.isFinite(trade.amountMin) ? trade.amountMin : 0,
+    transaction_date: trade.transactionDate || null,
+    disclosure_date: trade.disclosureDate || null,
+    filing_url: trade.filingUrl || null,
+    chamber: trade.chamber || 'house',
+    updated_at: new Date().toISOString(),
+  }));
+
+  const { error } = await serverSupabase
+    .from('congress_trades')
+    .upsert(rows, { onConflict: 'id' });
+  if (error) {
+    throw new Error(`congress db write failed: ${error.message}`);
+  }
+}
+
+async function readCaInsiderTradesFromDb(days, mode) {
+  if (!hasMarketDataDb()) return [];
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  let query = serverSupabase
+    .from('ca_insider_filings')
+    .select('id,symbol,company_name,insider_name,title,type,open_market,transaction_date,filing_date,shares,price_per_share,total_value,market,exchange,source,filing_url')
+    .gte('filing_date', cutoffStr)
+    .order('filing_date', { ascending: false })
+    .order('transaction_date', { ascending: false })
+    .order('total_value', { ascending: false });
+
+  if (mode === 'insiders') {
+    query = query.eq('open_market', true);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`ca insider db read failed: ${error.message}`);
+  }
+
+  return (data || []).map((trade) => ({
+    id: trade.id,
+    symbol: trade.symbol,
+    companyName: trade.company_name || '',
+    insiderName: trade.insider_name || '',
+    title: trade.title || '',
+    type: trade.type,
+    transactionDate: trade.transaction_date || '',
+    filingDate: trade.filing_date || '',
+    shares: toFiniteNumber(trade.shares),
+    pricePerShare: toFiniteNumber(trade.price_per_share),
+    totalValue: toFiniteNumber(trade.total_value),
+    market: trade.market || 'CA',
+    exchange: trade.exchange || 'TSX',
+    source: trade.source || 'TMX/SEDI',
+    filingUrl: trade.filing_url || null,
+  }));
+}
+
+async function writeCaInsiderTradesToDb(trades) {
+  if (!hasMarketDataDb() || !Array.isArray(trades) || trades.length === 0) return;
+
+  const rows = trades.map((trade) => ({
+    id: trade.id,
+    symbol: trade.symbol,
+    company_name: trade.companyName || null,
+    insider_name: trade.insiderName || null,
+    title: trade.title || null,
+    type: trade.type,
+    open_market: trade.type === 'BUY' || trade.type === 'SELL',
+    transaction_date: trade.transactionDate || null,
+    filing_date: trade.filingDate || null,
+    shares: trade.shares,
+    price_per_share: trade.pricePerShare,
+    total_value: trade.totalValue,
+    market: trade.market || 'CA',
+    exchange: trade.exchange || 'TSX',
+    source: trade.source || 'TMX/SEDI',
+    filing_url: trade.filingUrl || null,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const { error } = await serverSupabase
+    .from('ca_insider_filings')
+    .upsert(rows, { onConflict: 'id' });
+  if (error) {
+    throw new Error(`ca insider db write failed: ${error.message}`);
+  }
+}
+
 // In-memory cache
 let congressCache = null;
+let congressRefreshBuild = null;
 let congressLastFetch = 0;
 const CONGRESS_CACHE_TTL = 30 * 60 * 1000; // 30 min — Quiver updates ~daily but let's stay fresh
 
@@ -155,6 +351,35 @@ const QUIVER_HEADERS = { 'Authorization': 'Bearer public', 'Accept': 'applicatio
 async function fetchCongressData() {
   const raw = await httpsGet(QUIVER_CONGRESS_URL, QUIVER_HEADERS);
   return JSON.parse(raw);
+}
+
+async function refreshCongressTradesFromSource() {
+  if (congressRefreshBuild) return congressRefreshBuild;
+
+  congressRefreshBuild = (async () => {
+    const rawTrades = await fetchCongressData();
+    congressCache = rawTrades;
+    congressLastFetch = Date.now();
+
+    const mappedTrades = (Array.isArray(rawTrades) ? rawTrades : [])
+      .map(mapQuiverCongressTrade)
+      .filter(Boolean)
+      .sort((a, b) =>
+        (b.transactionDate || '').localeCompare(a.transactionDate || '')
+        || ((b.amountMin || 0) - (a.amountMin || 0))
+      );
+
+    if (hasMarketDataDb()) {
+      await writeCongressTradesToDb(mappedTrades);
+      await setMarketDataSyncState(MARKET_DATA_DATASETS.congress, mappedTrades.length);
+    }
+
+    return mappedTrades;
+  })().finally(() => {
+    congressRefreshBuild = null;
+  });
+
+  return congressRefreshBuild;
 }
 
 function parseAmountMin(amount) {
@@ -179,8 +404,12 @@ function mapQuiverCongressTrade(t) {
   if (!member) return null;
 
   const amount = t.Range || t.Amount || '';
+  const disclosureDate = normaliseDate(t.ReportDate || '');
+  const amountMin = parseAmountMin(amount);
+  const chamber = (t.House || '').toLowerCase() === 'senate' ? 'senate' : 'house';
 
   return {
+    id: `congress-${slugify(member)}-${ticker}-${txDate}-${txType.includes('purchase') ? 'purchase' : txType.includes('exchange') ? 'exchange' : 'sale'}-${amountMin}-${disclosureDate || 'na'}-${chamber}`,
     member,
     party: (t.Party || '').trim(),
     state: '',
@@ -188,36 +417,101 @@ function mapQuiverCongressTrade(t) {
     assetDescription: t.Description || '',
     type: txType.includes('purchase') ? 'purchase' : txType.includes('exchange') ? 'exchange' : 'sale',
     amount,
-    amountMin: parseAmountMin(amount),
+    amountMin,
     transactionDate: txDate,
-    disclosureDate: normaliseDate(t.ReportDate || ''),
+    disclosureDate,
     filingUrl: '',
-    chamber: (t.House || '').toLowerCase() === 'senate' ? 'senate' : 'house',
+    chamber,
   };
+}
+
+function formatDateFromUnix(timestamp) {
+  if (!Number.isFinite(timestamp)) return '';
+  return new Date(timestamp * 1000).toISOString().slice(0, 10);
+}
+
+function findEntryCloseForDate(bars, tradeDate) {
+  if (!Array.isArray(bars) || !bars.length || !tradeDate) return null;
+  let bestOnOrBefore = null;
+  let firstAfter = null;
+
+  for (const bar of bars) {
+    const barDate = formatDateFromUnix(bar.time);
+    if (!barDate) continue;
+    if (barDate <= tradeDate) {
+      bestOnOrBefore = bar;
+    } else if (!firstAfter) {
+      firstAfter = bar;
+      break;
+    }
+  }
+
+  return finiteNumber((bestOnOrBefore || firstAfter)?.close);
+}
+
+async function buildCongressReturnMap(trades) {
+  const tickers = [...new Set((trades || []).map((trade) => trade.ticker).filter(Boolean))];
+  const entries = await Promise.all(
+    tickers.map(async (ticker) => {
+      try {
+        const { bars } = await fetchYahooChart(ticker, '1y', '1d');
+        const latestClose = bars.length ? finiteNumber(bars[bars.length - 1]?.close) : null;
+        return [ticker, { bars, latestClose }];
+      } catch (err) {
+        console.error(`[congress-returns:${ticker}]`, err.message);
+        return [ticker, { bars: [], latestClose: null }];
+      }
+    })
+  );
+  return new Map(entries);
+}
+
+async function enrichCongressTradesWithReturns(trades) {
+  const returnMap = await buildCongressReturnMap(trades);
+  return trades.map((trade) => {
+    if (trade.type !== 'purchase' && trade.type !== 'sale') {
+      return {
+        ...trade,
+        estimatedReturnPct: null,
+        currentPrice: null,
+        entryPrice: null,
+      };
+    }
+
+    const tickerData = returnMap.get(trade.ticker);
+    const currentPrice = finiteNumber(tickerData?.latestClose);
+    const entryPrice = findEntryCloseForDate(tickerData?.bars || [], trade.transactionDate);
+    if (!Number.isFinite(currentPrice) || !Number.isFinite(entryPrice) || entryPrice <= 0) {
+      return {
+        ...trade,
+        estimatedReturnPct: null,
+        currentPrice: currentPrice ?? null,
+        entryPrice: entryPrice ?? null,
+      };
+    }
+
+    const rawPct = ((currentPrice / entryPrice) - 1) * 100;
+    const estimatedReturnPct = trade.type === 'sale' ? -rawPct : rawPct;
+
+    return {
+      ...trade,
+      estimatedReturnPct,
+      currentPrice,
+      entryPrice,
+    };
+  });
 }
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 app.get('/api/latest-congress', async (req, res) => {
   try {
-    const now = Date.now();
-    if (!congressCache || now - congressLastFetch > CONGRESS_CACHE_TTL) {
-      congressCache = await fetchCongressData();
-      congressLastFetch = now;
-    }
-
     const limit = Math.min(parseInt(req.query.limit || '60', 10), 500);
-
-    // Quiver fields: Representative, ReportDate, TransactionDate, Ticker, Transaction,
-    //   Range, House, Amount, Party, TickerType, Description, BioGuideID
-    const trades = [];
-    for (const t of (Array.isArray(congressCache) ? congressCache : [])) {
-      const mapped = mapQuiverCongressTrade(t);
-      if (mapped) trades.push(mapped);
+    const { trades, stale } = await ensureCongressTrades({ limit });
+    if (stale) {
+      res.setHeader('X-Data-Stale', '1');
     }
-
-    trades.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
-    res.json({ trades: trades.slice(0, limit) });
+    res.json({ trades });
   } catch (err) {
     console.error('[latest-congress]', err.message);
     res.status(502).json({ error: err.message, trades: [] });
@@ -243,6 +537,8 @@ function groupCongressMemberActivity(trades) {
         buyAmountMin: 0,
         sellAmountMin: 0,
         totalAmountMin: 0,
+        returnWeight: 0,
+        weightedReturnSum: 0,
         latestTradeDate: '',
         topTickers: new Map(),
         recentTrades: [],
@@ -272,6 +568,9 @@ function groupCongressMemberActivity(trades) {
         saleCount: 0,
         estimatedGrossAmountMin: 0,
         estimatedNetAmountMin: 0,
+        returnWeight: 0,
+        weightedReturnSum: 0,
+        averageReturnPct: null,
         latestTradeDate: '',
       });
     }
@@ -285,6 +584,14 @@ function groupCongressMemberActivity(trades) {
     } else if (trade.type === 'sale') {
       tickerBucket.saleCount += 1;
       tickerBucket.estimatedNetAmountMin -= trade.amountMin || 0;
+    }
+
+    if (Number.isFinite(trade.estimatedReturnPct)) {
+      const weight = trade.amountMin > 0 ? trade.amountMin : 1;
+      bucket.returnWeight += weight;
+      bucket.weightedReturnSum += trade.estimatedReturnPct * weight;
+      tickerBucket.returnWeight += weight;
+      tickerBucket.weightedReturnSum += trade.estimatedReturnPct * weight;
     }
 
     if (bucket.recentTrades.length < 8) {
@@ -308,8 +615,13 @@ function groupCongressMemberActivity(trades) {
     totalAmountMin: member.totalAmountMin,
     latestTradeDate: member.latestTradeDate,
     topTickers: [...member.topTickers.values()]
+      .map((ticker) => ({
+        ...ticker,
+        averageReturnPct: ticker.returnWeight > 0 ? ticker.weightedReturnSum / ticker.returnWeight : null,
+      }))
       .sort((a, b) => b.estimatedGrossAmountMin - a.estimatedGrossAmountMin || b.tradeCount - a.tradeCount)
       .slice(0, 10),
+    averageReturnPct: member.returnWeight > 0 ? member.weightedReturnSum / member.returnWeight : null,
     recentTrades: [...member.recentTrades]
       .sort((a, b) => b.transactionDate.localeCompare(a.transactionDate) || (b.amountMin || 0) - (a.amountMin || 0))
       .slice(0, 8),
@@ -323,15 +635,9 @@ async function buildCongressMemberActivity(days) {
     return cached.payload;
   }
 
-  const allTrades = (await ensureCongressData())
-    .map(mapQuiverCongressTrade)
-    .filter(Boolean);
-
-  const cutoff = new Date();
-  cutoff.setUTCDate(cutoff.getUTCDate() - days);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
-  const filtered = allTrades.filter((trade) => trade.transactionDate && trade.transactionDate >= cutoffStr);
-  const members = groupCongressMemberActivity(filtered).sort((a, b) =>
+  const { trades: filtered } = await ensureCongressTrades({ days });
+  const enrichedTrades = await enrichCongressTradesWithReturns(filtered);
+  const members = groupCongressMemberActivity(enrichedTrades).sort((a, b) =>
     b.totalAmountMin - a.totalAmountMin
     || b.totalTrades - a.totalTrades
     || b.latestTradeDate.localeCompare(a.latestTradeDate)
@@ -377,12 +683,6 @@ app.get('/api/congress-members', async (req, res) => {
 
 app.get('/api/congress-trades', async (req, res) => {
   try {
-    const now = Date.now();
-    if (!congressCache || now - congressLastFetch > CONGRESS_CACHE_TTL) {
-      congressCache = await fetchCongressData();
-      congressLastFetch = now;
-    }
-
     const tickers = String(req.query.tickers || '')
       .split(',')
       .map((ticker) => ticker.trim().replace(/\.(TO|TSX)$/i, '').toUpperCase())
@@ -392,26 +692,11 @@ app.get('/api/congress-trades', async (req, res) => {
       return res.json({ trades: [] });
     }
 
-    const tickerSet = new Set(uniqueTickers);
     const days = Math.min(Math.max(parseInt(req.query.days || '90', 10), 1), 365);
-    const cutoff = new Date();
-    cutoff.setUTCDate(cutoff.getUTCDate() - days);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
-
-    const trades = [];
-    for (const entry of (Array.isArray(congressCache) ? congressCache : [])) {
-      const mapped = mapQuiverCongressTrade(entry);
-      if (!mapped) continue;
-      if (!tickerSet.has(mapped.ticker)) continue;
-      if (!mapped.transactionDate || mapped.transactionDate < cutoffStr) continue;
-      trades.push(mapped);
+    const { trades, stale } = await ensureCongressTrades({ tickers: uniqueTickers, days });
+    if (stale) {
+      res.setHeader('X-Data-Stale', '1');
     }
-
-    trades.sort((a, b) =>
-      b.transactionDate.localeCompare(a.transactionDate)
-      || ((b.amountMin || 0) - (a.amountMin || 0))
-    );
-
     res.json({ trades });
   } catch (err) {
     console.error('[congress-trades]', err.message);
@@ -1028,13 +1313,69 @@ async function fetchMarketFilings(days = 14) {
   });
 }
 
-async function ensureCongressData() {
+async function ensureCongressTrades({ tickers = null, days = null, limit = null } = {}) {
+  const cutoff = Number.isFinite(days) && days > 0
+    ? (() => {
+        const date = new Date();
+        date.setUTCDate(date.getUTCDate() - days);
+        return date.toISOString().slice(0, 10);
+      })()
+    : null;
+
+  if (hasMarketDataDb()) {
+    try {
+      const [dbTrades, syncState] = await Promise.all([
+        readCongressTradesFromDb({ tickers, cutoff, limit }),
+        getMarketDataSyncState(MARKET_DATA_DATASETS.congress),
+      ]);
+      const isFresh = isSyncStateFresh(syncState, CONGRESS_CACHE_TTL);
+
+      if (dbTrades.length) {
+        if (!isFresh) {
+          refreshCongressTradesFromSource().catch((err) => {
+            console.error('[congress-refresh]', err.message);
+          });
+        }
+        return { trades: dbTrades, stale: !isFresh };
+      }
+
+      const refreshed = await refreshCongressTradesFromSource();
+      const filtered = refreshed.filter((trade) => {
+        if (Array.isArray(tickers) && tickers.length && !tickers.includes(trade.ticker)) return false;
+        if (cutoff && trade.transactionDate < cutoff) return false;
+        return true;
+      });
+      return {
+        trades: Number.isFinite(limit) && limit > 0 ? filtered.slice(0, limit) : filtered,
+        stale: false,
+      };
+    } catch (err) {
+      console.error('[congress-db-fallback]', err.message);
+    }
+  }
+
   const now = Date.now();
   if (!congressCache || now - congressLastFetch > CONGRESS_CACHE_TTL) {
-    congressCache = await fetchCongressData();
-    congressLastFetch = now;
+    await refreshCongressTradesFromSource();
   }
-  return congressCache;
+
+  const mappedTrades = (Array.isArray(congressCache) ? congressCache : [])
+    .map(mapQuiverCongressTrade)
+    .filter(Boolean)
+    .filter((trade) => {
+      if (Array.isArray(tickers) && tickers.length && !tickers.includes(trade.ticker)) return false;
+      if (cutoff && trade.transactionDate < cutoff) return false;
+      return true;
+    })
+    .sort((a, b) =>
+      (b.transactionDate || '').localeCompare(a.transactionDate || '')
+      || ((b.amountMin || 0) - (a.amountMin || 0))
+    );
+
+  return {
+    trades: Number.isFinite(limit) && limit > 0 ? mappedTrades.slice(0, limit) : mappedTrades,
+    stale: false,
+  };
 }
 
 async function buildStockIntelligence(symbol) {
@@ -1049,10 +1390,10 @@ async function buildStockIntelligence(symbol) {
     console.error('[stock-intelligence/insiders]', err.message);
   }
 
-  const [marketData, ownershipFilings, congressData] = await Promise.all([
+  const [marketData, ownershipFilings, congressResult] = await Promise.all([
     fetchQuoteProfileAndContext(normalized),
     fetchCompanyOwnershipFilings(normalized),
-    ensureCongressData().catch(() => []),
+    ensureCongressTrades({ tickers: [baseTicker(normalized)], days: 90 }).catch(() => ({ trades: [] })),
   ]);
 
   const closeSeries = marketData.candles.map((bar) => finiteNumber(bar.close)).filter((value) => value != null);
@@ -1113,11 +1454,9 @@ async function buildStockIntelligence(symbol) {
     };
   })();
 
-  const normalizedCongress = (Array.isArray(congressData) ? congressData : [])
-    .map(mapQuiverCongressTrade)
-    .filter(Boolean)
-    .filter((trade) => trade.ticker === baseTicker(normalized))
-    .sort((a, b) => (b.transactionDate || '').localeCompare(a.transactionDate || ''));
+  const normalizedCongress = Array.isArray(congressResult?.trades)
+    ? congressResult.trades
+    : [];
 
   const nextEarnings = Array.isArray(marketData.earningsCalendar) && marketData.earningsCalendar.length
     ? marketData.earningsCalendar
@@ -1596,6 +1935,14 @@ async function buildCaInsiderCache(days, mode) {
         || (b.transactionDate || '').localeCompare(a.transactionDate || '')
         || ((b.totalValue || 0) - (a.totalValue || 0))
       );
+
+      if (hasMarketDataDb()) {
+        if (allTrades.length) {
+          await writeCaInsiderTradesToDb(allTrades);
+        }
+        await setMarketDataSyncState(MARKET_DATA_DATASETS.caInsiders(days, mode), allTrades.length);
+      }
+
       caInsiderCaches[cacheKey] = { trades: allTrades };
       caInsiderLastFetch[cacheKey] = Date.now();
       return caInsiderCaches[cacheKey];
@@ -1619,6 +1966,28 @@ app.get('/api/ca-insider-activity', async (req, res) => {
   const isFresh = hasCache && (Date.now() - (caInsiderLastFetch[cacheKey] || 0) <= CA_INSIDER_TTL);
 
   try {
+    if (hasMarketDataDb()) {
+      try {
+        const [dbTrades, syncState] = await Promise.all([
+          readCaInsiderTradesFromDb(days, mode),
+          getMarketDataSyncState(MARKET_DATA_DATASETS.caInsiders(days, mode)),
+        ]);
+        const dbFresh = isSyncStateFresh(syncState, CA_INSIDER_TTL);
+
+        if (dbTrades.length) {
+          if (!dbFresh) {
+            buildCaInsiderCache(days, mode).catch((err) => {
+              console.error(`[ca-insider-db-refresh:${cacheKey}]`, err.message);
+            });
+            res.setHeader('X-Data-Stale', '1');
+          }
+          return res.json({ trades: dbTrades });
+        }
+      } catch (err) {
+        console.error(`[ca-insider-db-fallback:${cacheKey}]`, err.message);
+      }
+    }
+
     if (!hasCache) {
       await buildCaInsiderCache(days, mode);
     } else if (!isFresh) {

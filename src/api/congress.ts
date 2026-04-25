@@ -26,6 +26,7 @@ export interface CongressTickerActivity {
   saleCount: number;
   estimatedGrossAmountMin: number;
   estimatedNetAmountMin: number;
+  averageReturnPct: number | null;
   latestTradeDate: string;
 }
 
@@ -43,6 +44,7 @@ export interface CongressMemberActivity {
   sellAmountMin: number;
   netAmountMin: number;
   totalAmountMin: number;
+  averageReturnPct: number | null;
   latestTradeDate: string;
   topTickers: CongressTickerActivity[];
   recentTrades: CongressTrade[];

@@ -50,11 +50,17 @@ function formatCongressAmount(s: string): { mid: string; range: string } {
   return { mid: s, range: '' };
 }
 
+function formatPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${value.toFixed(1)}%`;
+}
+
 export default function CongressPage() {
   const [tickerFilter, setTickerFilter] = useState('');
   const [sortBy, setSortBy] = useState<'date' | 'size'>('date');
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
-  const [memberSort, setMemberSort] = useState<'active' | 'buyers' | 'sellers'>('active');
+  const [memberSort, setMemberSort] = useState<'active' | 'buyers' | 'sellers' | 'returns'>('returns');
   const [selectedMemberId, setSelectedMemberId] = useState('');
   const navigate = useNavigate();
   const { items: watchlist } = useWatchlistStore();
@@ -81,6 +87,11 @@ export default function CongressPage() {
   const rankedMembers = useMemo(() => {
     const list = memberActivity?.members ?? [];
     return [...list].sort((a, b) => {
+      if (memberSort === 'returns') {
+        return (b.averageReturnPct ?? -Infinity) - (a.averageReturnPct ?? -Infinity)
+          || b.totalAmountMin - a.totalAmountMin
+          || b.totalTrades - a.totalTrades;
+      }
       if (memberSort === 'buyers') {
         return b.buyAmountMin - a.buyAmountMin || b.purchaseCount - a.purchaseCount || b.totalTrades - a.totalTrades;
       }
@@ -118,7 +129,7 @@ export default function CongressPage() {
                 Ranked Member Activity Portfolios
               </p>
               <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-                Ranked from disclosed trading activity over the last 180 days. This is an inferred activity portfolio, not a guaranteed live holdings ledger.
+                Ranked from disclosed trading activity over the last 180 days. Returns are estimated from stock performance since each disclosed trade date, direction-adjusted for buys vs sells.
               </p>
             </div>
             <div style={{ display: 'flex', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: 3, gap: 2 }}>
@@ -126,6 +137,7 @@ export default function CongressPage() {
                 { id: 'active', label: 'Most Active' },
                 { id: 'buyers', label: 'Biggest Buyers' },
                 { id: 'sellers', label: 'Biggest Sellers' },
+                { id: 'returns', label: 'Best Returns' },
               ] as const).map((option) => (
                 <button
                   key={option.id}
@@ -200,6 +212,12 @@ export default function CongressPage() {
                         <Metric label="Activity" value={compactDollar(member.totalAmountMin)} />
                         <Metric label="Buys" value={String(member.purchaseCount)} positive />
                         <Metric label="Sells" value={String(member.saleCount)} negative />
+                        <Metric
+                          label="Return"
+                          value={formatPercent(member.averageReturnPct)}
+                          positive={member.averageReturnPct != null && member.averageReturnPct >= 0}
+                          negative={member.averageReturnPct != null && member.averageReturnPct < 0}
+                        />
                       </div>
                     </button>
                   );
@@ -220,6 +238,17 @@ export default function CongressPage() {
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <SummaryPill label="Buy Value" value={compactDollar(selectedMember.buyAmountMin)} tone="up" />
                       <SummaryPill label="Sell Value" value={compactDollar(selectedMember.sellAmountMin)} tone="down" />
+                      <SummaryPill
+                        label="Return"
+                        value={formatPercent(selectedMember.averageReturnPct)}
+                        tone={
+                          selectedMember.averageReturnPct == null
+                            ? 'neutral'
+                            : selectedMember.averageReturnPct >= 0
+                              ? 'up'
+                              : 'down'
+                        }
+                      />
                       <SummaryPill
                         label="Net"
                         value={`${selectedMember.netAmountMin >= 0 ? '+' : '-'}${compactDollar(Math.abs(selectedMember.netAmountMin))}`}
@@ -259,7 +288,7 @@ export default function CongressPage() {
                                   {ticker.ticker}
                                 </div>
                                 <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                                  {ticker.tradeCount} trades · {ticker.purchaseCount} buys · {ticker.saleCount} sells
+                                  {ticker.tradeCount} trades · {ticker.purchaseCount} buys · {ticker.saleCount} sells · {formatPercent(ticker.averageReturnPct)}
                                 </div>
                               </div>
                               <div style={{ textAlign: 'right' }}>

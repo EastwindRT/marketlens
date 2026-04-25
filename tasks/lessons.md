@@ -1,3 +1,27 @@
+## Lesson: 2026-04-25 - Warm in-memory cache is not enough for slow third-party research feeds
+
+**Observation:** Congress and Canadian insider pages could feel fast in one moment and slow in the next, depending mostly on whether the Render instance had already rebuilt its in-memory cache.
+**Root cause:** The app was treating expensive third-party data as request-time fetches with memory caching, which works only while the process stays warm. Restarts and expiry pushed the rebuild cost back onto the next user.
+**Rule:** When an external market-data feed is expensive to rebuild but only changes on a minute/hour cadence, persist normalized rows into your own database and let the UI read from that snapshot first. Keep in-memory cache as an accelerator on top, not as the only durable fast path.
+
+---
+
+## Lesson: 2026-04-25 - New persistence layers need graceful fallback until rollout is complete
+
+**Observation:** Adding a Supabase-backed acceleration path is only half the job; there is a rollout window where the code may deploy before the migration or service-role key exists in production.
+**Root cause:** Feature code and infrastructure changes do not become live simultaneously. If the code assumes the new tables exist immediately, it can turn a speed improvement into a production outage.
+**Rule:** Any new server-side DB fast path should be optional at runtime. Detect missing keys or table-read failures, log them, and fall back to the old upstream-fetch behavior until the migration and environment changes are fully rolled out.
+
+---
+
+## Lesson: 2026-04-25 - Congress "returns" should be framed as estimated trade timing, not portfolio P&L
+
+**Observation:** Users naturally want Congress members ranked by returns, but STOCK Act disclosures do not provide exact share counts, current position sizes, or a reconciled holdings ledger.
+**Root cause:** The source data gives trade dates and value ranges, not exact entries/exits for a fully modeled portfolio. That means any return metric is necessarily an estimate based on stock movement after the disclosed trade.
+**Rule:** If ranking Congress members by returns, label it as estimated trade performance or return timing. Compute it from post-trade stock movement, direction-adjust buys vs sells, weight by disclosed trade-size ranges, and avoid implying exact realized portfolio returns.
+
+---
+
 ## Lesson: 2026-04-25 - Congress disclosures support strong activity rankings, not perfect live portfolios
 
 **Observation:** Users wanted “the full stock portfolio for all members and rank them,” but the underlying Quiver / STOCK Act feed is a disclosure stream of trades, not a continuously reconciled holdings ledger.

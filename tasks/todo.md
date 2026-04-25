@@ -1,3 +1,56 @@
+## Plan: Persist Congress + Canadian market data for faster reads (2026-04-25)
+
+### Goal
+1. Make the slowest external research datasets load more predictably by moving them behind Supabase-backed storage instead of depending only on warm Render memory.
+2. Keep the current live fallback behavior intact so the app still works before the migration/env rollout is finished.
+
+### Root causes / context found
+- Congress and Canadian insider/filing pages were fast only when the Render instance was warm and the in-memory caches were already populated.
+- After restarts or cache expiry, users could end up paying the full upstream rebuild cost again, especially on Canadian filings.
+- The earlier Phase 2 UI improvements were already done, but the data path still depended heavily on request-time external fetches.
+
+### Shipped
+- [x] `server.cjs` - added optional server-side Supabase client wiring via `SUPABASE_SERVICE_ROLE_KEY`, falling back cleanly when the service key or tables are not available.
+- [x] `server.cjs` - added shared market-data sync-state helpers so server routes can tell whether persisted Congress / Canadian snapshots are fresh or stale.
+- [x] `server.cjs` - Congress routes (`/api/latest-congress`, `/api/congress-trades`, `/api/congress-members`, stock-intelligence congress slice) now prefer Supabase-backed normalized trade rows when present, while still falling back to Quiver + memory cache safely.
+- [x] `server.cjs` - Canadian insider route (`/api/ca-insider-activity`) now prefers Supabase-backed persisted rows when present and serves stale DB data first while refreshing in the background.
+- [x] `server.cjs` - both persistence paths are guarded with DB-fallback logging so missing migrations do not break the live site.
+- [x] `supabase_migration_market_data_cache.sql` - added schema for:
+  - `market_data_sync_state`
+  - `congress_trades`
+  - `ca_insider_filings`
+- [x] `render.yaml` - added `SUPABASE_SERVICE_ROLE_KEY` so Render can use the DB-backed fast path once configured.
+- [x] `npm run build` clean after the persistence pass.
+- [x] `node --check server.cjs` clean after the persistence pass.
+
+### Required rollout steps
+- [ ] Run `supabase_migration_market_data_cache.sql` in the live Supabase project.
+- [ ] Add `SUPABASE_SERVICE_ROLE_KEY` in Render and redeploy.
+
+### Expected user-facing outcome
+- Congress views should become more predictable across Render restarts because reads can come from persisted normalized rows instead of rebuilding from Quiver on demand.
+- Canadian insider / filing tabs should become much steadier because the server can serve persisted DB rows first instead of relying purely on warm process memory.
+- The app should remain safe during rollout because the old external-fetch fallback path is still intact if the migration or env var is missing.
+
+### Open / next improvements
+- [ ] Once the live migration is applied, consider adding a scheduled background sync so Congress / Canadian data refreshes proactively instead of waiting for the next user request.
+- [ ] If DB-backed reads materially improve perceived speed, consider moving additional slow research datasets there next, especially market-wide filing feeds.
+
+## Plan: Congress return ranking default (2026-04-25)
+
+### Goal
+1. Make the Congress page rank members by estimated trade performance by default instead of only raw disclosed activity size.
+
+### Shipped
+- [x] `server.cjs` - added estimated congress trade-return enrichment using post-disclosure stock performance, direction-adjusted so well-timed sells score positively when the stock later falls.
+- [x] `src/api/congress.ts` - added `averageReturnPct` fields for member and ticker activity payloads.
+- [x] `src/pages/Congress.tsx` - added `Best Returns` ranking and made it the default member ranking mode.
+- [x] `npm run build` clean after the congress return-ranking change.
+
+### Important interpretation note
+- [x] Congress returns are estimated, not exact realized portfolio returns.
+- [x] They are derived from stock performance since each disclosed trade date and weighted by disclosed trade-size ranges, because STOCK Act data does not include exact position sizes or a continuously reconciled holdings ledger.
+
 ## Plan: Congress rankings + sector filters + RSI signal pass (2026-04-25)
 
 ### Requested improvements
