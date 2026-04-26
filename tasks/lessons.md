@@ -1,3 +1,11 @@
+## Lesson: 2026-04-25 - Aggregate pages usually deserve a snapshot endpoint before they need more frontend tuning
+
+**Observation:** The leaderboard had already received quote batching and refresh-state polish, but it still paid three separate client reads (`players`, `holdings`, `recent trades`) before the page could fully settle.
+**Root cause:** We optimized the rendering path before fully collapsing the data path. On aggregate pages, multiple independent reads create unnecessary latency and increase the chance of partial-state churn even when each individual query is fine.
+**Rule:** Once an aggregate page becomes important and stable, give it a server-backed snapshot endpoint that returns the full page payload in one response. Keep the old client-read path as a fallback, but make the snapshot path the default for performance and operational clarity.
+
+---
+
 ## Lesson: 2026-04-25 - Agent-ready APIs need explicit schema docs, not just stable code
 
 **Observation:** A normalized stock-intelligence payload is valuable, but agents and future developers still pay unnecessary friction if the shape only exists implicitly inside one server function.

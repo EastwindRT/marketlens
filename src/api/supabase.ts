@@ -106,6 +106,12 @@ export interface SearchLog {
   player_email?: string | null;
 }
 
+export interface LeaderboardSnapshot {
+  players: Player[];
+  holdings: Holding[];
+  recentTrades: (Trade & { player_name: string })[];
+}
+
 // ── Google OAuth auth ─────────────────────────────────────────────────────────
 
 export async function signInWithGoogle(): Promise<void> {
@@ -556,4 +562,19 @@ export async function getRecentTrades(limit = 20): Promise<(Trade & { player_nam
     ...t,
     player_name: t.players?.name ?? 'Unknown',
   }));
+}
+
+export async function getLeaderboardSnapshot(limit = 8): Promise<LeaderboardSnapshot> {
+  const res = await fetch(`/api/leaderboard-snapshot?limit=${encodeURIComponent(limit)}`);
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json?.error || `Leaderboard snapshot request failed (${res.status})`);
+  }
+
+  const json = await res.json();
+  return {
+    players: Array.isArray(json?.players) ? json.players : [],
+    holdings: Array.isArray(json?.holdings) ? json.holdings : [],
+    recentTrades: Array.isArray(json?.recentTrades) ? json.recentTrades : [],
+  };
 }

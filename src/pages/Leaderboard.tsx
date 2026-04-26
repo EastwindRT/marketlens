@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { TrendingUp, TrendingDown, Clock, RotateCcw } from 'lucide-react';
-import { getAllPlayers, getAllHoldings, getRecentTrades, supabase } from '../api/supabase';
+import { getAllPlayers, getAllHoldings, getLeaderboardSnapshot, getRecentTrades, supabase } from '../api/supabase';
 import { useLeagueStore } from '../store/leagueStore';
 import type { Player, Holding, Trade } from '../api/supabase';
 import { useStockQuotes } from '../hooks/useStockData';
@@ -254,11 +254,21 @@ export default function Leaderboard() {
       if (showBlockingState && players.length === 0 && holdings.length === 0) setLoading(true);
       else setRefreshing(true);
       setError('');
-      const [p, h, t] = await Promise.all([
-        getAllPlayers(),
-        getAllHoldings(),
-        getRecentTrades(8),
-      ]);
+      let p: Player[];
+      let h: Holding[];
+      let t: (Trade & { player_name: string })[];
+      try {
+        const snapshot = await getLeaderboardSnapshot(8);
+        p = snapshot.players;
+        h = snapshot.holdings;
+        t = snapshot.recentTrades;
+      } catch {
+        [p, h, t] = await Promise.all([
+          getAllPlayers(),
+          getAllHoldings(),
+          getRecentTrades(8),
+        ]);
+      }
       setPlayers(p);
       setHoldings(h);
       setRecentTrades(t);

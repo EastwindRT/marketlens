@@ -1,3 +1,28 @@
+## Plan: Sprint D item 2 — Server-backed leaderboard snapshots (2026-04-25)
+
+### Goal
+Reduce leaderboard load latency by serving `players + holdings + recent trades` as one server snapshot instead of rebuilding the page from three client-side Supabase reads on every load.
+
+### Root cause
+- `Leaderboard.tsx` still fetched `getAllPlayers()`, `getAllHoldings()`, and `getRecentTrades()` separately, then stitched the ranking view together in the browser.
+- That meant more round trips, more partial-state churn, and more client work on one of the most frequently visited aggregate pages.
+- We had already proven the same shape worked well for portfolio pages, so leaderboard was the next natural aggregation target.
+
+### Shipped
+- [x] `server.cjs` — added `GET /api/leaderboard-snapshot?limit=...` backed by server-side Supabase reads returning `{ players, holdings, recentTrades }` in one payload.
+- [x] `server.cjs` — snapshot endpoint fails safely with explicit `503 / 502` responses so the client can degrade cleanly if the server-side read path is unavailable.
+- [x] `src/api/supabase.ts` — added `getLeaderboardSnapshot(limit)` helper.
+- [x] `src/pages/Leaderboard.tsx` — leaderboard now prefers the server snapshot path and falls back to the older `getAllPlayers + getAllHoldings + getRecentTrades` flow if the endpoint fails.
+- [x] `node --check server.cjs` passed.
+- [x] `npm run build` passed.
+
+### Expected user-facing outcome
+- Leaderboard should settle faster because its core data snapshot now comes back in one hop.
+- Repeat refreshes should feel steadier because the page no longer depends on three separate client reads succeeding at the same time.
+- The fallback path keeps the feature resilient if the server-side snapshot endpoint is temporarily unavailable.
+
+---
+
 ## Plan: Sprint C item 1 — Deep Analyze cost tuning (2026-04-25)
 
 ### Goal

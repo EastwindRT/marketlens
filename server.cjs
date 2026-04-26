@@ -217,6 +217,46 @@ async function readPortfolioSnapshotFromDb(playerId) {
   };
 }
 
+async function readLeaderboardSnapshotFromDb(limit = 8) {
+  if (!hasServerSupabase()) {
+    throw new Error('server supabase not configured');
+  }
+
+  const [playersRes, holdingsRes, tradesRes] = await Promise.all([
+    serverSupabase
+      .from('players')
+      .select('*')
+      .order('name'),
+    serverSupabase
+      .from('holdings')
+      .select('*'),
+    serverSupabase
+      .from('trades')
+      .select('*, players(name)')
+      .order('traded_at', { ascending: false })
+      .limit(limit),
+  ]);
+
+  if (playersRes.error) {
+    throw new Error(`leaderboard players read failed: ${playersRes.error.message}`);
+  }
+  if (holdingsRes.error) {
+    throw new Error(`leaderboard holdings read failed: ${holdingsRes.error.message}`);
+  }
+  if (tradesRes.error) {
+    throw new Error(`leaderboard trades read failed: ${tradesRes.error.message}`);
+  }
+
+  return {
+    players: playersRes.data || [],
+    holdings: holdingsRes.data || [],
+    recentTrades: (tradesRes.data || []).map((trade) => ({
+      ...trade,
+      player_name: trade.players?.name || 'Unknown',
+    })),
+  };
+}
+
 async function getMarketDataSyncState(dataset) {
   if (!hasMarketDataDb()) return null;
   const { data, error } = await serverSupabase
@@ -940,6 +980,21 @@ app.get('/api/portfolio-snapshot', async (req, res) => {
   } catch (err) {
     console.error('[portfolio-snapshot]', err.message);
     res.status(502).json({ error: err.message, player: null, holdings: [], watchlist: [] });
+  }
+});
+
+app.get('/api/leaderboard-snapshot', async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit || '8', 10), 1), 50);
+  if (!hasServerSupabase()) {
+    return res.status(503).json({ error: 'Leaderboard snapshot not configured', players: [], holdings: [], recentTrades: [] });
+  }
+
+  try {
+    const snapshot = await readLeaderboardSnapshotFromDb(limit);
+    res.json(snapshot);
+  } catch (err) {
+    console.error('[leaderboard-snapshot]', err.message);
+    res.status(502).json({ error: err.message, players: [], holdings: [], recentTrades: [] });
   }
 });
 
