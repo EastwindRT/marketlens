@@ -48,7 +48,7 @@ To run Claude + Codex in parallel without merge conflicts, work is split by file
   - `agent_run_logs` (id uuid pk, run_at timestamptz default now(), job text, items_processed int, tokens_used int, ms_elapsed int, error text)
   - `app_settings` (key text pk, value jsonb) — seed `twitter_enabled=false`
   - RLS: read-only public on `news_items` and `agent_alerts`; service-role-only writes; deny all on `agent_run_logs`
-- [ ] `server.cjs` — Supabase server helpers for the new tables (insert/update/select), reusing `serverSupabase`
+- [x] `server.cjs` — Supabase server helpers for the new tables (insert/update/select), reusing `serverSupabase`
 - [ ] `server.cjs` — `fetchYahooFinanceHeadlines()` (existing TMX/Yahoo pattern, headlines only)
 - [ ] `server.cjs` — `fetchNewsApiHeadlines(query, sources)` with the four queries:
   - financial (default markets/business)
@@ -56,7 +56,7 @@ To run Claude + Codex in parallel without merge conflicts, work is split by file
   - "Canada OR Canadian economy OR tariffs OR Bank of Canada OR Carney" sources=Reuters, AP, Globe and Mail, CBC
   - "political OR policy OR sanctions OR trade war OR executive order" sources=Reuters, AP, FT
 - [ ] `server.cjs` — `dedupeHeadline(headline, publishedAt)` builds a stable `dedup_key` so re-fetches don't re-score the same story
-- [ ] Verification: `node --check server.cjs`, dry-run fetcher with `console.log` only
+- [x] Verification: `node --check server.cjs`, dry-run fetcher with `console.log` only
 
 #### Phase 2 — Claude scoring + scheduled job (Claude)
 - [ ] `server.cjs` — `scoreHeadlineWithClaude(headline, source, publishedAt)`:
@@ -858,3 +858,46 @@ Wire the two new routes, nav entries, and shell pages on the Codex-owned side so
 - Both new routes now exist and render coherent shells in the app.
 - Codex-side wiring is ready for Claude’s empty-array Phase 1 contract as soon as those endpoints are published.
 - If the backend is not live yet, users see a clear wiring-state message instead of a broken blank page.
+
+## Plan: News Impact + Agent Alerts — Codex Phase 2 News UI (2026-04-26)
+
+### Goal
+Upgrade the News Impact route from a shell into a real scored-feed page using Claude’s typed client contract, while staying strictly on the Codex-owned UI/hook side.
+
+### Root cause
+- Phase 1 proved route-to-endpoint wiring, but the page still stopped at placeholder copy instead of helping users skim material headlines quickly.
+- The app needed a reusable hook and card/chip components so later alerts work can share the same visual language and loading behavior.
+
+### Shipped
+- [x] `src/hooks/useNewsImpact.ts` — added the React Query wrapper around `src/api/news.ts` with stable query keys, placeholder preservation, and the default 7-score floor behavior.
+- [x] `src/components/news/ImpactCard.tsx` — added the scored headline card with score-tier styling, category pill, summary, external source link, and ticker chips that route into `/stock/:symbol`.
+- [x] `src/components/news/FilterChips.tsx` — added reusable category chips for All, Macro, Sector, Company, US Politics, Canada, Trade Policy, and Geopolitical.
+- [x] `src/pages/NewsImpact.tsx` — replaced the shell with a real News Impact page: category chips, 24H/7D window toggle, score-floor toggle, summary strip, loading/empty/error states, and `DataStatus` freshness handling.
+- [x] `npm run build` passed cleanly.
+
+### Expected user-facing outcome
+- News Impact now behaves like a real research surface instead of a placeholder route.
+- Users can quickly skim only 7+ impact stories by default, then widen the view without leaving the page.
+- Each item now exposes why it matters, what category it belongs to, and which tickers it may affect in one compact card.
+
+## Plan: News Impact + Agent Alerts — Codex Phase 3 Alerts UI + Phase 4 polish (2026-04-26)
+
+### Goal
+Turn `/alerts` into a real watchlist-briefing page using Claude’s alert contract, then close the remaining polish items from the Codex side: shared freshness handling, mobile table behavior, and empty-state copy.
+
+### Root cause
+- The Alerts route still stopped at a contract shell, so there was no reusable hook or presentational layer ready for a live briefing payload.
+- The final polish items only become real once both pages are using the shared query hooks and have actual empty/mobile states instead of placeholder copy.
+
+### Shipped
+- [x] `src/hooks/useAgentAlerts.ts` — added React Query wrappers for `/api/alerts/latest` and `/api/alerts/insider-filings`.
+- [x] `src/components/alerts/BriefingCard.tsx` — added the digest card for alert bullets, source counts, and watchlist snapshot chips.
+- [x] `src/components/alerts/InsiderFilingsTable.tsx` — added the responsive insider filings surface with desktop table layout, mobile cards, and watchlist ticker highlighting.
+- [x] `src/pages/AgentAlerts.tsx` — replaced the shell with a real alerts page driven by the current player id and watchlist state.
+- [x] Shared freshness polish is now live on both new pages via `DataStatus`, and both pages now have real loading, empty, and error copy instead of wiring-only placeholders.
+- [x] `npm run build` passed cleanly.
+
+### Expected user-facing outcome
+- Alerts now reads like a real product surface: latest watchlist digest on top, filings underneath, and clear watchlist highlighting when a row is relevant.
+- Mobile users no longer get squeezed tables; filings collapse into readable cards under the desktop breakpoint.
+- Both new pages now feel consistent with the rest of TARS in loading and freshness behavior.

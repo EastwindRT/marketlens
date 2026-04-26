@@ -1,39 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
 import { Bell } from 'lucide-react';
+import { BriefingCard } from '../components/alerts/BriefingCard';
+import { InsiderFilingsTable } from '../components/alerts/InsiderFilingsTable';
 import { DataStatus } from '../components/ui/DataStatus';
-
-type AlertBriefing = {
-  id: string;
-  createdAt: string;
-  bullets: string[];
-  sourceNewsIds: string[];
-  sourceFilings: Array<{
-    ticker: string;
-    insiderName: string;
-    type: 'BUY' | 'SELL';
-    amount: number;
-    filedDate: string;
-    accessionNo: string;
-  }>;
-  watchlistSnapshot: string[];
-};
-
-type AlertResponse = {
-  schemaVersion: number;
-  alert: AlertBriefing | null;
-};
-
-type InsiderFilingsResponse = {
-  schemaVersion: number;
-  filings: Array<{
-    ticker: string;
-    insiderName: string;
-    type: 'BUY' | 'SELL';
-    amount: number;
-    filedDate: string;
-    accessionNo: string;
-  }>;
-};
+import { useAgentInsiderFilings, useAgentLatestAlert } from '../hooks/useAgentAlerts';
+import { useLeagueStore } from '../store/leagueStore';
+import { useWatchlistStore } from '../store/watchlistStore';
 
 function PlaceholderCard({ title, body }: { title: string; body: string }) {
   return (
@@ -54,36 +25,53 @@ function PlaceholderCard({ title, body }: { title: string; body: string }) {
   );
 }
 
-export default function AgentAlertsPage() {
-  const latestAlert = useQuery({
-    queryKey: ['agent-alerts-phase1', 'latest'],
-    queryFn: async (): Promise<AlertResponse> => {
-      const response = await fetch('/api/alerts/latest');
-      if (!response.ok) {
-        throw new Error(`Alerts endpoint returned ${response.status}`);
-      }
-      return response.json();
-    },
-    staleTime: 60 * 1000,
-    retry: false,
-  });
+function SummaryCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: 'neutral' | 'blue' | 'amber';
+}) {
+  const palette =
+    tone === 'blue'
+      ? { border: 'rgba(45, 107, 255, 0.24)', color: 'var(--accent-blue-light)' }
+      : tone === 'amber'
+        ? { border: 'rgba(247, 147, 26, 0.24)', color: '#F7931A' }
+        : { border: 'var(--border-subtle)', color: 'var(--text-primary)' };
 
-  const insiderFilings = useQuery({
-    queryKey: ['agent-alerts-phase1', 'filings'],
-    queryFn: async (): Promise<InsiderFilingsResponse> => {
-      const response = await fetch('/api/alerts/insider-filings?days=7');
-      if (!response.ok) {
-        throw new Error(`Insider filings endpoint returned ${response.status}`);
-      }
-      return response.json();
-    },
-    staleTime: 60 * 1000,
-    retry: false,
-  });
+  return (
+    <div
+      style={{
+        background: 'var(--bg-surface)',
+        border: `1px solid ${palette.border}`,
+        borderRadius: 16,
+        padding: 14,
+      }}
+    >
+      <p style={{ margin: '0 0 6px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, color: 'var(--text-tertiary)' }}>
+        {label}
+      </p>
+      <p style={{ margin: 0, fontSize: 18, fontWeight: 800, color: palette.color }}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+export default function AgentAlertsPage() {
+  const playerId = useLeagueStore((state) => state.player?.id ?? null);
+  const watchlistSymbols = useWatchlistStore((state) => state.items.map((item) => item.symbol.toUpperCase()));
+  const latestAlert = useAgentLatestAlert(playerId);
+  const insiderFilings = useAgentInsiderFilings(7);
 
   const isLoading = latestAlert.isLoading || insiderFilings.isLoading;
   const hasError = latestAlert.error || insiderFilings.error;
   const updatedAt = Math.max(latestAlert.dataUpdatedAt || 0, insiderFilings.dataUpdatedAt || 0);
+  const note = latestAlert.data?.note ?? latestAlert.data?.error ?? insiderFilings.data?.error ?? null;
+  const alert = latestAlert.data?.alert ?? null;
+  const filings = insiderFilings.data?.filings ?? [];
 
   return (
     <div className="px-4 md:px-8 pt-5 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
@@ -94,7 +82,7 @@ export default function AgentAlertsPage() {
             <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>Alerts</h1>
           </div>
           <p style={{ margin: 0, fontSize: 14, color: 'var(--text-secondary)', maxWidth: 720 }}>
-            Personalized watchlist briefings and material insider filing alerts will surface here. Phase 1 is route and contract wiring only.
+            Personalized watchlist briefings and material insider filings, organized so you can scan what matters without reading the whole feed.
           </p>
         </div>
         <DataStatus
@@ -104,15 +92,44 @@ export default function AgentAlertsPage() {
         />
       </div>
 
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: 10,
+          marginBottom: 18,
+        }}
+      >
+        <SummaryCard label="Briefing status" value={alert ? 'Live' : 'Waiting'} tone={alert ? 'blue' : 'neutral'} />
+        <SummaryCard label="Watchlist names" value={String(watchlistSymbols.length)} tone="neutral" />
+        <SummaryCard label="Filings in view" value={String(filings.length)} tone="amber" />
+      </div>
+
+      {note && !hasError && (
+        <div
+          style={{
+            background: 'var(--bg-surface)',
+            border: '1px solid rgba(247, 147, 26, 0.24)',
+            borderRadius: 16,
+            padding: 14,
+            marginBottom: 16,
+          }}
+        >
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
+            {note}
+          </p>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           <PlaceholderCard
-            title="Loading briefing endpoint"
-            body="The shell is proving the alerts route can talk to Claude’s stub contract."
+            title="Loading briefing"
+            body="Pulling the latest agent digest for your current watchlist."
           />
           <PlaceholderCard
-            title="Filings table comes next"
-            body="Watchlist highlighting and responsive insider rows land in Phase 3."
+            title="Loading insider filings"
+            body="Recent material filings will land under the briefing with watchlist highlighting."
           />
         </div>
       ) : hasError ? (
@@ -125,7 +142,7 @@ export default function AgentAlertsPage() {
           }}
         >
           <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
-            Alerts route is wired, but the Phase 1 stub endpoints are not live yet.
+            Alerts are wired, but the feed could not be loaded right now.
           </p>
           <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--text-tertiary)' }}>
             Expected endpoints: <code>/api/alerts/latest</code> and <code>/api/alerts/insider-filings</code>
@@ -135,37 +152,9 @@ export default function AgentAlertsPage() {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <div
-            style={{
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 18,
-              padding: 18,
-            }}
-          >
-            <p style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
-              Briefing contract connected
-            </p>
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
-              Schema version: <strong>{latestAlert.data?.schemaVersion ?? '—'}</strong> · Latest alert present: <strong>{latestAlert.data?.alert ? 'yes' : 'no'}</strong>
-            </p>
-          </div>
-          <div
-            style={{
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 18,
-              padding: 18,
-            }}
-          >
-            <p style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
-              Insider filings contract connected
-            </p>
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
-              Schema version: <strong>{insiderFilings.data?.schemaVersion ?? '—'}</strong> · Rows returned: <strong>{insiderFilings.data?.filings.length ?? 0}</strong>
-            </p>
-          </div>
+        <div style={{ display: 'grid', gap: 16 }}>
+          <BriefingCard alert={alert} />
+          <InsiderFilingsTable filings={filings} watchlistSymbols={watchlistSymbols} />
         </div>
       )}
     </div>

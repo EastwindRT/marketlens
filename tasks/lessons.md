@@ -452,3 +452,19 @@
 **Observation:** In a phased parallel build, the UI routes can exist before the backend stub endpoints are actually published in the local workspace.
 **Root cause:** Route wiring and contract wiring move at different speeds when file ownership is strict. If the UI assumes the backend is already live, Phase 1 feels broken even when the real issue is just sequencing.
 **Rule:** For wiring-only phases, build shell pages that do three things clearly: render the route, attempt the real endpoint, and explain when the contract is not live yet. That keeps progress visible without masking backend readiness.
+
+---
+
+## Lesson: 2026-04-26 - Build the first real query surface around the typed client, not around ad hoc fetches
+
+**Observation:** The Phase 1 News Impact shell used a direct `fetch()` on purpose, but keeping that pattern into the real UI would have spread endpoint knowledge, filter logic, and fallback handling across the page itself.
+**Root cause:** Wiring phases optimize for speed of proof, while feature phases need a stable query surface. If the page owns the endpoint contract directly, every filter or state change becomes harder to reuse and harder to keep consistent with future pages.
+**Rule:** Once the backend contract is live, move immediately to a dedicated hook that wraps the typed client and owns the React Query key, stale behavior, and placeholder strategy. Keep pages focused on controls and presentation, not endpoint plumbing.
+
+---
+
+## Lesson: 2026-04-26 - Responsive data tables should degrade into cards before the content starts competing with itself
+
+**Observation:** The Alerts filings surface needs ticker, insider, type, amount, filed date, and accession data at once. That fits comfortably on desktop, but on mobile the same columns collapse into a cramped table that hides the watchlist signal.
+**Root cause:** Data-heavy research pages often start from a desktop table mental model. If the mobile fallback is left as horizontal overflow only, the most important context becomes harder to scan exactly where users need compression the most.
+**Rule:** For filings-style tables, switch to stacked cards under the mobile breakpoint and preserve the same semantic highlights there. The priority is fast scanning, not preserving the table shape at all costs.
