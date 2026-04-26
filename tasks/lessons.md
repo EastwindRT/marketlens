@@ -1,3 +1,11 @@
+## Lesson: 2026-04-25 - Agent-ready APIs need explicit schema docs, not just stable code
+
+**Observation:** A normalized stock-intelligence payload is valuable, but agents and future developers still pay unnecessary friction if the shape only exists implicitly inside one server function.
+**Root cause:** Stable code is not the same as discoverable contract. Without a published schema, every consumer has to infer field meanings, nullability, and interpretation notes independently.
+**Rule:** When building an API for agent consumption, ship a machine-readable schema endpoint and a lightweight human doc alongside the implementation. This reduces integration ambiguity and keeps the endpoint useful beyond the current UI.
+
+---
+
 ## Lesson: 2026-04-25 - Freshness UX should be a shared pattern, not page-by-page improvisation
 
 **Observation:** Several heavy pages already had some notion of refresh state, but each one surfaced it differently: subtitle text in one place, a tiny inline label in another, and no cached/fresh distinction in others.

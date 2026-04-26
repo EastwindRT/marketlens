@@ -59,6 +59,21 @@ Make data-heavy pages communicate the same way about `cached`, `last updated`, a
 
 ---
 
+## Plan: Sprint D item 1 — Stock intelligence schema docs (2026-04-25)
+
+### Goal
+Make the agent-ready stock intelligence object explicit and queryable so agents and developers do not have to infer the payload shape from application code.
+
+### Shipped
+- [x] `server.cjs` — added `GET /api/stock-intelligence/schema` returning a machine-readable schema, interpretation notes, and example payload
+- [x] `docs/stock-intelligence-schema.md` — added a human-readable repo doc describing the endpoint purpose, core sections, interpretation notes, and recommended agent workflow
+
+### Expected user-facing outcome
+- Agent integrations can discover the stock-intelligence contract directly.
+- Future developers have an explicit reference instead of reverse-engineering `buildStockIntelligence()`.
+
+---
+
 ## Plan: Sprint B item 3 — Scheduled background sync for Congress + CA (2026-04-25)
 
 ### Goal

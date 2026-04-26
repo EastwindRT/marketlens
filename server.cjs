@@ -1781,6 +1781,125 @@ async function buildStockIntelligence(symbol) {
   return payload;
 }
 
+function buildStockIntelligenceSchema() {
+  return {
+    version: 'v1',
+    endpoint: '/api/stock-intelligence?symbol=NVDA',
+    description: 'Normalized stock intelligence object for agent and UI consumers.',
+    notes: [
+      'Null means unavailable or not yet supported.',
+      'Market is CA for Canadian tickers and US otherwise.',
+      'Congress data is recent disclosed trade activity, not a reconciled live holdings ledger.',
+      'Ownership filings are currently US-only.',
+    ],
+    fields: {
+      symbol: 'Normalized ticker symbol string.',
+      asOf: 'ISO timestamp when the payload was assembled.',
+      market: '"US" | "CA".',
+      company: {
+        name: 'Display name / company name.',
+        exchange: 'Primary exchange when available.',
+        industry: 'Industry text from source metadata when available.',
+        marketCap: 'Market capitalization number when available.',
+      },
+      price: {
+        last: 'Latest price.',
+        change: 'Absolute day change.',
+        changePct: 'Percent day change.',
+        volume: 'Latest session volume.',
+        avgVolume20d: '20-day average volume.',
+        relativeVolume: 'Latest volume divided by 20-day average.',
+        participation: '"high" | "above_average" | "normal" | "light".',
+        currency: 'Trading currency, typically USD or CAD.',
+      },
+      trend: {
+        close: 'Latest close used for trend calculations.',
+        dma20: '20-day moving average.',
+        dma50: '50-day moving average.',
+        dma200: '200-day moving average.',
+        priceVs20dPct: 'Percent distance vs 20-day moving average.',
+        priceVs50dPct: 'Percent distance vs 50-day moving average.',
+        priceVs200dPct: 'Percent distance vs 200-day moving average.',
+        trendState: '"bullish" | "mixed" | "pullback" | "bearish".',
+        trendExplanation: 'Plain-English trend read.',
+      },
+      events: {
+        earningsDate: 'Upcoming earnings date when available.',
+        daysToEarnings: 'Days until earnings, negative when stale.',
+        recentNewsCount: 'News items counted in the context window.',
+        recentInsiderTrades: 'Recent insider trade rows included.',
+        recentOwnershipFilings: 'Recent 13D/13G filings included.',
+        recentCongressTrades: 'Recent congress trades included.',
+      },
+      insiders: {
+        last30d: {
+          buyCount: 'Count of BUY insider trades in the cached window.',
+          sellCount: 'Count of SELL insider trades in the cached window.',
+          netValue: 'Buy value minus sell value.',
+        },
+        recent: 'Recent normalized insider trade rows.',
+      },
+      ownershipFilings: {
+        recent: 'Recent normalized 13D/13G filings.',
+        hasActivistSignal: 'True when a 13D/13D-A is present.',
+        hasPassiveStakeSignal: 'True when a 13G/13G-A is present.',
+      },
+      congress: {
+        recent: 'Recent normalized congress trades for the symbol.',
+        buyCount90d: 'Purchase count over the last 90 days.',
+        sellCount90d: 'Sale count over the last 90 days.',
+      },
+      fundamentals: 'Normalized fundamentals object or null when unavailable.',
+      signals: {
+        participation: 'Copied qualitative participation label.',
+        ownershipSignal: 'Ownership-derived signal label.',
+        eventRisk: '"high" | "medium" | "low".',
+        squeezeRisk: 'Currently "unknown" until a provider is added.',
+        compositeScore: 'Simple multi-factor score on a 0-100-ish scale.',
+      },
+      explanations: {
+        whyMoving: 'Array of short evidence statements.',
+        bullCase: 'Array of bull-case points.',
+        bearCase: 'Array of bear-case points.',
+      },
+      dataAvailability: {
+        shortInterest: 'Null until provider is added.',
+        optionsPositioning: 'Null until provider is added.',
+        fundOwnershipByStock: 'Null until per-stock 13F aggregation is added.',
+      },
+      sources: {
+        quote: 'Quote provider label.',
+        candles: 'Chart provider label.',
+        insiders: 'Insider provider label.',
+        ownershipFilings: 'Ownership filing provider label.',
+        congress: 'Congress provider label.',
+        fundamentals: 'Fundamentals provider label.',
+      },
+    },
+    example: {
+      symbol: 'NVDA',
+      asOf: '2026-04-25T22:30:00.000Z',
+      market: 'US',
+      company: { name: 'NVIDIA Corp', exchange: 'NASDAQ', industry: 'Technology', marketCap: 2200000 },
+      price: { last: 942.15, change: 18.42, changePct: 1.99, volume: 48211320, avgVolume20d: 27100450, relativeVolume: 1.78, participation: 'high', currency: 'USD' },
+      trend: { close: 942.15, dma20: 915.24, dma50: 884.91, dma200: 731.02, priceVs20dPct: 2.94, priceVs50dPct: 6.47, priceVs200dPct: 28.88, trendState: 'bullish', trendExplanation: 'Price is above the 20, 50, and 200 day averages.' },
+      events: { earningsDate: '2026-05-22', daysToEarnings: 27, recentNewsCount: 6, recentInsiderTrades: 2, recentOwnershipFilings: 1, recentCongressTrades: 0 },
+      insiders: { last30d: { buyCount: 2, sellCount: 5, netValue: -2100000 }, recent: [] },
+      ownershipFilings: { recent: [], hasActivistSignal: false, hasPassiveStakeSignal: true },
+      congress: { recent: [], buyCount90d: 0, sellCount90d: 0 },
+      fundamentals: { peRatio: 45.2, pegRatio: 1.9, psRatio: 23.4, epsTTM: 12.3, revenueGrowthYoy: 62.1, epsGrowthYoy: 78.4, grossMargin: 73.2, operatingMargin: 56.1, netMargin: 48.2, roe: 59.7, weeks52high: 980.0, weeks52low: 530.0 },
+      signals: { participation: 'high', ownershipSignal: 'passive_stake', eventRisk: 'medium', squeezeRisk: 'unknown', compositeScore: 78 },
+      explanations: { whyMoving: ['Trading at 1.78x normal volume', 'Price above key moving averages'], bullCase: ['Trend remains intact'], bearCase: ['Insider selling outweighs buying'] },
+      dataAvailability: { shortInterest: null, optionsPositioning: null, fundOwnershipByStock: null },
+      sources: { quote: 'Finnhub / Yahoo Finance', candles: 'Yahoo Finance', insiders: 'SEC Form 4 cache', ownershipFilings: 'SEC EDGAR Schedule 13D/13G', congress: 'Quiver', fundamentals: 'Finnhub' },
+    },
+  };
+}
+
+app.get('/api/stock-intelligence/schema', async (_req, res) => {
+  res.json(buildStockIntelligenceSchema());
+});
+
 app.get('/api/stock-intelligence', async (req, res) => {
   const symbol = normalizeSymbol(req.query.symbol);
   if (!symbol) {
