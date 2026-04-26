@@ -1,3 +1,11 @@
+## Lesson: 2026-04-25 - A one-time boot prewarm is not the same as a durable warm-data strategy
+
+**Observation:** The app could feel fast right after boot, then gradually fall back into user-triggered cold refreshes once Congress or Canadian insider caches expired.
+**Root cause:** We had prewarm logic, but not a recurring sync cadence. That warms the first page load after deploy, not the ongoing product experience.
+**Rule:** For slow market-data feeds that power core pages, use a recurring background sync loop, not just a startup prewarm. Refresh the most common cache shapes on a cadence slightly shorter than TTL, and keep an environment flag to disable it when needed.
+
+---
+
 ## Lesson: 2026-04-25 - Read-heavy portfolio pages should load from one snapshot, not three loosely coupled queries
 
 **Observation:** Even after caching and debounce work, portfolio pages still felt slower than they should because the server had to answer separate `player`, `holdings`, and `watchlist` reads before the UI could fully settle.

@@ -1,3 +1,36 @@
+## Plan: Sprint B item 3 — Scheduled background sync for Congress + CA (2026-04-25)
+
+### Goal
+Keep the slowest market-data views warm proactively so Congress and Canadian insider pages do not wait for the next user hit after a restart or TTL expiry.
+
+### Root cause
+- We had one-time boot prewarm for options scan and a partial CA cache warmup, but not a recurring sync loop.
+- That meant the app got faster right after startup, then drifted back into user-triggered refreshes once caches expired.
+- Congress persistence and CA persistence were in place, but freshness still depended too much on interactive traffic.
+
+### Shipped
+- [x] `server.cjs` — added a shared repeating background-sync scheduler with explicit labels and error logging.
+- [x] `server.cjs` — Congress now refreshes on a recurring 25-minute cadence via `refreshCongressTradesFromSource()`, keeping both memory cache and persisted DB rows fresh.
+- [x] `server.cjs` — Canadian insider background sync now refreshes the most important caches on a recurring 25-minute cadence:
+  - `7-insiders`
+  - `7-filings`
+  - `30-filings`
+- [x] `server.cjs` — startup now begins the background sync loop from `app.listen(...)` instead of relying only on ad hoc boot prewarm calls.
+- [x] `server.cjs` — added `DISABLE_BACKGROUND_SYNC=1` escape hatch for environments where proactive refreshes should be turned off.
+
+### Expected user-facing outcome
+- Congress and Canadian insider pages should stay consistently fast more often, especially after the app has been running for a while.
+- Restarts should recover to a warm state automatically instead of waiting for the next user to trigger the first rebuild.
+- Persisted market-data tables should stay fresher without relying solely on interactive traffic.
+
+### Verification
+- [ ] `node --check server.cjs`
+- [ ] `npm run build`
+- [ ] After deploy, confirm Render logs show background sync activity instead of only request-triggered refreshes.
+- [ ] Recheck Supabase `market_data_sync_state` timestamps for `congress_trades` and `ca_insider_*` after the app has been idle.
+
+---
+
 ## Plan: Sprint B item 2 — Portfolio snapshot aggregation (2026-04-25)
 
 ### Goal

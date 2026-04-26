@@ -2040,6 +2040,16 @@ const TMX_HEADERS = {
   'Referer': 'https://money.tmx.com/',
 };
 
+const BACKGROUND_SYNC_ENABLED = process.env.DISABLE_BACKGROUND_SYNC !== '1';
+const BACKGROUND_SYNC_WARM_DELAY_MS = 12000;
+const CONGRESS_BACKGROUND_SYNC_MS = 25 * 60 * 1000;
+const CA_BACKGROUND_SYNC_MS = 25 * 60 * 1000;
+const CA_BACKGROUND_TARGETS = [
+  { days: 7, mode: 'insiders', label: '7-insiders' },
+  { days: 7, mode: 'filings', label: '7-filings' },
+  { days: 30, mode: 'filings', label: '30-filings' },
+];
+
 // Cache keyed by `${days}-${mode}` so the insiders and filings tabs don't
 // invalidate each other on switch.
 const caInsiderCaches = {};
@@ -4348,12 +4358,41 @@ app.get('/api/13f/options-scan', async (_req, res) => {
   res.json({ positions: [], loading: true }); // first load — still building
 });
 
-// Pre-warm on startup (delay 8s to let server stabilise first)
-setTimeout(() => buildOptionsScan().catch(e => console.error('[options-scan init]', e.message)), 8000);
-setTimeout(() => {
-  buildCaInsiderCache(7, 'insiders').catch(e => console.error('[ca-insider init:7-insiders]', e.message));
-  buildCaInsiderCache(7, 'filings').catch(e => console.error('[ca-insider init:7-filings]', e.message));
-}, 12000);
+// Background warming/sync keeps the slowest research feeds hot so users do not
+// pay the full cold-build cost after restarts or TTL expiry.
+function scheduleRepeatingTask(label, intervalMs, task) {
+  if (!BACKGROUND_SYNC_ENABLED) return;
+  const run = () => {
+    task().catch((err) => {
+      console.error(`[background-sync:${label}]`, err.message);
+    });
+  };
+  setTimeout(run, BACKGROUND_SYNC_WARM_DELAY_MS);
+  setInterval(run, intervalMs);
+}
+
+function startBackgroundSync() {
+  if (!BACKGROUND_SYNC_ENABLED) {
+    console.log('[background-sync] disabled');
+    return;
+  }
+
+  setTimeout(() => buildOptionsScan().catch(e => console.error('[options-scan init]', e.message)), 8000);
+
+  scheduleRepeatingTask('congress', CONGRESS_BACKGROUND_SYNC_MS, async () => {
+    await refreshCongressTradesFromSource();
+  });
+
+  scheduleRepeatingTask('ca-insiders', CA_BACKGROUND_SYNC_MS, async () => {
+    await Promise.all(
+      CA_BACKGROUND_TARGETS.map((target) =>
+        buildCaInsiderCache(target.days, target.mode).catch((err) => {
+          console.error(`[ca-insider sync:${target.label}]`, err.message);
+        })
+      )
+    );
+  });
+}
 
 // Serve built React app
 const distPath = path.join(__dirname, 'dist');
@@ -4378,4 +4417,5 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`TARS server running on port ${PORT}`);
+  startBackgroundSync();
 });
