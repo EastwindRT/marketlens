@@ -14,6 +14,7 @@ const FilingSheet = lazy(() =>
 import { useWatchlistStore } from '../store/watchlistStore';
 import { fetchInsiderData, getInsiderType } from '../hooks/useInsiderData';
 import { useCongressTradesForWatchlist } from '../hooks/useCongressTrades';
+import { DataStatus } from '../components/ui/DataStatus';
 
 interface CorrelatedSignal {
   ticker: string;
@@ -164,7 +165,7 @@ export default function NewsPage() {
   );
   const cachedFilings = useMemo(() => readCachedFilings(days), [days]);
 
-  const { data: filings, isLoading: filingsLoading, error: filingsError } = useQuery({
+  const { data: filings, isLoading: filingsLoading, isFetching: filingsFetching, dataUpdatedAt: filingsUpdatedAt, error: filingsError } = useQuery({
     queryKey: ['market-filings', days],
     queryFn: async () => {
       const next = await edgar.getRecentFilings(days);
@@ -287,7 +288,9 @@ export default function NewsPage() {
   const fromDate = format(subDays(new Date(), days), 'MMM d');
   const toDate = format(new Date(), 'MMM d');
   const signalsLoading = signalSymbols.length > 0 && (congressLoading || insiderQueries.some((query) => query.isLoading));
+  const signalsRefreshing = signalSymbols.length > 0 && insiderQueries.some((query) => query.isFetching);
   const signalsError = Boolean(congressError) || insiderQueries.some((query) => query.isError);
+  const filingsSource = cachedFilings && filingsUpdatedAt === cachedFilings.fetchedAt ? 'cached' : 'live';
 
   return (
     <>
@@ -301,6 +304,7 @@ export default function NewsPage() {
               <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
                 Insider trades · 13D/13G filings · {fromDate} - {toDate}
               </p>
+              <DataStatus refreshing={filingsFetching} updatedAt={filingsUpdatedAt || cachedFilings?.fetchedAt} source={filingsSource} />
             </div>
 
             <div style={{ display: 'flex', gap: 6 }}>
@@ -333,6 +337,7 @@ export default function NewsPage() {
               title="Confluence Signals"
               subtitle="Congress members and company insiders trading the same watchlist stock in the same month"
             />
+            <DataStatus refreshing={signalsRefreshing} />
             {sortedCorrelations.length > 0 && (
               <div style={{ display: 'flex', gap: 2, background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, border: '1px solid var(--border-subtle)', flexShrink: 0 }}>
                 {(['date', 'trades'] as const).map((option) => (

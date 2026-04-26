@@ -6,6 +6,7 @@ import { useStockQuotes } from '../hooks/useStockData';
 import type { Holding, Player, WatchlistInput } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
 import ErrorBoundary from '../components/ui/ErrorBoundary';
+import { DataStatus } from '../components/ui/DataStatus';
 
 type CachedPlayerPortfolio = {
   player: Player | null;
@@ -149,6 +150,8 @@ export default function PlayerPortfolio() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [dataSource, setDataSource] = useState<'cached' | 'live'>('live');
   const hasLoadedRef = useRef(false);
 
   useEffect(() => {
@@ -163,6 +166,8 @@ export default function PlayerPortfolio() {
       setHoldings(cachedSnapshot.holdings);
       setWatchlist(cachedSnapshot.watchlist);
       setLoading(false);
+      setLastUpdatedAt(Date.now());
+      setDataSource('cached');
       hasLoadedRef.current = true;
     }
 
@@ -226,6 +231,8 @@ export default function PlayerPortfolio() {
             ? (fallbackResults[2].status === 'fulfilled' ? fallbackResults[2].value : [])
             : (snapshot?.watchlist ?? []),
         });
+        setLastUpdatedAt(Date.now());
+        setDataSource('live');
         hasLoadedRef.current = true;
       } catch {
         if (!isActive || runId !== requestId) return;
@@ -322,8 +329,9 @@ export default function PlayerPortfolio() {
             {player.display_name || player.name}
           </h1>
           <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '2px 0 0' }}>
-            Public portfolio{refreshing ? ' · Refreshing…' : ''}
+            Public portfolio
           </p>
+          <DataStatus refreshing={refreshing} updatedAt={lastUpdatedAt} source={dataSource} />
         </div>
       </div>
 

@@ -6,6 +6,7 @@ import { useLeagueStore } from '../store/leagueStore';
 import type { Player, Holding, Trade } from '../api/supabase';
 import { useStockQuotes } from '../hooks/useStockData';
 import ErrorBoundary from '../components/ui/ErrorBoundary';
+import { DataStatus } from '../components/ui/DataStatus';
 
 // Cash system removed — returns are now computed as (holdings value − cost basis) / cost basis
 
@@ -246,6 +247,7 @@ export default function Leaderboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
 
   const load = useCallback(async (showBlockingState = false) => {
     try {
@@ -260,6 +262,7 @@ export default function Leaderboard() {
       setPlayers(p);
       setHoldings(h);
       setRecentTrades(t);
+      setLastUpdatedAt(Date.now());
     } catch {
       setError('Could not load leaderboard.');
     } finally {
@@ -346,8 +349,9 @@ export default function Leaderboard() {
             Portfolios
           </h1>
           <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '2px 0 0' }}>
-            Public portfolios · {players.length} members{refreshing ? ' · Refreshing…' : ''}
+            Public portfolios · {players.length} members
           </p>
+          <DataStatus refreshing={refreshing} updatedAt={lastUpdatedAt} />
         </div>
         <button
           onClick={() => void load(false)}

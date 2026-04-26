@@ -40,6 +40,25 @@ Make stock-level signal evidence faster to read and make unresolved Canadian sec
 
 ---
 
+## Plan: Sprint C item 3 — Shared data freshness/status pattern (2026-04-25)
+
+### Goal
+Make data-heavy pages communicate the same way about `cached`, `last updated`, and `refreshing` state instead of sprinkling one-off labels across the UI.
+
+### Shipped
+- [x] `src/components/ui/DataStatus.tsx` — added a shared compact status line for `Last updated`, `Cached snapshot`, and `Refreshing…`
+- [x] `src/pages/Portfolio.tsx` — My Portfolio now shows the shared status line and distinguishes cached session seed data from fresh reloads
+- [x] `src/pages/PlayerPortfolio.tsx` — public portfolios now use the same shared status line for cached/public snapshot loads and in-place refreshes
+- [x] `src/pages/Leaderboard.tsx` — leaderboard header now shows a consistent last-updated / refreshing status instead of only embedding the refresh hint in subtitle text
+- [x] `src/pages/News.tsx` — Market Signals now shows shared freshness state for the filings feed and a refresh-state hint for confluence updates
+- [x] `src/pages/InsiderActivity.tsx` — insider page now shows the same shared status pattern driven by React Query update timestamps
+
+### Expected user-facing outcome
+- Users can tell the difference between stale-but-usable data and an active refresh more easily.
+- Portfolio, insider, leaderboard, and filings pages now feel more coherent because they use one consistent status language.
+
+---
+
 ## Plan: Sprint B item 3 — Scheduled background sync for Congress + CA (2026-04-25)
 
 ### Goal

@@ -5,6 +5,7 @@ import { ExternalLink } from 'lucide-react';
 import type { InsiderFeedItem, InsiderOverview } from '../api/types';
 import { useWatchlistStore } from '../store/watchlistStore';
 import { formatLargeNumber, formatPrice } from '../utils/formatters';
+import { DataStatus } from '../components/ui/DataStatus';
 
 type SortMode = 'value' | 'date';
 type FilterMode = 'all' | 'buy' | 'sell';
@@ -55,6 +56,7 @@ export default function InsiderActivityPage() {
     data: usData,
     isFetching: usFetching,
     isLoading: usLoading,
+    dataUpdatedAt: usUpdatedAt,
     error: usError,
   } = useQuery({
     queryKey: ['insider-activity-feed', days],
@@ -73,6 +75,7 @@ export default function InsiderActivityPage() {
     data: caData,
     isFetching: caFetching,
     isLoading: caLoading,
+    dataUpdatedAt: caUpdatedAt,
     error: caError,
   } = useQuery({
     queryKey: ['ca-insider-activity', days, caMode],
@@ -91,6 +94,7 @@ export default function InsiderActivityPage() {
   const overview = marketTab === 'us' ? usData?.overview : caData?.overview;
   const isLoading = marketTab === 'us' ? usLoading : caLoading;
   const isFetching = marketTab === 'us' ? usFetching : caFetching;
+  const updatedAt = marketTab === 'us' ? usUpdatedAt : caUpdatedAt;
   const error = marketTab === 'us' ? usError : caError;
   const tradeSymbols = useMemo(() => [...new Set(rawTrades.map((trade) => trade.symbol).filter(Boolean))], [rawTrades]);
 
@@ -155,6 +159,7 @@ export default function InsiderActivityPage() {
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
             Broader insider coverage ranked by freshness or dollar value.
           </p>
+          <DataStatus refreshing={isFetching} updatedAt={updatedAt} />
         </div>
 
         <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -309,11 +314,7 @@ export default function InsiderActivityPage() {
               <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)' }}>
                 {tabLabel} · showing {trades.length} of {rawTrades.length} transactions · {days}D window
               </p>
-              {isFetching && (
-                <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                  Refreshing…
-                </span>
-              )}
+              <DataStatus refreshing={isFetching} updatedAt={updatedAt} />
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

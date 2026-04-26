@@ -1,3 +1,11 @@
+## Lesson: 2026-04-25 - Freshness UX should be a shared pattern, not page-by-page improvisation
+
+**Observation:** Several heavy pages already had some notion of refresh state, but each one surfaced it differently: subtitle text in one place, a tiny inline label in another, and no cached/fresh distinction in others.
+**Root cause:** We treated freshness as a local page concern instead of a cross-cutting UX pattern.
+**Rule:** If multiple pages rely on cached or progressively refreshed data, give them a shared status component. Users should learn one consistent language for `cached`, `last updated`, and `refreshing`, and developers should not have to reinvent the same microcopy on every screen.
+
+---
+
 ## Lesson: 2026-04-25 - Generic "Unknown" copy hides whether missing metadata is expected or suspicious
 
 **Observation:** When Canadian sector enrichment missed, the UI showed a plain `Unknown`, which looked like a broken app instead of a known metadata gap.

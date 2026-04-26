@@ -8,6 +8,7 @@ import type { Holding, Player } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
 import { useWatchlistStore } from '../store/watchlistStore';
 import ErrorBoundary from '../components/ui/ErrorBoundary';
+import { DataStatus } from '../components/ui/DataStatus';
 
 const AddPositionModal = lazy(() => import('../components/trade/AddPositionModal'));
 const AddWatchlistModal = lazy(() => import('../components/trade/AddWatchlistModal'));
@@ -136,6 +137,8 @@ export default function Portfolio() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [dataSource, setDataSource] = useState<'cached' | 'live'>('live');
   const hasLoadedRef = useRef(false);
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [showAddWatchlist, setShowAddWatchlist] = useState(false);
@@ -158,6 +161,8 @@ export default function Portfolio() {
     if (cachedHoldings.length > 0 && !hasLoadedRef.current) {
       setHoldings(cachedHoldings);
       setLoading(false);
+      setLastUpdatedAt(Date.now());
+      setDataSource('cached');
       hasLoadedRef.current = true;
     }
 
@@ -178,6 +183,8 @@ export default function Portfolio() {
         setHoldings(h);
         writeCachedHoldings(playerId, h);
         setLoadError('');
+        setLastUpdatedAt(Date.now());
+        setDataSource('live');
         hasLoadedRef.current = true;
       } catch {
         if (!isActive || runId !== requestId) return;
@@ -275,6 +282,7 @@ export default function Portfolio() {
               {player.display_name || player.name}
             </h1>
             <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>My Portfolio</p>
+            <DataStatus refreshing={refreshing} updatedAt={lastUpdatedAt} source={dataSource} />
           </div>
         </div>
         <button
@@ -298,11 +306,6 @@ export default function Portfolio() {
             <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
               Positions
             </span>
-            {refreshing && (
-              <span className="text-[11px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-                Refreshing…
-              </span>
-            )}
           </div>
           <button
             onClick={() => setShowAddPosition(true)}
