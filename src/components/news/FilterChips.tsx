@@ -16,6 +16,7 @@ const defaultOptions: FilterOption[] = [
   { id: 'macro', label: 'Macro' },
   { id: 'sector', label: 'Sector' },
   { id: 'company', label: 'Company' },
+  { id: 'policy', label: 'Policy' },
   { id: 'us_politics', label: 'US Politics' },
   { id: 'canada_macro', label: 'Canada' },
   { id: 'trade_policy', label: 'Trade Policy' },

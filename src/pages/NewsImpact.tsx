@@ -156,7 +156,6 @@ export default function NewsImpactPage() {
         <DataStatus
           updatedAt={generatedAt}
           refreshing={isFetching}
-          source={data ? 'live' : undefined}
         />
       </div>
 
@@ -281,7 +280,7 @@ export default function NewsImpactPage() {
             No flagged stories for this view yet
           </p>
           <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)', maxWidth: 680 }}>
-            Try widening the time window, switching categories, or dropping the 7+ score floor to inspect lower-conviction stories.
+            This may just be the first run. Try widening the time window, switching categories, or dropping the 7+ score floor to inspect lower-conviction stories.
           </p>
         </div>
       ) : (

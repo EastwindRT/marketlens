@@ -88,7 +88,6 @@ export default function AgentAlertsPage() {
         <DataStatus
           updatedAt={updatedAt || null}
           refreshing={latestAlert.isFetching || insiderFilings.isFetching}
-          source={latestAlert.data || insiderFilings.data ? 'live' : undefined}
         />
       </div>
 

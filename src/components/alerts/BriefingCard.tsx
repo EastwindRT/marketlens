@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import type { AgentAlert } from '../../api/news';
 
 function formatCreatedAt(value: string) {
@@ -30,7 +31,7 @@ export function BriefingCard({ alert }: BriefingCardProps) {
           No briefing yet
         </p>
         <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
-          Once the hourly agent run finds material news or filings tied to your watchlist, a short briefing will appear here.
+          This may just be the first run. Once the hourly agent finds material news or filings tied to your watchlist, a short briefing will appear here.
         </p>
       </div>
     );
@@ -81,8 +82,9 @@ export function BriefingCard({ alert }: BriefingCardProps) {
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {alert.watchlistSnapshot.map((ticker) => (
-              <span
+              <Link
                 key={ticker}
+                to={`/stock/${ticker}`}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -93,10 +95,11 @@ export function BriefingCard({ alert }: BriefingCardProps) {
                   color: 'var(--accent-blue-light)',
                   fontSize: 12,
                   fontWeight: 700,
+                  textDecoration: 'none',
                 }}
               >
                 {ticker}
-              </span>
+              </Link>
             ))}
           </div>
         </div>
