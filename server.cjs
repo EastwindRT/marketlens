@@ -4863,6 +4863,626 @@ function scheduleRepeatingTask(label, intervalMs, task) {
   setInterval(run, intervalMs);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// News Impact + Agent Alerts  (Phase 1 — schema helpers + stub endpoints)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const NEWS_AGENT_ENABLED = process.env.NEWS_AGENT_ENABLED !== '0';
+const NEWS_SCHEMA_VERSION = 1;
+
+// ── Supabase helpers ─────────────────────────────────────────────────────────
+
+function hasNewsDb() {
+  return Boolean(serverSupabase);
+}
+
+async function insertNewsItem(item) {
+  if (!hasNewsDb()) return null;
+  const { data, error } = await serverSupabase
+    .from('news_items')
+    .upsert(item, { onConflict: 'dedup_key', ignoreDuplicates: true })
+    .select('id')
+    .maybeSingle();
+  if (error) { console.error('[news-items insert]', error.message); return null; }
+  return data?.id ?? null;
+}
+
+async function getUnseenNewsItems({ limit = 50 } = {}) {
+  if (!hasNewsDb()) return [];
+  const { data, error } = await serverSupabase
+    .from('news_items')
+    .select('id, headline, source, published_at, impact_score, category, summary, affected_tickers')
+    .eq('seen_by_agent', false)
+    .order('impact_score', { ascending: false })
+    .limit(limit);
+  if (error) { console.error('[news-items unseen]', error.message); return []; }
+  return data ?? [];
+}
+
+async function markNewsItemsSeen(ids) {
+  if (!hasNewsDb() || !ids.length) return;
+  const { error } = await serverSupabase
+    .from('news_items')
+    .update({ seen_by_agent: true })
+    .in('id', ids);
+  if (error) console.error('[news-items mark-seen]', error.message);
+}
+
+async function insertAgentAlert(alert) {
+  if (!hasNewsDb()) return null;
+  const { data, error } = await serverSupabase
+    .from('agent_alerts')
+    .insert(alert)
+    .select('id')
+    .maybeSingle();
+  if (error) { console.error('[agent-alerts insert]', error.message); return null; }
+  return data?.id ?? null;
+}
+
+async function getLatestAgentAlert(playerId) {
+  if (!hasNewsDb()) return null;
+  let query = serverSupabase
+    .from('agent_alerts')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (playerId) {
+    // prefer per-player, fall back to global
+    const { data: playerAlert } = await query.eq('player_id', playerId).maybeSingle();
+    if (playerAlert) return playerAlert;
+  }
+  const { data, error } = await serverSupabase
+    .from('agent_alerts')
+    .select('*')
+    .is('player_id', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) { console.error('[agent-alerts latest]', error.message); return null; }
+  return data ?? null;
+}
+
+async function logAgentRun({ job, itemsProcessed, tokensUsed, msElapsed, error = null }) {
+  if (!hasNewsDb()) return;
+  const { error: dbErr } = await serverSupabase.from('agent_run_logs').insert({
+    job,
+    items_processed: itemsProcessed,
+    tokens_used: tokensUsed,
+    ms_elapsed: msElapsed,
+    error: error ?? null,
+  });
+  if (dbErr) console.error('[agent-run-log insert]', dbErr.message);
+}
+
+async function getAppSetting(key) {
+  if (!hasNewsDb()) return null;
+  const { data } = await serverSupabase
+    .from('app_settings').select('value').eq('key', key).maybeSingle();
+  return data?.value ?? null;
+}
+
+// ── Stub endpoints (Phase 1) — return correct shape, empty data ───────────────
+// Real ingestion wired in Phase 2. Codex can build against these immediately.
+
+// ── Phase 2: Headline fetchers + dedup + Claude scoring + job ────────────────
+
+const NEWSAPI_KEY = process.env.NEWSAPI_KEY || '';
+const NEWS_SCORING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h — same headline scored at most once/day
+
+const NEWS_QUERIES = [
+  {
+    label: 'financial',
+    q: 'stock market OR earnings OR Federal Reserve OR interest rates OR inflation OR GDP OR recession OR IPO OR merger OR acquisition',
+    sources: '',
+    language: 'en',
+  },
+  {
+    label: 'us_politics',
+    q: 'Trump',
+    sources: 'reuters,associated-press,bloomberg,cnbc',
+    language: 'en',
+  },
+  {
+    label: 'canada_macro',
+    q: 'Canada OR "Canadian economy" OR tariffs OR "Bank of Canada" OR Carney',
+    sources: 'reuters,associated-press,the-globe-and-mail,cbc-news',
+    language: 'en',
+  },
+  {
+    label: 'geopolitical',
+    q: 'political OR policy OR sanctions OR "trade war" OR "executive order"',
+    sources: 'reuters,associated-press,financial-times',
+    language: 'en',
+  },
+];
+
+const NEWS_SCORING_SYSTEM_PROMPT = `You are a financial analyst. Does this headline have market impact in the next 30 days? Categories: macro, sector, company, policy, us_politics, canada_macro, trade_policy, geopolitical. For political news, only flag if it plausibly affects interest rates, trade, specific sectors, or currency — otherwise return null. If yes, return ONLY a valid JSON object: {"impact_score":1-10,"category":"...","why":"one sentence","affected_tickers":["..."]}. If no market impact, return the single word null. Be strict — only flag genuinely material news. Never wrap the JSON in markdown.`;
+
+function headlineDedupKey(headline, publishedAt) {
+  return crypto.createHash('sha1').update(`${headline}||${publishedAt || ''}`).digest('hex');
+}
+
+async function fetchNewsApiHeadlines(query) {
+  if (!NEWSAPI_KEY) return [];
+  const params = new URLSearchParams({
+    q: query.q,
+    language: query.language || 'en',
+    pageSize: '50',
+    sortBy: 'publishedAt',
+    apiKey: NEWSAPI_KEY,
+  });
+  if (query.sources) params.set('sources', query.sources);
+
+  try {
+    const raw = await httpsGet(`https://newsapi.org/v2/everything?${params.toString()}`, {
+      'User-Agent': 'TARS-news-agent/1.0',
+      'X-Api-Key': NEWSAPI_KEY,
+    });
+    const json = JSON.parse(raw);
+    if (json.status !== 'ok') {
+      console.warn(`[news-fetch:${query.label}] NewsAPI status=${json.status} code=${json.code}`);
+      return [];
+    }
+    return (json.articles || []).map(a => ({
+      headline: a.title || '',
+      source: a.source?.name || query.label,
+      publishedAt: a.publishedAt || new Date().toISOString(),
+      url: a.url || null,
+      rawQuery: query.label,
+    })).filter(a => a.headline && a.headline !== '[Removed]');
+  } catch (err) {
+    console.warn(`[news-fetch:${query.label}]`, err.message);
+    return [];
+  }
+}
+
+async function fetchAllHeadlines() {
+  const results = await Promise.allSettled(NEWS_QUERIES.map(q => fetchNewsApiHeadlines(q)));
+  const all = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') all.push(...r.value);
+  }
+  // dedup by headline text within this batch
+  const seen = new Set();
+  return all.filter(a => {
+    const k = a.headline.toLowerCase().trim();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+async function scoreHeadlineWithClaude(headline, source, publishedAt) {
+  const cacheKey = aiCacheKey({ type: 'news-score', headline, publishedAt });
+  const cached = aiCacheGet(cacheKey);
+  if (cached) {
+    try { return typeof cached === 'string' ? JSON.parse(cached) : cached; } catch { return null; }
+  }
+
+  const userPrompt = `Headline: "${headline}"\nSource: ${source}\nPublished: ${publishedAt}`;
+  let tokensUsed = 0;
+  try {
+    const { answer, usage } = await callClaudeRaw(NEWS_SCORING_SYSTEM_PROMPT, userPrompt, {
+      model: CLAUDE_MODEL_PRESET,
+      maxTokens: 200,
+      temperature: 0.1,
+    });
+    tokensUsed = (usage?.input_tokens || 0) + (usage?.output_tokens || 0);
+    const text = (answer || '').trim();
+    if (!text || text === 'null') {
+      aiCacheSet(cacheKey, 'null');
+      return { result: null, tokensUsed };
+    }
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      aiCacheSet(cacheKey, 'null');
+      return { result: null, tokensUsed };
+    }
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!parsed.impact_score || !parsed.category) {
+      aiCacheSet(cacheKey, 'null');
+      return { result: null, tokensUsed };
+    }
+    const result = {
+      impactScore: Math.min(10, Math.max(1, parseInt(parsed.impact_score, 10))),
+      category: String(parsed.category).toLowerCase(),
+      summary: String(parsed.why || '').slice(0, 500),
+      affectedTickers: Array.isArray(parsed.affected_tickers)
+        ? parsed.affected_tickers.map(t => String(t).toUpperCase().trim()).filter(Boolean).slice(0, 10)
+        : [],
+    };
+    aiCacheSet(cacheKey, JSON.stringify(result));
+    return { result, tokensUsed };
+  } catch (err) {
+    console.warn('[news-score]', err.message);
+    return { result: null, tokensUsed };
+  }
+}
+
+// callClaudeRaw: like callClaude but also returns raw usage object for token counting.
+// NOTE: httpsPost calls JSON.stringify() internally, so pass the object directly.
+async function callClaudeRaw(systemPrompt, userPrompt, { model = CLAUDE_MODEL_FULL, maxTokens = 2500, temperature = 0.4 } = {}) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
+  if (!ANTHROPIC_KEY) throw new Error('ANTHROPIC_API_KEY not set');
+  const body = {
+    model,
+    max_tokens: maxTokens,
+    temperature,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }],
+  };
+  const raw = await httpsPost('https://api.anthropic.com/v1/messages', body, {
+    'x-api-key': ANTHROPIC_KEY,
+    'anthropic-version': '2023-06-01',
+  });
+  const json = JSON.parse(raw);
+  if (json.error) throw new Error(json.error.message || JSON.stringify(json.error));
+  const answer = json.content?.[0]?.text || '';
+  return { answer, usage: json.usage };
+}
+
+let newsImpactJobRunning = false;
+
+async function runNewsImpactJob() {
+  if (!NEWS_AGENT_ENABLED) return { written: 0, skipped: 0, tokensUsed: 0 };
+  if (!NEWSAPI_KEY) {
+    console.warn('[news-impact-job] NEWSAPI_KEY not set — skipping');
+    return { written: 0, skipped: 0, tokensUsed: 0 };
+  }
+  if (newsImpactJobRunning) {
+    console.log('[news-impact-job] already running, skipping');
+    return { written: 0, skipped: 0, tokensUsed: 0 };
+  }
+  newsImpactJobRunning = true;
+  const startMs = Date.now();
+  let written = 0;
+  let skipped = 0;
+  let totalTokens = 0;
+  let jobError = null;
+
+  try {
+    const headlines = await fetchAllHeadlines();
+    console.log(`[news-impact-job] fetched ${headlines.length} headlines`);
+
+    for (const h of headlines) {
+      const dedupKey = headlineDedupKey(h.headline, h.publishedAt);
+      const { result, tokensUsed } = await scoreHeadlineWithClaude(h.headline, h.source, h.publishedAt);
+      totalTokens += tokensUsed || 0;
+
+      if (!result) { skipped += 1; continue; }
+
+      const row = {
+        headline: h.headline,
+        source: h.source,
+        published_at: h.publishedAt,
+        url: h.url || null,
+        impact_score: result.impactScore,
+        category: result.category,
+        summary: result.summary,
+        affected_tickers: result.affectedTickers,
+        seen_by_agent: false,
+        raw_query: h.rawQuery || null,
+        dedup_key: dedupKey,
+      };
+
+      const id = await insertNewsItem(row);
+      if (id) written += 1; else skipped += 1;
+    }
+  } catch (err) {
+    jobError = err.message;
+    console.error('[news-impact-job] unexpected error:', err.message);
+  } finally {
+    newsImpactJobRunning = false;
+  }
+
+  const msElapsed = Date.now() - startMs;
+  await logAgentRun({ job: 'news-impact', itemsProcessed: written + skipped, tokensUsed: totalTokens, msElapsed, error: jobError });
+  console.log(`[news-impact-job] done — written=${written} skipped=${skipped} tokens=${totalTokens} ms=${msElapsed}`);
+  return { written, skipped, tokensUsed: totalTokens };
+}
+
+// ── Phase 3: Material Form 4 filter + Agent Briefing job ─────────────────────
+
+const MATERIAL_BUY_THRESHOLD = 100000; // $100k
+const CLUSTER_BUY_MIN_INSIDERS = 3;
+const AGENT_BRIEFING_MAX_NEWS = 50;
+const AGENT_BRIEFING_MAX_FILINGS = 25;
+
+const AGENT_BRIEFING_SYSTEM_PROMPT = `You are a portfolio analyst. Given these news items and insider filings, generate a briefing for a user holding these watchlist tickers. Return ONLY a JSON array of max 5 bullet strings, each covering: what happened, which ticker it affects, and why it matters. Only include bullets directly relevant to the watchlist tickers. Be concise. Format: ["bullet 1", "bullet 2", ...]. Return an empty array if nothing is directly relevant.`;
+
+async function fetchRecentMaterialForm4Entries({ days = 7 } = {}) {
+  const daysBack = days + Math.ceil(days / 5) * 2 + 1;
+  const entries = await fetchRecentForm4Entries(daysBack);
+
+  // Sample up to 120 entries to bound EDGAR load (most relevant for material filter)
+  const sampled = entries.slice(0, 120);
+  const concurrency = 8;
+  const results = [];
+
+  for (let i = 0; i < sampled.length; i += concurrency) {
+    const batch = sampled.slice(i, i + concurrency);
+    const parsed = await Promise.allSettled(batch.map(e => fetchSecInsiderActivityItem(e)));
+    for (const r of parsed) {
+      if (r.status === 'fulfilled') results.push(...r.value);
+    }
+  }
+
+  // Filter: ≥$100k buy OR cluster buy (≥3 distinct insiders at same ticker within window)
+  const buys = results.filter(r => r.type === 'BUY' && r.totalValue >= MATERIAL_BUY_THRESHOLD);
+
+  // Cluster detection: group by ticker, count distinct insiders
+  const clusterMap = new Map();
+  for (const r of results.filter(t => t.type === 'BUY')) {
+    const key = r.symbol;
+    if (!clusterMap.has(key)) clusterMap.set(key, new Set());
+    clusterMap.get(key).add(r.insiderName);
+  }
+  const clusterTickers = new Set(
+    [...clusterMap.entries()]
+      .filter(([, insiders]) => insiders.size >= CLUSTER_BUY_MIN_INSIDERS)
+      .map(([ticker]) => ticker)
+  );
+
+  // Merge: include material buys + all buys from cluster tickers
+  const materialSet = new Map();
+  for (const r of results) {
+    if (r.type !== 'BUY') continue;
+    const isMaterial = r.totalValue >= MATERIAL_BUY_THRESHOLD || clusterTickers.has(r.symbol);
+    if (!isMaterial) continue;
+    const key = `${r.symbol}-${r.insiderName}-${r.transactionDate}`;
+    if (!materialSet.has(key)) materialSet.set(key, r);
+  }
+
+  return Array.from(materialSet.values()).map(r => ({
+    ticker: r.symbol,
+    insiderName: r.insiderName,
+    type: 'BUY',
+    amount: Math.round(r.totalValue || 0),
+    filedDate: r.filingDate,
+    accessionNo: r.id?.split('-').slice(0, 3).join('-') || '',
+  }));
+}
+
+let agentBriefingJobRunning = false;
+
+async function runAgentBriefingJob() {
+  if (!NEWS_AGENT_ENABLED) return { alertsCreated: 0, newsMarked: 0, tokensUsed: 0 };
+  if (agentBriefingJobRunning) {
+    console.log('[agent-briefing-job] already running, skipping');
+    return { alertsCreated: 0, newsMarked: 0, tokensUsed: 0 };
+  }
+  agentBriefingJobRunning = true;
+  const startMs = Date.now();
+  let alertsCreated = 0;
+  let newsMarked = 0;
+  let totalTokens = 0;
+  let jobError = null;
+  let unseenNews = [];
+
+  try {
+    unseenNews = await getUnseenNewsItems({ limit: AGENT_BRIEFING_MAX_NEWS });
+    const materialFilings = await fetchRecentMaterialForm4Entries({ days: 7 })
+      .catch(err => { console.warn('[agent-briefing-job] filings fetch failed:', err.message); return []; });
+
+    const filingsSample = materialFilings.slice(0, AGENT_BRIEFING_MAX_FILINGS);
+
+    if (unseenNews.length === 0 && filingsSample.length === 0) {
+      console.log('[agent-briefing-job] nothing new to process');
+      await logAgentRun({ job: 'agent-briefing', itemsProcessed: 0, tokensUsed: 0, msElapsed: Date.now() - startMs });
+      return { alertsCreated: 0, newsMarked: 0, tokensUsed: 0 };
+    }
+
+    // Get all player watchlists that are non-empty
+    let watchlists = [];
+    if (hasNewsDb()) {
+      const { data } = await serverSupabase
+        .from('watchlists')
+        .select('player_id, symbol');
+      if (data?.length) {
+        const grouped = new Map();
+        for (const row of data) {
+          if (!grouped.has(row.player_id)) grouped.set(row.player_id, []);
+          grouped.get(row.player_id).push(row.symbol.toUpperCase());
+        }
+        watchlists = [...grouped.entries()].map(([playerId, symbols]) => ({ playerId, symbols }));
+      }
+    }
+
+    // Also generate a global briefing (no player_id)
+    watchlists.unshift({ playerId: null, symbols: [] });
+
+    const newsContext = unseenNews.map((n, i) =>
+      `${i + 1}. [${n.category}] ${n.headline} — ${n.summary} (score: ${n.impact_score})`
+    ).join('\n');
+
+    const filingsContext = filingsSample.length > 0
+      ? '\n\nMaterial insider filings:\n' + filingsSample.map((f, i) =>
+          `${i + 1}. ${f.ticker}: ${f.insiderName} BUY $${f.amount.toLocaleString()} filed ${f.filedDate}`
+        ).join('\n')
+      : '';
+
+    for (const { playerId, symbols } of watchlists) {
+      const watchlistLine = symbols.length > 0
+        ? `\n\nUser's watchlist tickers: ${symbols.join(', ')}`
+        : '\n\n(No personal watchlist — produce a general briefing for the market-moving items above.)';
+
+      const userPrompt = `News items:\n${newsContext}${filingsContext}${watchlistLine}`;
+
+      try {
+        const { answer, usage } = await callClaudeRaw(AGENT_BRIEFING_SYSTEM_PROMPT, userPrompt, {
+          model: CLAUDE_MODEL_PRESET,
+          maxTokens: 600,
+          temperature: 0.3,
+        });
+        totalTokens += (usage?.input_tokens || 0) + (usage?.output_tokens || 0);
+
+        let bullets = [];
+        const jsonMatch = (answer || '').match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          try { bullets = JSON.parse(jsonMatch[0]).slice(0, 5).map(String); } catch { /* ignore */ }
+        }
+
+        const alertId = await insertAgentAlert({
+          player_id: playerId,
+          briefing_text: answer || '',
+          bullets,
+          source_news_ids: unseenNews.map(n => n.id),
+          source_filings: filingsSample,
+          watchlist_snapshot: symbols,
+          delivered: false,
+        });
+        if (alertId) alertsCreated += 1;
+      } catch (err) {
+        console.warn(`[agent-briefing-job] briefing for player ${playerId} failed:`, err.message);
+      }
+    }
+
+    // Flip seen_by_agent only after all briefings succeed
+    if (alertsCreated > 0) {
+      await markNewsItemsSeen(unseenNews.map(n => n.id));
+      newsMarked = unseenNews.length;
+    }
+  } catch (err) {
+    jobError = err.message;
+    console.error('[agent-briefing-job] unexpected error:', err.message);
+  } finally {
+    agentBriefingJobRunning = false;
+  }
+
+  const msElapsed = Date.now() - startMs;
+  await logAgentRun({ job: 'agent-briefing', itemsProcessed: unseenNews?.length || 0, tokensUsed: totalTokens, msElapsed, error: jobError });
+  console.log(`[agent-briefing-job] done — alertsCreated=${alertsCreated} newsMarked=${newsMarked} tokens=${totalTokens} ms=${msElapsed}`);
+  return { alertsCreated, newsMarked, tokensUsed: totalTokens };
+}
+
+// Admin-only run-now endpoint (triggers one job cycle on demand for verification)
+app.post('/api/news/run-now', async (req, res) => {
+  const adminEmails = (process.env.VITE_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  const callerEmail = (req.headers['x-admin-email'] || '').toLowerCase().trim();
+  if (adminEmails.length > 0 && !adminEmails.includes(callerEmail)) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  try {
+    const result = await runNewsImpactJob();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/news/impact', async (req, res) => {
+  try {
+    const minScore = Math.min(10, Math.max(1, parseInt(req.query.minScore ?? '7', 10)));
+    const category = req.query.category ?? null;
+    const days = Math.min(30, Math.max(1, parseInt(req.query.days ?? '1', 10)));
+    const showAll = req.query.all === '1';
+
+    if (!hasNewsDb()) {
+      return res.json({ schemaVersion: NEWS_SCHEMA_VERSION, items: [], generatedAt: new Date().toISOString(), note: 'Database not configured' });
+    }
+
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    let query = serverSupabase
+      .from('news_items')
+      .select('id, headline, source, published_at, url, impact_score, category, summary, affected_tickers')
+      .gte('published_at', cutoff)
+      .order('impact_score', { ascending: false })
+      .order('published_at', { ascending: false })
+      .limit(200);
+
+    if (!showAll) query = query.gte('impact_score', minScore);
+    if (category && category !== 'all') query = query.eq('category', category);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const items = (data ?? []).map(r => ({
+      id: r.id,
+      headline: r.headline,
+      source: r.source,
+      publishedAt: r.published_at,
+      url: r.url ?? null,
+      impactScore: r.impact_score,
+      category: r.category,
+      summary: r.summary,
+      affectedTickers: r.affected_tickers ?? [],
+    }));
+
+    res.json({ schemaVersion: NEWS_SCHEMA_VERSION, items, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('[api/news/impact]', err.message);
+    res.status(502).json({ schemaVersion: NEWS_SCHEMA_VERSION, items: [], error: err.message, generatedAt: new Date().toISOString() });
+  }
+});
+
+app.get('/api/alerts/latest', async (req, res) => {
+  try {
+    const playerId = req.query.playerId ?? null;
+    if (!hasNewsDb()) {
+      return res.json({ schemaVersion: NEWS_SCHEMA_VERSION, alert: null, generatedAt: new Date().toISOString(), note: 'Database not configured' });
+    }
+    const row = await getLatestAgentAlert(playerId);
+    const alert = row ? {
+      id: row.id,
+      createdAt: row.created_at,
+      bullets: row.bullets ?? [],
+      sourceNewsIds: row.source_news_ids ?? [],
+      sourceFilings: row.source_filings ?? [],
+      watchlistSnapshot: row.watchlist_snapshot ?? [],
+    } : null;
+    res.json({ schemaVersion: NEWS_SCHEMA_VERSION, alert, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('[api/alerts/latest]', err.message);
+    res.status(502).json({ schemaVersion: NEWS_SCHEMA_VERSION, alert: null, error: err.message, generatedAt: new Date().toISOString() });
+  }
+});
+
+app.get('/api/alerts/insider-filings', async (req, res) => {
+  const days = Math.min(30, Math.max(1, parseInt(req.query.days ?? '7', 10)));
+  try {
+    const filings = await fetchRecentMaterialForm4Entries({ days });
+    res.json({ schemaVersion: NEWS_SCHEMA_VERSION, filings, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('[api/alerts/insider-filings]', err.message);
+    res.status(502).json({ schemaVersion: NEWS_SCHEMA_VERSION, filings: [], error: err.message, generatedAt: new Date().toISOString() });
+  }
+});
+
+app.post('/api/alerts/run-now', async (req, res) => {
+  const adminEmails = (process.env.VITE_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  const callerEmail = (req.headers['x-admin-email'] || '').toLowerCase().trim();
+  if (adminEmails.length > 0 && !adminEmails.includes(callerEmail)) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  try {
+    const result = await runAgentBriefingJob();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Phase 4: Twitter/X scaffold ───────────────────────────────────────────────
+// Controlled by app_settings.twitter_enabled (default false).
+// No real Twitter API calls yet — stub returns [] and logs.
+
+async function fetchTwitterHeadlines() {
+  const enabled = await getAppSetting('twitter_enabled').catch(() => false);
+  if (!enabled) {
+    console.log('[twitter] disabled by app_settings.twitter_enabled');
+    return [];
+  }
+  // Phase 2 placeholder: fetch from curated financial account list via Twitter API v2
+  // Filter for ticker mentions matching user watchlist tickers
+  // Feed into the same scoreHeadlineWithClaude pipeline
+  console.log('[twitter] twitter_enabled=true but Twitter API not yet implemented');
+  return [];
+}
+
+// ── Phase 4: Wire news + briefing jobs into background scheduler ──────────────
+
+const NEWS_BACKGROUND_SYNC_MS = 60 * 60 * 1000; // 1 hour
+
 function startBackgroundSync() {
   if (!BACKGROUND_SYNC_ENABLED) {
     console.log('[background-sync] disabled');
@@ -4884,6 +5504,22 @@ function startBackgroundSync() {
       )
     );
   });
+
+  if (NEWS_AGENT_ENABLED) {
+    scheduleRepeatingTask('news-impact', NEWS_BACKGROUND_SYNC_MS, async () => {
+      // Also pull Twitter headlines (stub for now) and merge before scoring
+      const twitterHeadlines = await fetchTwitterHeadlines();
+      if (twitterHeadlines.length > 0) {
+        console.log(`[news-impact sync] ${twitterHeadlines.length} twitter headlines merged`);
+      }
+      await runNewsImpactJob();
+      // Chain: run briefing job after news ingest completes
+      await runAgentBriefingJob();
+    });
+    console.log('[background-sync] news-impact + agent-briefing scheduled at 60-min cadence');
+  } else {
+    console.log('[background-sync] news agent disabled (NEWS_AGENT_ENABLED=0)');
+  }
 }
 
 // Serve built React app

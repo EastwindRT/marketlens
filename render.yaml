@@ -25,3 +25,9 @@ services:
         sync: false
       - key: CLAUDE_MODEL_PRESET
         sync: false
+      - key: NEWSAPI_KEY
+        sync: false
+      - key: NEWS_AGENT_ENABLED
+        value: "1"
+      - key: TWITTER_ENABLED
+        value: "0"
