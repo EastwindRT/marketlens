@@ -1170,6 +1170,112 @@ function inferOwnershipSignal(filings) {
   return 'neutral';
 }
 
+function summarizeOwnershipConviction({ ownershipFilings, insiderSummary, congressTrades, fundOwnershipSummary, market }) {
+  const insiderNet = finiteNumber(insiderSummary?.last30d?.netValue) || 0;
+  const insiderBuys = insiderSummary?.last30d?.buyCount || 0;
+  const insiderSells = insiderSummary?.last30d?.sellCount || 0;
+  const congressBuys = Array.isArray(congressTrades) ? congressTrades.filter((trade) => trade.type === 'purchase').length : 0;
+  const congressSells = Array.isArray(congressTrades) ? congressTrades.filter((trade) => trade.type === 'sale').length : 0;
+  const trackedFunds = fundOwnershipSummary?.heldByTrackedFunds || 0;
+  const hasActivist = Array.isArray(ownershipFilings) && ownershipFilings.some((filing) => filing.formType === '13D' || filing.formType === '13D/A');
+  const hasPassive = Array.isArray(ownershipFilings) && ownershipFilings.some((filing) => filing.formType === '13G' || filing.formType === '13G/A');
+
+  let score = 40;
+  const reasons = [];
+
+  if (hasActivist) {
+    score += 22;
+    reasons.push('Activist-style 13D ownership disclosure is present.');
+  } else if (hasPassive) {
+    score += 12;
+    reasons.push('Passive 13G ownership disclosure is present.');
+  }
+
+  if (insiderBuys > insiderSells && insiderNet > 0) {
+    score += 18;
+    reasons.push('Recent insider buying outweighs selling.');
+  } else if (insiderSells > insiderBuys && insiderNet < 0) {
+    score -= 12;
+    reasons.push('Recent insider selling outweighs buying.');
+  } else if (insiderBuys + insiderSells > 0) {
+    reasons.push('Insider activity is active but mixed.');
+  }
+
+  if (congressBuys > congressSells) {
+    score += 6;
+    reasons.push('Congress disclosures lean net-buying.');
+  } else if (congressSells > congressBuys) {
+    score -= 4;
+    reasons.push('Congress disclosures lean net-selling.');
+  }
+
+  if (market === 'US' && trackedFunds >= 5) {
+    score += 14;
+    reasons.push('Held broadly across the tracked 13F fund universe.');
+  } else if (market === 'US' && trackedFunds >= 1) {
+    score += 8;
+    reasons.push('Held by at least one tracked 13F fund.');
+  } else if (market === 'US') {
+    reasons.push('No tracked 13F fund holder match in the current universe.');
+  }
+
+  score = Math.max(0, Math.min(100, score));
+  const label = score >= 72
+    ? 'High Conviction'
+    : score >= 58
+    ? 'Constructive'
+    : score >= 42
+    ? 'Mixed'
+    : 'Weak';
+
+  return { score, label, reasons };
+}
+
+function summarizeEventPressure({ daysToEarnings, recentNewsCount, recentInsiderTrades, recentOwnershipFilings, recentCongressTrades }) {
+  let score = 0;
+  const reasons = [];
+
+  if (daysToEarnings != null && daysToEarnings >= 0 && daysToEarnings <= 14) {
+    score += 35;
+    reasons.push('Earnings are inside the next 14 days.');
+  } else if (daysToEarnings != null && daysToEarnings >= 0 && daysToEarnings <= 30) {
+    score += 20;
+    reasons.push('Earnings are within the next month.');
+  }
+
+  if (recentNewsCount >= 8) {
+    score += 18;
+    reasons.push('News flow is unusually busy.');
+  } else if (recentNewsCount >= 3) {
+    score += 10;
+    reasons.push('News flow is active.');
+  }
+
+  if (recentInsiderTrades >= 4) {
+    score += 15;
+    reasons.push('Insider filing activity is elevated.');
+  } else if (recentInsiderTrades > 0) {
+    score += 8;
+    reasons.push('Recent insider filings are present.');
+  }
+
+  if (recentOwnershipFilings > 0) {
+    score += 16;
+    reasons.push('Recent 13D/13G ownership filings add event pressure.');
+  }
+
+  if (recentCongressTrades >= 3) {
+    score += 10;
+    reasons.push('Congress trading activity is elevated.');
+  } else if (recentCongressTrades > 0) {
+    score += 5;
+    reasons.push('Recent congress trades are present.');
+  }
+
+  const label = score >= 55 ? 'High' : score >= 28 ? 'Moderate' : 'Low';
+  return { score, label, reasons };
+}
+
 function buildWhyMoving(price, trend, eventCounts) {
   const reasons = [];
   if (Number.isFinite(price.relativeVolume) && price.relativeVolume >= 1.3) {
@@ -1752,6 +1858,17 @@ async function buildStockIntelligence(symbol) {
     recentOwnershipFilings: ownershipFilings.length,
     recentCongressTrades: normalizedCongress.length,
   };
+  const ownershipConviction = summarizeOwnershipConviction({
+    ownershipFilings,
+    insiderSummary,
+    congressTrades: normalizedCongress,
+    fundOwnershipSummary,
+    market,
+  });
+  const eventPressure = summarizeEventPressure(eventCounts);
+  const sharesOutstanding = finiteNumber(marketData.profile?.shareOutstanding);
+  const shareFloat = finiteNumber(marketData.basics?.shareFloat);
+  const shortFloatPercent = null;
 
   const price = {
     last: finiteNumber(marketData.quote?.c ?? latestClose),
@@ -1768,6 +1885,8 @@ async function buildStockIntelligence(symbol) {
     participation: price.participation,
     ownershipSignal: inferOwnershipSignal(ownershipFilings),
     eventRisk: daysToEarnings != null && daysToEarnings >= 0 && daysToEarnings <= 14 ? 'high' : daysToEarnings != null && daysToEarnings <= 30 ? 'medium' : 'low',
+    ownershipConviction,
+    eventPressure,
     squeezeRisk: 'unknown',
     compositeScore: [
       trend.trendState === 'bullish' ? 30 : trend.trendState === 'mixed' || trend.trendState === 'pullback' ? 18 : 8,
@@ -1787,6 +1906,7 @@ async function buildStockIntelligence(symbol) {
       exchange: marketData.profile?.exchange || (market === 'CA' ? 'TSX' : null),
       industry: marketData.profile?.finnhubIndustry || null,
       marketCap: finiteNumber(marketData.profile?.marketCapitalization),
+      sharesOutstanding,
     },
     price,
     trend,
@@ -1812,6 +1932,8 @@ async function buildStockIntelligence(symbol) {
       roe: finiteNumber(marketData.basics.roeTTM ?? marketData.basics.roeRfy),
       weeks52high: finiteNumber(marketData.basics['52WeekHigh']),
       weeks52low: finiteNumber(marketData.basics['52WeekLow']),
+      shareFloat,
+      shortFloatPercent,
     } : null,
     signals,
     explanations: {
@@ -1873,6 +1995,7 @@ function buildStockIntelligenceSchema() {
         exchange: 'Primary exchange when available.',
         industry: 'Industry text from source metadata when available.',
         marketCap: 'Market capitalization number when available.',
+        sharesOutstanding: 'Reported shares outstanding when available.',
       },
       price: {
         last: 'Latest price.',
@@ -1930,11 +2053,13 @@ function buildStockIntelligenceSchema() {
         latestFiledAt: 'Most recent 13F filing date among the matched holders.',
         topHolders: 'Top matched tracked-fund holders by reported position value.',
       },
-      fundamentals: 'Normalized fundamentals object or null when unavailable.',
+      fundamentals: 'Normalized fundamentals object or null when unavailable. May include shareFloat and shortFloatPercent when a provider exposes them.',
       signals: {
         participation: 'Copied qualitative participation label.',
         ownershipSignal: 'Ownership-derived signal label.',
         eventRisk: '"high" | "medium" | "low".',
+        ownershipConviction: 'Ownership-conviction score, label, and reasons derived from insiders, 13D/13G, congress, and tracked 13F holders.',
+        eventPressure: 'Event-pressure score, label, and reasons derived from earnings timing, news flow, insider filings, ownership filings, and congress activity.',
         squeezeRisk: 'Currently "unknown" until a provider is added.',
         compositeScore: 'Simple multi-factor score on a 0-100-ish scale.',
       },
@@ -1962,7 +2087,7 @@ function buildStockIntelligenceSchema() {
       symbol: 'NVDA',
       asOf: '2026-04-25T22:30:00.000Z',
       market: 'US',
-      company: { name: 'NVIDIA Corp', exchange: 'NASDAQ', industry: 'Technology', marketCap: 2200000 },
+      company: { name: 'NVIDIA Corp', exchange: 'NASDAQ', industry: 'Technology', marketCap: 2200000, sharesOutstanding: 2460000000 },
       price: { last: 942.15, change: 18.42, changePct: 1.99, volume: 48211320, avgVolume20d: 27100450, relativeVolume: 1.78, participation: 'high', currency: 'USD' },
       trend: { close: 942.15, dma20: 915.24, dma50: 884.91, dma200: 731.02, priceVs20dPct: 2.94, priceVs50dPct: 6.47, priceVs200dPct: 28.88, trendState: 'bullish', trendExplanation: 'Price is above the 20, 50, and 200 day averages.' },
       events: { earningsDate: '2026-05-22', daysToEarnings: 27, recentNewsCount: 6, recentInsiderTrades: 2, recentOwnershipFilings: 1, recentCongressTrades: 0 },
@@ -1970,8 +2095,8 @@ function buildStockIntelligenceSchema() {
       ownershipFilings: { recent: [], hasActivistSignal: false, hasPassiveStakeSignal: true },
       congress: { recent: [], buyCount90d: 0, sellCount90d: 0 },
       funds: { heldByTrackedFunds: 4, trackedFundUniverse: 36, matchingMethod: 'issuer_name', totalTrackedValue: 12750000000, totalTrackedShares: 18420000, latestFiledAt: '2026-04-14', topHolders: [] },
-      fundamentals: { peRatio: 45.2, pegRatio: 1.9, psRatio: 23.4, epsTTM: 12.3, revenueGrowthYoy: 62.1, epsGrowthYoy: 78.4, grossMargin: 73.2, operatingMargin: 56.1, netMargin: 48.2, roe: 59.7, weeks52high: 980.0, weeks52low: 530.0 },
-      signals: { participation: 'high', ownershipSignal: 'passive_stake', eventRisk: 'medium', squeezeRisk: 'unknown', compositeScore: 78 },
+      fundamentals: { peRatio: 45.2, pegRatio: 1.9, psRatio: 23.4, epsTTM: 12.3, revenueGrowthYoy: 62.1, epsGrowthYoy: 78.4, grossMargin: 73.2, operatingMargin: 56.1, netMargin: 48.2, roe: 59.7, weeks52high: 980.0, weeks52low: 530.0, shareFloat: null, shortFloatPercent: null },
+      signals: { participation: 'high', ownershipSignal: 'passive_stake', eventRisk: 'medium', ownershipConviction: { score: 68, label: 'Constructive', reasons: ['Passive 13G ownership disclosure is present.', 'Held by at least one tracked 13F fund.'] }, eventPressure: { score: 34, label: 'Moderate', reasons: ['Earnings are within the next month.', 'News flow is active.'] }, squeezeRisk: 'unknown', compositeScore: 78 },
       explanations: { whyMoving: ['Trading at 1.78x normal volume', 'Price above key moving averages'], bullCase: ['Trend remains intact'], bearCase: ['Insider selling outweighs buying'] },
       dataAvailability: { shortInterest: null, optionsPositioning: null, fundOwnershipByStock: { available: true, matchingMethod: 'issuer_name', trackedFundUniverse: 36 } },
       sources: { quote: 'Finnhub / Yahoo Finance', candles: 'Yahoo Finance', insiders: 'SEC Form 4 cache', ownershipFilings: 'SEC EDGAR Schedule 13D/13G', congress: 'Quiver', funds: 'SEC EDGAR 13F-HR (curated known funds, issuer-name matched)', fundamentals: 'Finnhub' },

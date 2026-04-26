@@ -1,3 +1,30 @@
+## Plan: Stock signal expansion — ownership conviction, event pressure, and float context (2026-04-25)
+
+### Goal
+Make the stock page and stock-intelligence object faster to interpret by adding higher-level ownership and catalyst reads, plus honest float context where the current data stack supports it.
+
+### Root cause
+- The app already had insiders, 13D/13G, congress, 13F, earnings, and news, but the stock page still left users to combine too many of those signals mentally.
+- Stock intelligence also lacked a clean ownership-conviction or event-pressure layer, which made future agent use less efficient than it could be.
+- We have `sharesOutstanding` from the profile provider, but not a reliable short-float provider yet, so the float context needed to be explicit about what is and is not available.
+
+### Shipped
+- [x] `server.cjs` — added `signals.ownershipConviction` with score, label, and reasons derived from insiders, 13D/13G, congress, and tracked 13F holders.
+- [x] `server.cjs` — added `signals.eventPressure` with score, label, and reasons derived from earnings timing, news flow, insider filings, ownership filings, and congress activity.
+- [x] `server.cjs` — stock intelligence now includes `company.sharesOutstanding` and may include `fundamentals.shareFloat` / `fundamentals.shortFloatPercent` when the provider exposes them.
+- [x] `src/pages/StockDetail.tsx` — signal summary now includes `Ownership` and `Event Pressure` pills alongside the existing trend / participation / catalyst / momentum reads.
+- [x] `src/pages/StockDetail.tsx` — signal evidence table now includes ownership conviction, event pressure, next earnings, shares outstanding, and an explicit short-float availability row.
+- [x] `docs/stock-intelligence-schema.md` — updated to document the new ownership/event signals and float-field caveat.
+- [x] `node --check server.cjs` passed.
+- [x] `npm run build` passed.
+
+### Expected user-facing outcome
+- Stock pages should be faster to scan because ownership and catalyst intensity are summarized directly instead of being implied.
+- Agents can now reason over ownership conviction and event pressure from one stock-intelligence payload.
+- Users get real float context where available and a clear statement that short-float data is not wired in yet, instead of a vague empty field.
+
+---
+
 ## Plan: Sprint D item 3 — 13F ownership aggregation in stock intelligence (2026-04-25)
 
 ### Goal

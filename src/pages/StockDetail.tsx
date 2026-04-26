@@ -315,6 +315,8 @@ export default function StockDetail() {
           filingCount={filings?.length ?? 0}
           nextEarningsDate={nextEarningsDate}
           isCanadian={isCanadian}
+          newsCount={news?.length ?? 0}
+          shareOutstanding={profile?.shareOutstanding ?? null}
         />
       </div>
 
@@ -490,6 +492,8 @@ function SignalSummaryPanel({
   filingCount,
   nextEarningsDate,
   isCanadian,
+  newsCount,
+  shareOutstanding,
 }: {
   symbol: string;
   currency: string;
@@ -504,6 +508,8 @@ function SignalSummaryPanel({
   filingCount: number;
   nextEarningsDate: string | null;
   isCanadian: boolean;
+  newsCount: number;
+  shareOutstanding: number | null;
 }) {
   const priceVs20 = latestClose != null && sma20 ? ((latestClose - sma20) / sma20) * 100 : null;
   const priceVs50 = latestClose != null && sma50 ? ((latestClose - sma50) / sma50) * 100 : null;
@@ -566,11 +572,25 @@ function SignalSummaryPanel({
   const catalystLabel = catalystParts.length > 0 ? catalystParts.join(' • ') : 'No major ownership events';
 
   const earningsDate = nextEarningsDate ? new Date(nextEarningsDate) : null;
+  const daysToEarnings = !earningsDate || Number.isNaN(earningsDate.getTime())
+    ? null
+    : Math.round((earningsDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
   const earningsLabel = !earningsDate || Number.isNaN(earningsDate.getTime())
     ? isCanadian
       ? 'No earnings calendar feed'
       : 'No upcoming earnings found'
     : `Earnings ${earningsDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+  const ownershipScore = (filingCount > 0 ? 30 : 0) + (insiderCount >= 4 ? 25 : insiderCount > 0 ? 12 : 0) + (!isCanadian && shareOutstanding ? 8 : 0);
+  const ownershipLabel = ownershipScore >= 45 ? 'Constructive' : ownershipScore >= 20 ? 'Developing' : 'Light';
+  const ownershipTone = ownershipScore >= 45 ? 'var(--color-up)' : ownershipScore >= 20 ? 'var(--accent-blue-light)' : 'var(--text-secondary)';
+  const eventPressureScore = (daysToEarnings != null && daysToEarnings >= 0 && daysToEarnings <= 14 ? 35 : daysToEarnings != null && daysToEarnings <= 30 ? 20 : 0)
+    + (newsCount >= 8 ? 18 : newsCount >= 3 ? 10 : 0)
+    + (insiderCount >= 4 ? 15 : insiderCount > 0 ? 8 : 0)
+    + (filingCount > 0 ? 16 : 0);
+  const eventPressureLabel = eventPressureScore >= 55 ? 'High' : eventPressureScore >= 28 ? 'Moderate' : 'Low';
+  const eventPressureTone = eventPressureScore >= 55 ? 'var(--color-down)' : eventPressureScore >= 28 ? 'var(--accent-blue-light)' : 'var(--text-secondary)';
+  const sharesOutstandingLabel = shareOutstanding != null ? formatLargeNumber(shareOutstanding) : '—';
+  const shortFloatLabel = 'Not available';
   return (
     <div
       style={{
@@ -586,7 +606,7 @@ function SignalSummaryPanel({
             Signal Summary
           </p>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
-            Quick read on trend, participation, and ownership activity for {symbol}
+            Quick read on trend, participation, ownership conviction, and event pressure for {symbol}
           </p>
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
@@ -596,7 +616,7 @@ function SignalSummaryPanel({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
         <SignalPill
           label="Trend"
           value={trendLabel}
@@ -608,14 +628,19 @@ function SignalSummaryPanel({
           tone={participationTone}
         />
         <SignalPill
+          label="Ownership"
+          value={ownershipLabel}
+          tone={ownershipTone}
+        />
+        <SignalPill
           label="Catalyst"
           value={catalystLabel}
           tone="var(--accent-blue-light)"
         />
         <SignalPill
-          label="Event Risk"
-          value={earningsLabel}
-          tone="var(--text-primary)"
+          label="Event Pressure"
+          value={eventPressureLabel}
+          tone={eventPressureTone}
         />
         <SignalPill
           label="Momentum"
@@ -686,6 +711,31 @@ function SignalSummaryPanel({
                 metric="Ownership activity"
                 value={catalystLabel}
                 read={isCanadian ? 'Based on insider activity' : 'Combines insider trades and 13D/13G filings'}
+              />
+              <SignalTableRow
+                metric="Ownership conviction"
+                value={ownershipLabel}
+                read={ownershipScore >= 45 ? 'Ownership signals lean constructive across filings and insider activity' : ownershipScore >= 20 ? 'Some ownership signals are present but not decisive yet' : 'Ownership signal is still light'}
+              />
+              <SignalTableRow
+                metric="Event pressure"
+                value={eventPressureLabel}
+                read={eventPressureScore >= 55 ? 'Catalyst flow is elevated right now' : eventPressureScore >= 28 ? 'There is a moderate amount of near-term event pressure' : 'Catalyst calendar looks relatively quiet'}
+              />
+              <SignalTableRow
+                metric="Next earnings"
+                value={earningsLabel}
+                read={daysToEarnings == null ? 'No dated earnings catalyst in the current feed' : `${daysToEarnings} day${daysToEarnings === 1 ? '' : 's'} until the next reported earnings date`}
+              />
+              <SignalTableRow
+                metric="Shares outstanding"
+                value={sharesOutstandingLabel}
+                read="Total shares issued by the company; useful context while a dedicated float provider is not wired in"
+              />
+              <SignalTableRow
+                metric="Short float"
+                value={shortFloatLabel}
+                read="Short-float data provider is not connected yet"
               />
             </tbody>
           </table>

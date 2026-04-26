@@ -34,6 +34,8 @@ Important interpretation notes:
 - `congress` is disclosed trade activity, not a guaranteed live holdings ledger.
 - `ownershipFilings` is currently US-only.
 - `funds` is currently US-only and is derived from a curated tracked-fund universe using issuer-name matching against recent 13F holdings.
+- `company.sharesOutstanding` is available when the quote/profile provider exposes it.
+- `fundamentals.shareFloat` and `fundamentals.shortFloatPercent` remain nullable because the current provider stack does not reliably expose them for all names.
 - `dataAvailability.shortInterest` and `optionsPositioning` are still placeholders for future provider-backed expansions.
 - Null fields are expected when a source is unavailable for that market or symbol.
 

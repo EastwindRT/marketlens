@@ -1,3 +1,11 @@
+## Lesson: 2026-04-25 - Derived signals are only trustworthy when missing providers are called out explicitly
+
+**Observation:** We could add useful ownership-conviction and event-pressure reads immediately from the signals already in the app, but float and short-float coverage was much thinner.
+**Root cause:** It is tempting to present all market-structure fields as if they are equally supported once a summary card exists. In reality, some inputs are first-class in the current stack and others still need a dedicated provider.
+**Rule:** When you add a new derived signal, pair it with explicit availability language for weaker underlying fields. A good derived layer should reduce cognitive load without creating fake certainty about data the app does not actually have.
+
+---
+
 ## Lesson: 2026-04-25 - When exact ticker-level ownership data is missing, expose the matching method instead of faking precision
 
 **Observation:** We could meaningfully enrich stock intelligence with 13F ownership context using the existing curated fund universe, but the holdings parser does not carry a clean ticker field for every issuer.
