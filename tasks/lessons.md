@@ -1,3 +1,11 @@
+## Lesson: 2026-04-25 - When exact ticker-level ownership data is missing, expose the matching method instead of faking precision
+
+**Observation:** We could meaningfully enrich stock intelligence with 13F ownership context using the existing curated fund universe, but the holdings parser does not carry a clean ticker field for every issuer.
+**Root cause:** The real limitation was not lack of data, but lack of exact join keys. Issuer-name matching is useful, but only if the payload makes that approximation explicit.
+**Rule:** If an aggregation depends on heuristic matching, include the matching method in both the payload and the docs. A slightly approximate but well-labeled signal is more useful than a blank section, and much safer than implied false precision.
+
+---
+
 ## Lesson: 2026-04-25 - Aggregate pages usually deserve a snapshot endpoint before they need more frontend tuning
 
 **Observation:** The leaderboard had already received quote batching and refresh-state polish, but it still paid three separate client reads (`players`, `holdings`, `recent trades`) before the page could fully settle.

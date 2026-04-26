@@ -1,3 +1,29 @@
+## Plan: Sprint D item 3 — 13F ownership aggregation in stock intelligence (2026-04-25)
+
+### Goal
+Enrich `/api/stock-intelligence` with a useful per-stock 13F ownership summary so agents and advanced users can see whether tracked institutional funds hold the name without stitching together the separate Funds workflows.
+
+### Root cause
+- The stock-intelligence schema explicitly advertised `fundOwnershipByStock` as unimplemented even though the app already had 13F parsing and fund-level holdings endpoints elsewhere.
+- That meant agent consumers still had to reverse into the 13F subsystem manually for a common question: "which tracked funds hold this stock?"
+- The missing piece was not raw 13F access but a normalized stock-level aggregation path.
+
+### Shipped
+- [x] `server.cjs` — stock intelligence now includes a `funds` section for US stocks with tracked-holder count, tracked universe size, total tracked value, total tracked shares, most recent filing date, and top matched holders.
+- [x] `server.cjs` — added cached latest-holdings loaders for the curated `KNOWN_FUNDS` universe so repeated stock-intelligence calls do not refetch every 13F filer from scratch.
+- [x] `server.cjs` — added explicit issuer-name matching and surfaced that method in both `funds.matchingMethod` and `dataAvailability.fundOwnershipByStock`.
+- [x] `server.cjs` — `sources.funds` now documents that the ownership slice comes from SEC 13F-HR plus curated tracked-fund issuer-name matching.
+- [x] `docs/stock-intelligence-schema.md` — updated the schema doc to include the new `funds` section and matching-method caveat.
+- [x] `node --check server.cjs` passed.
+- [x] `npm run build` passed.
+
+### Expected user-facing outcome
+- Agents can answer "which tracked funds hold this stock?" from one stock-intelligence payload instead of calling a separate fund search flow.
+- Stock intelligence is materially richer for institutional-ownership context while staying honest about the current matching method and tracked-fund coverage.
+- The new 13F path stays cache-friendly, so it improves the agent payload without turning the endpoint into a slow rebuild on every request.
+
+---
+
 ## Plan: Sprint D item 2 — Server-backed leaderboard snapshots (2026-04-25)
 
 ### Goal

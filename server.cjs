@@ -1652,6 +1652,15 @@ async function buildStockIntelligence(symbol) {
     ensureCongressTrades({ tickers: [baseTicker(normalized)], days: 90 }).catch(() => ({ trades: [] })),
   ]);
 
+  let fundOwnershipSummary = null;
+  if (market === 'US') {
+    try {
+      fundOwnershipSummary = await buildFundOwnershipByStock(normalized, marketData.profile?.name || '');
+    } catch (err) {
+      console.error('[stock-intelligence/funds]', err.message);
+    }
+  }
+
   const closeSeries = marketData.candles.map((bar) => finiteNumber(bar.close)).filter((value) => value != null);
   const volumeSeries = marketData.candles.map((bar) => finiteNumber(bar.volume)).filter((value) => value != null);
   const latestClose = closeSeries.length ? closeSeries[closeSeries.length - 1] : finiteNumber(marketData.quote?.c);
@@ -1789,6 +1798,7 @@ async function buildStockIntelligence(symbol) {
       buyCount90d: normalizedCongress.filter((trade) => trade.type === 'purchase').length,
       sellCount90d: normalizedCongress.filter((trade) => trade.type === 'sale').length,
     },
+    funds: fundOwnershipSummary,
     fundamentals: marketData.basics ? {
       peRatio: finiteNumber(marketData.basics.peNormalizedAnnual ?? marketData.basics.peTTM ?? marketData.basics.peBasicExclExtraTTM),
       pegRatio: finiteNumber(marketData.basics.pegRatioTTM),
@@ -1820,7 +1830,13 @@ async function buildStockIntelligence(symbol) {
     dataAvailability: {
       shortInterest: null,
       optionsPositioning: null,
-      fundOwnershipByStock: null,
+      fundOwnershipByStock: market === 'US'
+        ? {
+            available: Boolean(fundOwnershipSummary),
+            matchingMethod: 'issuer_name',
+            trackedFundUniverse: KNOWN_FUNDS.length,
+          }
+        : null,
     },
     sources: {
       quote: market === 'CA' ? 'TMX / Yahoo Finance' : 'Finnhub / Yahoo Finance',
@@ -1828,6 +1844,7 @@ async function buildStockIntelligence(symbol) {
       insiders: 'SEC Form 4 cache',
       ownershipFilings: market === 'CA' ? 'Unavailable' : 'SEC EDGAR Schedule 13D/13G',
       congress: 'Quiver',
+      funds: market === 'CA' ? 'Unavailable' : 'SEC EDGAR 13F-HR (curated known funds, issuer-name matched)',
       fundamentals: market === 'CA' ? 'Unavailable' : 'Finnhub',
     },
   };
@@ -1904,6 +1921,15 @@ function buildStockIntelligenceSchema() {
         buyCount90d: 'Purchase count over the last 90 days.',
         sellCount90d: 'Sale count over the last 90 days.',
       },
+      funds: {
+        heldByTrackedFunds: 'Count of curated tracked 13F funds currently matching the issuer name.',
+        trackedFundUniverse: 'Count of curated funds scanned for the match.',
+        matchingMethod: 'How the stock-to-holding match was performed.',
+        totalTrackedValue: 'Sum of matched position value across the tracked fund universe.',
+        totalTrackedShares: 'Sum of matched reported shares across the tracked fund universe when available.',
+        latestFiledAt: 'Most recent 13F filing date among the matched holders.',
+        topHolders: 'Top matched tracked-fund holders by reported position value.',
+      },
       fundamentals: 'Normalized fundamentals object or null when unavailable.',
       signals: {
         participation: 'Copied qualitative participation label.',
@@ -1920,7 +1946,7 @@ function buildStockIntelligenceSchema() {
       dataAvailability: {
         shortInterest: 'Null until provider is added.',
         optionsPositioning: 'Null until provider is added.',
-        fundOwnershipByStock: 'Null until per-stock 13F aggregation is added.',
+        fundOwnershipByStock: 'Null for unsupported markets; otherwise describes tracked-fund coverage and matching method.',
       },
       sources: {
         quote: 'Quote provider label.',
@@ -1928,6 +1954,7 @@ function buildStockIntelligenceSchema() {
         insiders: 'Insider provider label.',
         ownershipFilings: 'Ownership filing provider label.',
         congress: 'Congress provider label.',
+        funds: '13F ownership provider label.',
         fundamentals: 'Fundamentals provider label.',
       },
     },
@@ -1942,11 +1969,12 @@ function buildStockIntelligenceSchema() {
       insiders: { last30d: { buyCount: 2, sellCount: 5, netValue: -2100000 }, recent: [] },
       ownershipFilings: { recent: [], hasActivistSignal: false, hasPassiveStakeSignal: true },
       congress: { recent: [], buyCount90d: 0, sellCount90d: 0 },
+      funds: { heldByTrackedFunds: 4, trackedFundUniverse: 36, matchingMethod: 'issuer_name', totalTrackedValue: 12750000000, totalTrackedShares: 18420000, latestFiledAt: '2026-04-14', topHolders: [] },
       fundamentals: { peRatio: 45.2, pegRatio: 1.9, psRatio: 23.4, epsTTM: 12.3, revenueGrowthYoy: 62.1, epsGrowthYoy: 78.4, grossMargin: 73.2, operatingMargin: 56.1, netMargin: 48.2, roe: 59.7, weeks52high: 980.0, weeks52low: 530.0 },
       signals: { participation: 'high', ownershipSignal: 'passive_stake', eventRisk: 'medium', squeezeRisk: 'unknown', compositeScore: 78 },
       explanations: { whyMoving: ['Trading at 1.78x normal volume', 'Price above key moving averages'], bullCase: ['Trend remains intact'], bearCase: ['Insider selling outweighs buying'] },
-      dataAvailability: { shortInterest: null, optionsPositioning: null, fundOwnershipByStock: null },
-      sources: { quote: 'Finnhub / Yahoo Finance', candles: 'Yahoo Finance', insiders: 'SEC Form 4 cache', ownershipFilings: 'SEC EDGAR Schedule 13D/13G', congress: 'Quiver', fundamentals: 'Finnhub' },
+      dataAvailability: { shortInterest: null, optionsPositioning: null, fundOwnershipByStock: { available: true, matchingMethod: 'issuer_name', trackedFundUniverse: 36 } },
+      sources: { quote: 'Finnhub / Yahoo Finance', candles: 'Yahoo Finance', insiders: 'SEC Form 4 cache', ownershipFilings: 'SEC EDGAR Schedule 13D/13G', congress: 'Quiver', funds: 'SEC EDGAR 13F-HR (curated known funds, issuer-name matched)', fundamentals: 'Finnhub' },
     },
   };
 }
@@ -4077,6 +4105,147 @@ const KNOWN_FUNDS = [
   // AI / Tech focused
   { cik: '2045724', name: 'SITUATIONAL AWARENESS LP' },
 ];
+
+const FUND_HOLDINGS_TTL = 24 * 60 * 60 * 1000;
+const fundHoldingsCache = new Map();
+const fundHoldingsInFlight = new Map();
+const fundOwnershipByStockCache = new Map();
+const fundOwnershipByStockInFlight = new Map();
+
+function normalizeIssuerName(value) {
+  if (!value) return '';
+  return value
+    .toUpperCase()
+    .replace(/&/g, ' AND ')
+    .replace(/[^A-Z0-9\s]/g, ' ')
+    .replace(/\b(CLASS|CL|SERIES)\s+[A-Z0-9]+\b/g, ' ')
+    .replace(/\b(INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|HOLDINGS|HOLDING|GROUP|PLC|LTD|LIMITED|SA|NV|AG|LLC|LP)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function issuerNamesLookLikeMatch(companyName, holdingName) {
+  const a = normalizeIssuerName(companyName);
+  const b = normalizeIssuerName(holdingName);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.length >= 6 && b.startsWith(a)) return true;
+  if (b.length >= 6 && a.startsWith(b)) return true;
+
+  const aTokens = a.split(' ').filter((token) => token.length > 2);
+  const bTokens = b.split(' ').filter((token) => token.length > 2);
+  if (!aTokens.length || !bTokens.length) return false;
+  if (aTokens[0] !== bTokens[0]) return false;
+
+  const overlap = aTokens.filter((token) => bTokens.includes(token));
+  return overlap.length >= Math.min(2, aTokens.length, bTokens.length);
+}
+
+async function getLatestFundHoldingsCached(fund) {
+  const cached = fundHoldingsCache.get(fund.cik);
+  if (cached && isCacheFresh(cached.ts, FUND_HOLDINGS_TTL)) {
+    return cached.payload;
+  }
+  if (fundHoldingsInFlight.has(fund.cik)) {
+    return fundHoldingsInFlight.get(fund.cik);
+  }
+
+  const build = (async () => {
+    const { results: filings } = await get13FFilings(fund.cik);
+    if (!filings.length) {
+      const empty = {
+        fund: fund.name,
+        cik: fund.cik,
+        filingDate: null,
+        period: null,
+        totalValue: 0,
+        holdings: [],
+      };
+      fundHoldingsCache.set(fund.cik, { ts: Date.now(), payload: empty });
+      return empty;
+    }
+
+    const latest = filings[0];
+    const holdings = await fetchHoldings(fund.cik, latest.accession);
+    const totalValue = holdings.reduce((sum, holding) => sum + (finiteNumber(holding.value) || 0), 0);
+    const payload = {
+      fund: fund.name,
+      cik: fund.cik,
+      filingDate: latest.filingDate || null,
+      period: latest.period || null,
+      totalValue,
+      holdings,
+    };
+    fundHoldingsCache.set(fund.cik, { ts: Date.now(), payload });
+    return payload;
+  })().finally(() => {
+    fundHoldingsInFlight.delete(fund.cik);
+  });
+
+  fundHoldingsInFlight.set(fund.cik, build);
+  return build;
+}
+
+async function buildFundOwnershipByStock(symbol, companyName) {
+  const normalized = normalizeSymbol(symbol);
+  const cacheKey = `${normalized}::${normalizeIssuerName(companyName)}`;
+  const cached = fundOwnershipByStockCache.get(cacheKey);
+  if (cached && isCacheFresh(cached.ts, FUND_HOLDINGS_TTL)) {
+    return cached.payload;
+  }
+  if (fundOwnershipByStockInFlight.has(cacheKey)) {
+    return fundOwnershipByStockInFlight.get(cacheKey);
+  }
+
+  const build = (async () => {
+    const holders = [];
+    const batchSize = 4;
+    for (let i = 0; i < KNOWN_FUNDS.length; i += batchSize) {
+      const batch = KNOWN_FUNDS.slice(i, i + batchSize);
+      const results = await Promise.allSettled(batch.map((fund) => getLatestFundHoldingsCached(fund)));
+      for (const result of results) {
+        if (result.status !== 'fulfilled') continue;
+        const fundData = result.value;
+        const matched = fundData.holdings.find((holding) => issuerNamesLookLikeMatch(companyName, holding.name));
+        if (!matched) continue;
+        const value = finiteNumber(matched.value) || 0;
+        const shares = finiteNumber(matched.shares);
+        holders.push({
+          fund: fundData.fund,
+          cik: fundData.cik,
+          filedAt: fundData.filingDate,
+          period: fundData.period,
+          issuer: matched.name,
+          value,
+          shares,
+          pctOfFund: fundData.totalValue > 0 ? (value / fundData.totalValue) * 100 : null,
+          sector: matched.sector || null,
+        });
+      }
+    }
+
+    holders.sort((a, b) => b.value - a.value);
+    const payload = {
+      heldByTrackedFunds: holders.length,
+      trackedFundUniverse: KNOWN_FUNDS.length,
+      matchingMethod: 'issuer_name',
+      totalTrackedValue: holders.reduce((sum, holder) => sum + (finiteNumber(holder.value) || 0), 0),
+      totalTrackedShares: holders.reduce((sum, holder) => sum + (finiteNumber(holder.shares) || 0), 0),
+      latestFiledAt: holders
+        .map((holder) => holder.filedAt)
+        .filter(Boolean)
+        .sort((a, b) => b.localeCompare(a))[0] || null,
+      topHolders: holders.slice(0, 10),
+    };
+    fundOwnershipByStockCache.set(cacheKey, { ts: Date.now(), payload });
+    return payload;
+  })().finally(() => {
+    fundOwnershipByStockInFlight.delete(cacheKey);
+  });
+
+  fundOwnershipByStockInFlight.set(cacheKey, build);
+  return build;
+}
 
 // Cached recent-filers response
 let recentFilersCache = null;
