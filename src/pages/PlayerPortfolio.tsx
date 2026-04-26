@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowUpRight, ArrowDownRight, Briefcase, Eye } from 'lucide-react';
-import { getHoldings, getPlayerById, getWatchlist, supabase } from '../api/supabase';
+import { getHoldings, getPlayerById, getPortfolioSnapshot, getWatchlist, supabase } from '../api/supabase';
 import { useStockQuotes } from '../hooks/useStockData';
 import type { Holding, Player, WatchlistInput } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
+import ErrorBoundary from '../components/ui/ErrorBoundary';
 
 type CachedPlayerPortfolio = {
   player: Player | null;
@@ -174,37 +175,56 @@ export default function PlayerPortfolio() {
           setError('');
         }
 
-        // Use allSettled so a failed watchlist/holdings fetch doesn't kill the whole page
-        const [pRes, hRes, wRes] = await Promise.allSettled([
-          getPlayerById(playerId!),
-          getHoldings(activePlayerId),
-          getWatchlist(activePlayerId),
-        ]);
+        // Prefer the server snapshot so public portfolios load from one payload.
+        // Fall back to the old allSettled path if that endpoint is unavailable.
+        let snapshot: Awaited<ReturnType<typeof getPortfolioSnapshot>> | null = null;
+        try {
+          snapshot = await getPortfolioSnapshot(activePlayerId);
+        } catch {
+          snapshot = null;
+        }
+        const fallbackResults = snapshot
+          ? null
+          : await Promise.allSettled([
+              getPlayerById(playerId!),
+              getHoldings(activePlayerId),
+              getWatchlist(activePlayerId),
+            ]);
         if (!isActive || runId !== requestId) return;
 
-        const p = pRes.status === 'fulfilled' ? pRes.value : null;
+        const p = fallbackResults
+          ? (fallbackResults[0].status === 'fulfilled' ? fallbackResults[0].value : null)
+          : snapshot?.player ?? null;
         if (!p) {
-          const reason = pRes.status === 'rejected' ? String(pRes.reason) : 'Player not found.';
+          const reason = fallbackResults && fallbackResults[0].status === 'rejected'
+            ? String(fallbackResults[0].reason)
+            : 'Player not found.';
           setError(reason);
           return;
         }
         setPlayer(p);
         setError('');
-        if (hRes.status === 'fulfilled') setHoldings(hRes.value);
-        else setHoldings([]);
+        const nextHoldings = fallbackResults
+          ? (fallbackResults[1].status === 'fulfilled' ? fallbackResults[1].value : [])
+          : snapshot?.holdings ?? [];
+        setHoldings(nextHoldings);
 
-        if (wRes.status === 'fulfilled') {
-          setWatchlist(wRes.value);
+        if (fallbackResults) {
+          if (fallbackResults[2].status === 'fulfilled') {
+            setWatchlist(fallbackResults[2].value);
+          } else {
+            console.warn('[PlayerPortfolio] watchlist load failed:', fallbackResults[2].reason);
+            setWatchlist([]);
+          }
         } else {
-          // Public portfolios should degrade to an empty watchlist instead of
-          // throwing users into an error/reload path for a non-critical section.
-          console.warn('[PlayerPortfolio] watchlist load failed:', wRes.reason);
-          setWatchlist([]);
+          setWatchlist(snapshot?.watchlist ?? []);
         }
         writeCachedPortfolio(activePlayerId, {
           player: p,
-          holdings: hRes.status === 'fulfilled' ? hRes.value : [],
-          watchlist: wRes.status === 'fulfilled' ? wRes.value : [],
+          holdings: nextHoldings,
+          watchlist: fallbackResults
+            ? (fallbackResults[2].status === 'fulfilled' ? fallbackResults[2].value : [])
+            : (snapshot?.watchlist ?? []),
         });
         hasLoadedRef.current = true;
       } catch {
@@ -356,7 +376,9 @@ export default function PlayerPortfolio() {
               <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: 0 }}>{player.name} hasn't made any trades yet</p>
             </div>
           ) : (
-            holdings.map(h => <HoldingRow key={h.id} holding={h} quote={quoteMap[h.symbol]} />)
+            <ErrorBoundary label="player-portfolio:holdings" compact>
+              {holdings.map(h => <HoldingRow key={h.id} holding={h} quote={quoteMap[h.symbol]} />)}
+            </ErrorBoundary>
           )}
         </div>
       </div>
@@ -375,7 +397,9 @@ export default function PlayerPortfolio() {
               <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: 0 }}>Watchlist is empty</p>
             </div>
           ) : (
-            watchlist.map(w => <WatchRow key={w.symbol} item={w} quote={quoteMap[w.symbol]} />)
+            <ErrorBoundary label="player-portfolio:watchlist" compact>
+              {watchlist.map(w => <WatchRow key={w.symbol} item={w} quote={quoteMap[w.symbol]} />)}
+            </ErrorBoundary>
           )}
         </div>
       </div>

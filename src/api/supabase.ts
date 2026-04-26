@@ -90,6 +90,12 @@ export interface WatchlistInput {
   exchange?: string;
 }
 
+export interface PortfolioSnapshot {
+  player: Player | null;
+  holdings: Holding[];
+  watchlist: WatchlistInput[];
+}
+
 export interface SearchLog {
   id: string;
   player_id: string;
@@ -266,6 +272,21 @@ export async function getWatchlist(playerId: string): Promise<WatchlistInput[]> 
     name: item.name,
     exchange: item.exchange,
   }));
+}
+
+export async function getPortfolioSnapshot(playerId: string): Promise<PortfolioSnapshot> {
+  const res = await fetch(`/api/portfolio-snapshot?playerId=${encodeURIComponent(playerId)}`);
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json?.error || `Portfolio snapshot request failed (${res.status})`);
+  }
+
+  const json = await res.json();
+  return {
+    player: json?.player ?? null,
+    holdings: Array.isArray(json?.holdings) ? json.holdings : [],
+    watchlist: Array.isArray(json?.watchlist) ? json.watchlist : [],
+  };
 }
 
 export async function upsertWatchlistItem(playerId: string, item: WatchlistInput): Promise<void> {

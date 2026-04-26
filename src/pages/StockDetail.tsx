@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { lazy, Suspense, useRef, useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { Plus, Check, RefreshCw, ArrowUpDown, Send, Bot } from 'lucide-react';
 import { useStockCandles, useStockQuote, useStockProfile } from '../hooks/useStockData';
@@ -17,16 +17,24 @@ import { TimeRangePicker } from '../components/ui/TimeRangePicker';
 import { InsiderPanel } from '../components/insider/InsiderPanel';
 import { NewsSection } from '../components/news/NewsSection';
 import { PeerComparison } from '../components/stock/PeerComparison';
-import { DeepAnalyzeDrawer, type DeepAnalyzeTarget } from '../components/ai/DeepAnalyzeDrawer';
+import type { DeepAnalyzeTarget } from '../components/ai/DeepAnalyzeDrawer';
 import { DeepAnalyzeButton } from '../components/ai/DeepAnalyzeButton';
 import { TrendLinesLegend } from '../components/chart/TrendLines';
-import { FilingSheet } from '../components/ui/FilingSheet';
 import { PriceHeaderSkeleton } from '../components/ui/LoadingSkeleton';
-import TradeModal from '../components/trade/TradeModal';
 import { formatLargeNumber, formatVolume, formatPrice } from '../utils/formatters';
 import { calculateRelativeVolume, calculateRSI, calculateSMA } from '../utils/indicators';
 import { isTSXTicker } from '../utils/marketHours';
 import type { MarketFiling } from '../api/edgar';
+
+// Lazy-load heavy modals/drawers — they only render when the user opens them,
+// so move them out of the StockDetail initial chunk.
+const DeepAnalyzeDrawer = lazy(() =>
+  import('../components/ai/DeepAnalyzeDrawer').then((m) => ({ default: m.DeepAnalyzeDrawer }))
+);
+const FilingSheet = lazy(() =>
+  import('../components/ui/FilingSheet').then((m) => ({ default: m.FilingSheet }))
+);
+const TradeModal = lazy(() => import('../components/trade/TradeModal'));
 
 const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -388,25 +396,35 @@ export default function StockDetail() {
         />
       </div>
 
-      {/* Trade modal */}
-      <DeepAnalyzeDrawer
-        open={deepTarget !== null}
-        onClose={() => setDeepTarget(null)}
-        target={deepTarget}
-      />
+      {/* Lazy modals/drawers — fetched only when first opened */}
+      <Suspense fallback={null}>
+        {deepTarget !== null && (
+          <DeepAnalyzeDrawer
+            open={true}
+            onClose={() => setDeepTarget(null)}
+            target={deepTarget}
+          />
+        )}
+      </Suspense>
 
-      <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
+      <Suspense fallback={null}>
+        {selectedFiling && (
+          <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
+        )}
+      </Suspense>
 
-      {showTradeModal && quote?.c && (
-        <TradeModal
-          symbol={symbol}
-          exchange={isCanadian ? (quote._exchange || 'TSX') : (profile?.exchange || 'NYSE')}
-          companyName={profile?.name || quote._name || symbol}
-          currentPrice={liveQuote?.price ?? quote.c}
-          currency={currency}
-          onClose={() => setShowTradeModal(false)}
-        />
-      )}
+      <Suspense fallback={null}>
+        {showTradeModal && quote?.c && (
+          <TradeModal
+            symbol={symbol}
+            exchange={isCanadian ? (quote._exchange || 'TSX') : (profile?.exchange || 'NYSE')}
+            companyName={profile?.name || quote._name || symbol}
+            currentPrice={liveQuote?.price ?? quote.c}
+            currency={currency}
+            onClose={() => setShowTradeModal(false)}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

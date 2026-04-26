@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { useStockNews } from '../../hooks/useStockNews';
 import { useAnalystData } from '../../hooks/useAnalystData';
@@ -8,10 +8,14 @@ import { formatPrice, formatLargeNumber } from '../../utils/formatters';
 import { format, fromUnixTime } from 'date-fns';
 import type { NewsItem, AnalystRecommendation, PriceTarget, EarningsSurprise, Edgar13DFiling } from '../../api/types';
 import type { CongressTrade } from '../../api/congress';
-import { FilingSheet } from '../ui/FilingSheet';
 import type { MarketFiling } from '../../api/edgar';
-import { DeepAnalyzeDrawer, type DeepAnalyzeTarget } from '../ai/DeepAnalyzeDrawer';
+import type { DeepAnalyzeTarget } from '../ai/DeepAnalyzeDrawer';
 import { DeepAnalyzeButton } from '../ai/DeepAnalyzeButton';
+
+const FilingSheet = lazy(() => import('../ui/FilingSheet').then((m) => ({ default: m.FilingSheet })));
+const DeepAnalyzeDrawer = lazy(() =>
+  import('../ai/DeepAnalyzeDrawer').then((m) => ({ default: m.DeepAnalyzeDrawer }))
+);
 
 interface Props {
   symbol: string;
@@ -119,12 +123,20 @@ export function NewsSection({ symbol, isCanadian, currentPrice, currency = 'USD'
         />
       )}
 
-      <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
-      <DeepAnalyzeDrawer
-        open={deepTarget !== null}
-        onClose={() => setDeepTarget(null)}
-        target={deepTarget}
-      />
+      <Suspense fallback={null}>
+        {selectedFiling && (
+          <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
+        )}
+      </Suspense>
+      <Suspense fallback={null}>
+        {deepTarget !== null && (
+          <DeepAnalyzeDrawer
+            open={true}
+            onClose={() => setDeepTarget(null)}
+            target={deepTarget}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

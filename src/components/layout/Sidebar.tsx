@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
 import { Minus, Star, X, Trophy, Users, TrendingUp, TrendingDown, Shield, User, Newspaper, Building2, Briefcase, CircleDollarSign, Plus } from 'lucide-react';
-import AddPositionModal from '../trade/AddPositionModal';
+
+const AddPositionModal = lazy(() => import('../trade/AddPositionModal'));
 import { useWatchlistStore } from '../../store/watchlistStore';
 import { useLeagueStore } from '../../store/leagueStore';
-import { useStockQuote } from '../../hooks/useStockData';
+import { useStockQuotes } from '../../hooks/useStockData';
 import { getAllPlayers, getAllHoldings } from '../../api/supabase';
 import { formatPrice } from '../../utils/formatters';
 import { formatTicker } from '../../utils/marketHours';
 import type { Player, Holding } from '../../api/supabase';
+
+type SidebarQuote = { c?: number; dp?: number } | undefined;
 
 const SUPABASE_CONFIGURED =
   !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -37,10 +40,9 @@ function Divider() {
 }
 
 // ── Watchlist item ────────────────────────────────────────────────────────────
-function WatchlistItem({ symbol, name, onClose }: { symbol: string; name?: string; onClose?: () => void }) {
+function WatchlistItem({ symbol, name, quote, onClose }: { symbol: string; name?: string; quote?: SidebarQuote; onClose?: () => void }) {
   const navigate = useNavigate();
   const { symbol: currentSymbol } = useParams();
-  const { data: quote } = useStockQuote(symbol);
   const removeItem = useWatchlistStore(s => s.removeItem);
   const isActive = currentSymbol === symbol;
   const isUp = (quote?.dp ?? 0) >= 0;
@@ -176,9 +178,8 @@ function PlayerRow({ player, rank, positions, isMe, onClose }: {
 }
 
 // ── S&P mover row ─────────────────────────────────────────────────────────────
-function MoverRow({ symbol, onClose }: { symbol: string; onClose?: () => void }) {
+function MoverRow({ symbol, quote, onClose }: { symbol: string; quote?: SidebarQuote; onClose?: () => void }) {
   const navigate = useNavigate();
-  const { data: quote } = useStockQuote(symbol);
   if (!quote?.c) return null;
   const isUp = (quote.dp ?? 0) >= 0;
   const pct = quote.dp ?? 0;
@@ -210,38 +211,6 @@ function MoverRow({ symbol, onClose }: { symbol: string; onClose?: () => void })
   );
 }
 
-// Fetches quotes for all SP_SYMBOLS and returns sorted movers (invisible component)
-function SpMoversFetcher({ onReady }: { onReady: (sorted: string[]) => void }) {
-  const quotes = SP_SYMBOLS.map(s => ({ symbol: s, pct: 0 }));
-  // We can't call hooks in a loop — use a sub-component chain
-  return <SpMoverChain symbols={SP_SYMBOLS} results={{}} onReady={onReady} />;
-}
-
-function SpMoverChain({
-  symbols, results, onReady,
-}: { symbols: string[]; results: Record<string, number>; onReady: (sorted: string[]) => void }) {
-  const [sym, ...rest] = symbols;
-  const { data: quote } = useStockQuote(sym ?? '');
-
-  useEffect(() => {
-    if (!sym) return;
-    const pct = quote?.dp ?? 0;
-    const updated = { ...results, [sym]: pct };
-    if (rest.length === 0) {
-      // All fetched — sort and emit top 5 by absolute % move
-      const sorted = Object.entries(updated)
-        .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
-        .slice(0, 5)
-        .map(([s]) => s);
-      onReady(sorted);
-    }
-  }, [quote?.dp]);
-
-  if (!sym) return null;
-  if (rest.length === 0) return null;
-  return <SpMoverChain symbols={rest} results={{ ...results, [sym]: quote?.dp ?? 0 }} onReady={onReady} />;
-}
-
 // ── Main Sidebar ──────────────────────────────────────────────────────────────
 interface SidebarProps {
   onClose?: () => void;
@@ -252,8 +221,28 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
   const { player: me } = useLeagueStore();
   const [players, setPlayers] = useState<Player[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
-  const [topMovers, setTopMovers] = useState<string[]>([]);
   const [showAddPosition, setShowAddPosition] = useState(false);
+
+  // Single batched quote fetch for everything the sidebar shows live prices for
+  // (S&P movers + watchlist). Replaces the previous recursive 1-hook-per-symbol
+  // SpMoverChain pattern and per-row useStockQuote calls in WatchlistItem/MoverRow.
+  const watchlistSymbols = useMemo(() => items.map(i => i.symbol), [items]);
+  const sidebarSymbols = useMemo(
+    () => Array.from(new Set([...SP_SYMBOLS, ...watchlistSymbols])),
+    [watchlistSymbols],
+  );
+  const { quoteMap } = useStockQuotes(sidebarSymbols);
+
+  const topMovers = useMemo(() => {
+    const scored = SP_SYMBOLS
+      .map(sym => ({ sym, pct: quoteMap[sym]?.dp ?? 0, hasQuote: !!quoteMap[sym]?.c }))
+      .filter(x => x.hasQuote);
+    if (scored.length === 0) return SP_SYMBOLS.slice(0, 5);
+    return scored
+      .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
+      .slice(0, 5)
+      .map(x => x.sym);
+  }, [quoteMap]);
 
   // Check admin — player name matches 'eastwind' (case-insensitive)
   const isAdmin = !!me?.google_email && ADMIN_EMAILS.includes(me.google_email.toLowerCase());
@@ -344,7 +333,7 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
       ) : (
         <div style={{ padding: '0 4px' }}>
           {items.map(item => (
-            <WatchlistItem key={item.symbol} symbol={item.symbol} name={item.name} onClose={onClose} />
+            <WatchlistItem key={item.symbol} symbol={item.symbol} name={item.name} quote={quoteMap[item.symbol]} onClose={onClose} />
           ))}
         </div>
       )}
@@ -371,21 +360,17 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
 
       {/* ── S&P Top Movers ── */}
       <SectionHeader icon={<TrendingUp size={11} />} label="S&P Movers" />
-      {topMovers.length > 0
-        ? topMovers.map(sym => <MoverRow key={sym} symbol={sym} onClose={onClose} />)
-        : SP_SYMBOLS.slice(0, 5).map(sym => <MoverRow key={sym} symbol={sym} onClose={onClose} />)
-      }
-
-      {/* Invisible fetcher to sort movers by actual % move */}
-      <div style={{ display: 'none' }}>
-        <SpMoversFetcher onReady={setTopMovers} />
-      </div>
+      {topMovers.map(sym => (
+        <MoverRow key={sym} symbol={sym} quote={quoteMap[sym]} onClose={onClose} />
+      ))}
 
       <div style={{ height: 24 }} />
 
-      {showAddPosition && (
-        <AddPositionModal onClose={() => setShowAddPosition(false)} />
-      )}
+      <Suspense fallback={null}>
+        {showAddPosition && (
+          <AddPositionModal onClose={() => setShowAddPosition(false)} />
+        )}
+      </Suspense>
     </aside>
   );
 }

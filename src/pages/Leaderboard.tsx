@@ -5,6 +5,7 @@ import { getAllPlayers, getAllHoldings, getRecentTrades, supabase } from '../api
 import { useLeagueStore } from '../store/leagueStore';
 import type { Player, Holding, Trade } from '../api/supabase';
 import { useStockQuotes } from '../hooks/useStockData';
+import ErrorBoundary from '../components/ui/ErrorBoundary';
 
 // Cash system removed — returns are now computed as (holdings value − cost basis) / cost basis
 
@@ -387,16 +388,18 @@ export default function Leaderboard() {
           border: '1px solid var(--border-subtle)',
           borderBottom: 'none',
         }}>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4 }}>
-            {podiumOrder.map((entry, i) => entry && (
-              <PodiumCard
-                key={entry.player.id}
-                entry={entry}
-                rank={podiumRanks[i]}
-                isMe={entry.player.id === me?.id}
-              />
-            ))}
-          </div>
+          <ErrorBoundary label="leaderboard:podium" compact>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4 }}>
+              {podiumOrder.map((entry, i) => entry && (
+                <PodiumCard
+                  key={entry.player.id}
+                  entry={entry}
+                  rank={podiumRanks[i]}
+                  isMe={entry.player.id === me?.id}
+                />
+              ))}
+            </div>
+          </ErrorBoundary>
         </div>
       )}
 
@@ -410,14 +413,16 @@ export default function Leaderboard() {
           borderRadius: '0 0 16px 16px',
           overflow: 'hidden',
         }}>
-          {entries.slice(3).map((entry, i) => (
-            <LeaderRow
-              key={entry.player.id}
-              entry={entry}
-              rank={i + 4}
-              isMe={entry.player.id === me?.id}
-            />
-          ))}
+          <ErrorBoundary label="leaderboard:rows" compact>
+            {entries.slice(3).map((entry, i) => (
+              <LeaderRow
+                key={entry.player.id}
+                entry={entry}
+                rank={i + 4}
+                isMe={entry.player.id === me?.id}
+              />
+            ))}
+          </ErrorBoundary>
         </div>
       )}
 

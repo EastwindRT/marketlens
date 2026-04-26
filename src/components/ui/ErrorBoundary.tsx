@@ -3,6 +3,7 @@ import React from 'react';
 interface Props {
   children: React.ReactNode;
   label?: string;
+  compact?: boolean;
 }
 
 interface State {
@@ -29,6 +30,44 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     if (!this.state.error) return this.props.children;
 
     const msg = this.state.error.message || String(this.state.error);
+
+    if (this.props.compact) {
+      return (
+        <div
+          style={{
+            margin: '12px 0',
+            padding: '14px 16px',
+            borderRadius: 12,
+            background: 'var(--bg-surface)',
+            border: '1px solid rgba(246,70,93,0.3)',
+          }}
+        >
+          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-down)', margin: 0 }}>
+            This section couldn't load.
+          </p>
+          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4, fontFamily: 'Roboto Mono, monospace' }}>
+            {msg.slice(0, 180)}
+          </p>
+          <button
+            onClick={() => this.setState({ error: null })}
+            style={{
+              marginTop: 10,
+              padding: '6px 12px',
+              borderRadius: 8,
+              background: 'var(--bg-elevated)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-default)',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+
     return (
       <div
         style={{

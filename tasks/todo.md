@@ -1,3 +1,60 @@
+## Plan: Sprint B item 2 — Portfolio snapshot aggregation (2026-04-25)
+
+### Goal
+Reduce portfolio route latency by collapsing `player + holdings + watchlist` into one server payload instead of assembling the snapshot from multiple client-side Supabase reads every time.
+
+### Root cause
+- `Portfolio.tsx` still fetched holdings separately on every load/reload, even after the earlier session-cache pass.
+- `PlayerPortfolio.tsx` still assembled public portfolios from three independent queries (`player`, `holdings`, `watchlist`) and used `allSettled` mainly as a resilience patch, not a speed improvement.
+- That meant more network round trips, more partial-state churn, and more waiting before the page could settle on a fresh snapshot.
+
+### Shipped
+- [x] `server.cjs` — added `GET /api/portfolio-snapshot?playerId=...` backed by server-side Supabase reads, returning `{ player, holdings, watchlist }` in one payload.
+- [x] `server.cjs` — endpoint fails safely with explicit `400 / 404 / 503 / 502` responses instead of leaving the client to infer partial failures.
+- [x] `src/api/supabase.ts` — added `getPortfolioSnapshot(playerId)` client helper.
+- [x] `src/pages/Portfolio.tsx` — private portfolio now prefers the snapshot endpoint for fresh loads and falls back to direct `getHoldings()` if the endpoint is unavailable.
+- [x] `src/pages/PlayerPortfolio.tsx` — public portfolio now prefers the snapshot endpoint, cutting the normal refresh path down to one request while preserving the older `allSettled` fallback if the endpoint fails.
+
+### Expected user-facing outcome
+- My Portfolio should settle faster on fresh loads because the main data payload comes back in one hop.
+- Public portfolios should feel steadier and quicker, especially on repeat visits and realtime refreshes.
+- The fallback path remains intact, so a temporary server-side issue degrades to the older slower path instead of breaking the page.
+
+---
+
+## Plan: Fix Congress DB persistence — duplicate-id upsert failure (2026-04-25)
+
+### Goal
+Make `congress_trades` actually fill in production. After the broader market-data persistence rollout, US insider (153 rows) and CA insider (12 rows) wrote successfully but `congress_trades` stayed at 0 with no entry in `market_data_sync_state`.
+
+### Root cause
+- `writeCongressTradesToDb` upserted the full Quiver payload in a single batch keyed on a composite `id` derived from `member + ticker + date + type + amount + disclosure + chamber`.
+- The Quiver feed routinely contains rows that collapse to the same composite id (same member files multiple identical-shape entries).
+- Postgres upsert with `ON CONFLICT` aborts the entire statement when the input batch contains duplicate conflict keys (`ON CONFLICT DO UPDATE command cannot affect row a second time`).
+- One bad chunk killed the whole sync, so `setMarketDataSyncState` was never reached.
+- US/CA pipelines were unaffected because their ids include filing-level uniqueness.
+
+### Shipped
+- [x] `server.cjs` — `writeCongressTradesToDb` now dedupes rows by `id` via a `Map` before upserting; in-batch duplicates can no longer poison the statement.
+- [x] `server.cjs` — chunk size dropped from 500 → 200 to stay well under Supabase request limits.
+- [x] `server.cjs` — per-chunk fault isolation: a failing chunk logs and continues so partial writes still land.
+- [x] `server.cjs` — `writeCongressTradesToDb` now returns `{written, skipped, failedChunks}` instead of throwing, with a `[congress-db-write]` summary log per refresh.
+- [x] `server.cjs` — `refreshCongressTradesFromSource` only updates `market_data_sync_state` when `written > 0`, and catches unexpected throws so the live fallback path keeps working.
+- [x] `node --check server.cjs` clean.
+- [x] `npm run build` clean.
+
+### Required verification after deploy
+- [ ] Hit `https://marketlens-jn9s.onrender.com/api/latest-congress?limit=20` to trigger a refresh.
+- [ ] After ~30s, run `select count(*) from public.congress_trades;` — expect a non-zero row count.
+- [ ] Run `select * from public.market_data_sync_state where dataset = 'congress_trades' order by synced_at desc;` — expect a fresh `synced_at` and `row_count`.
+- [ ] Check Render logs for the `[congress-db-write] written=… skipped=… failedChunks=…` line to confirm dedup behaviour matches reality.
+
+### Expected user-facing outcome
+- Congress page becomes resilient to Render restarts and cache TTL expiry, matching US insider and CA insider behaviour.
+- No visible UI change — purely a backend persistence and consistency fix.
+
+---
+
 ## Plan: Persist Congress + Canadian market data for faster reads (2026-04-25)
 
 ### Goal
@@ -24,8 +81,8 @@
 - [x] `node --check server.cjs` clean after the persistence pass.
 
 ### Required rollout steps
-- [ ] Run `supabase_migration_market_data_cache.sql` in the live Supabase project.
-- [ ] Add `SUPABASE_SERVICE_ROLE_KEY` in Render and redeploy.
+- [x] Run `supabase_migration_market_data_cache.sql` in the live Supabase project. (Verified 2026-04-25: tables exist; `us_insider_trades` populated with 153 rows, `ca_insider_filings` with 12 rows.)
+- [x] Add `SUPABASE_SERVICE_ROLE_KEY` in Render and redeploy. (Live endpoint hits confirm DB-backed path is active.)
 
 ### Expected user-facing outcome
 - Congress views should become more predictable across Render restarts because reads can come from persisted normalized rows instead of rebuilding from Quiver on demand.
@@ -76,7 +133,7 @@
 - [x] `npm run build` clean after the insider speed + summary pass.
 
 ### Required rollout step
-- [ ] Re-run `supabase_migration_market_data_cache.sql` in the live Supabase project so the new `us_insider_trades` table exists in production.
+- [x] Re-run `supabase_migration_market_data_cache.sql` in the live Supabase project so the new `us_insider_trades` table exists in production. (Verified 2026-04-25: 153 rows persisted, `market_data_sync_state` shows `us_insider_7` synced.)
 
 ## Plan: Congress rankings + sector filters + RSI signal pass (2026-04-25)
 
@@ -183,7 +240,7 @@
 
 ### Open / next improvements
 - [ ] If portfolio lag is still noticeable on first signed-in load, move holdings aggregation to a server/RPC path so the app can fetch one compact payload instead of piecing it together client-side.
-- [ ] If Market Signals still feels slow on first hit, move market-wide 13D/13G aggregation behind a dedicated cached server endpoint instead of relying on browser-side SEC fanout.
+- [x] Market Signals 13D/13G aggregation moved behind cached `/api/market-filings` (2026-04-25): client `edgar.getRecentFilings` now hits the server endpoint first (server fans out 4 EDGAR feeds once/hour, dedupes, enriches with symbol+sector). Endpoint upgraded to stale-while-revalidate so a stale cache is served instantly while the rebuild runs in the background; client-side 4-feed fanout retained as fallback only.
 
 ## Plan: Deep Analyze activation + admin activity tracking (2026-04-24)
 
@@ -277,10 +334,10 @@
 - Canadian insider tab showing "Apr 15" as last transaction is correct — SEDI has a 5-day filing window and we're in a pre-earnings quiet period; not a bug.
 
 ### Open / deferred (next perf pass)
-- [ ] `StockDetail` chunk is 233kB (68kB gzip) — audit what's bundled (charting lib + indicators likely dominate). Candidate for dynamic-import on the candle/indicator stack.
-- [ ] `index` main chunk is 474kB (136kB gzip) — room to lazy-load more modals.
-- [ ] `SymbolPriceFetcher` / `SymbolPrice` pattern mounts one component per symbol to pull prices. Consolidate into a single batched query (one `useQueries` call against a deduped symbol list) to cut request fan-out on Portfolio / Leaderboard.
-- [ ] Add a global error boundary around the Portfolio / Leaderboard pages so a single bad row can't blank the screen.
+- [x] `StockDetail` chunk audited 2026-04-25 — chart lib (`lightweight-charts`) is the dominant cost and must stay eager since the chart is the page's primary visual. Modals (DeepAnalyzeDrawer, FilingSheet, TradeModal) split into separate chunks; FilingSheet shrunk 51kB→12.7kB once it stopped statically importing DeepAnalyzeDrawer.
+- [x] `index` main chunk 484kB→475kB after lazy-loading AddPositionModal, AddWatchlistModal, and TradeModal across Sidebar, Portfolio, and StockDetail. Edgar API code split into a 27kB chunk pulled on demand.
+- [x] `SpMoverChain` recursive 1-component-per-symbol pattern in Sidebar replaced with a single batched `useStockQuotes` call covering both S&P movers and watchlist rows. Portfolio / Leaderboard / PlayerPortfolio / Dashboard already used the batched path; the Sidebar was the remaining hotspot.
+- [x] Section-level error boundaries added around Portfolio summary/holdings/watchlist, Leaderboard podium/rows, and PlayerPortfolio holdings/watchlist via a new `compact` mode on `ErrorBoundary` so a single bad row can no longer blank an entire page.
 
 ## Plan: Endpoint recheck + Canadian insider API perf hardening (2026-04-21)
 

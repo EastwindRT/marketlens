@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { ExternalLink, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -7,7 +7,10 @@ import { edgar } from '../api/edgar';
 import type { MarketFiling } from '../api/edgar';
 import type { CongressTrade } from '../api/congress';
 import type { InsiderTransaction } from '../api/types';
-import { FilingSheet } from '../components/ui/FilingSheet';
+
+const FilingSheet = lazy(() =>
+  import('../components/ui/FilingSheet').then((m) => ({ default: m.FilingSheet }))
+);
 import { useWatchlistStore } from '../store/watchlistStore';
 import { fetchInsiderData, getInsiderType } from '../hooks/useInsiderData';
 import { useCongressTradesForWatchlist } from '../hooks/useCongressTrades';
@@ -618,7 +621,11 @@ export default function NewsPage() {
         </div>
       </div>
 
-      <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
+      <Suspense fallback={null}>
+        {selectedFiling && (
+          <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
+        )}
+      </Suspense>
     </>
   );
 }

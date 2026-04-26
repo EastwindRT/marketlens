@@ -137,9 +137,25 @@ async function fetchFeed(formType: string, count = 80): Promise<MarketFiling[]> 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export const edgar = {
-  /** Market-wide: all SCHEDULE 13D/G filings in the last N days */
+  /** Market-wide: all SCHEDULE 13D/G filings in the last N days.
+   *  Primary path is the cached server endpoint /api/market-filings, which
+   *  fans out the 4 EDGAR feeds once per hour and adds symbol+sector enrichment.
+   *  Falls back to direct client-side fanout only if the server is unavailable. */
   getRecentFilings: async (days = 7): Promise<MarketFiling[]> => {
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+    try {
+      const res = await fetch(`/api/market-filings?days=${Math.max(7, Math.min(30, days))}`);
+      if (res.ok) {
+        const json = await res.json();
+        const filings: MarketFiling[] = Array.isArray(json?.filings) ? json.filings : [];
+        const filtered = filings.filter((f) => f.filedDate && f.filedDate >= cutoffStr);
+        if (filtered.length > 0) return filtered;
+      }
+    } catch {
+      // fall through to direct fanout
+    }
 
     const [d, g, da, ga] = await Promise.allSettled([
       fetchFeed('SCHEDULE 13D'),
@@ -157,7 +173,6 @@ export const edgar = {
 
     if (all.length === 0) throw new Error('No data from SEC EDGAR');
 
-    // Deduplicate by accession number, filter to date window
     const seen = new Set<string>();
     return all
       .filter(f => {

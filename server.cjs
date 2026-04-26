@@ -159,8 +159,62 @@ const MARKET_DATA_DATASETS = {
   },
 };
 
-function hasMarketDataDb() {
+function hasServerSupabase() {
   return Boolean(serverSupabase);
+}
+
+function hasMarketDataDb() {
+  return hasServerSupabase();
+}
+
+async function readPortfolioSnapshotFromDb(playerId) {
+  if (!hasServerSupabase()) {
+    throw new Error('server supabase not configured');
+  }
+  if (!playerId) {
+    throw new Error('Missing playerId');
+  }
+
+  const [playerRes, holdingsRes, watchlistRes] = await Promise.all([
+    serverSupabase
+      .from('players')
+      .select('*')
+      .eq('id', playerId)
+      .maybeSingle(),
+    serverSupabase
+      .from('holdings')
+      .select('*')
+      .eq('player_id', playerId)
+      .order('updated_at', { ascending: false }),
+    serverSupabase
+      .from('watchlists')
+      .select('*')
+      .eq('player_id', playerId)
+      .order('updated_at', { ascending: true }),
+  ]);
+
+  if (playerRes.error) {
+    throw new Error(`player snapshot read failed: ${playerRes.error.message}`);
+  }
+  if (!playerRes.data) {
+    return { player: null, holdings: [], watchlist: [] };
+  }
+  if (holdingsRes.error) {
+    throw new Error(`holdings snapshot read failed: ${holdingsRes.error.message}`);
+  }
+  if (watchlistRes.error) {
+    throw new Error(`watchlist snapshot read failed: ${watchlistRes.error.message}`);
+  }
+
+  return {
+    player: playerRes.data,
+    holdings: holdingsRes.data || [],
+    watchlist: (watchlistRes.data || []).map((item) => ({
+      symbol: item.symbol,
+      name: item.name || undefined,
+      exchange: item.exchange || undefined,
+    })),
+  };
 }
 
 async function getMarketDataSyncState(dataset) {
@@ -240,31 +294,62 @@ async function readCongressTradesFromDb({ tickers = null, cutoff = null, limit =
 }
 
 async function writeCongressTradesToDb(trades) {
-  if (!hasMarketDataDb() || !Array.isArray(trades) || trades.length === 0) return;
-
-  const rows = trades.map((trade) => ({
-    id: trade.id,
-    member: trade.member,
-    party: trade.party || null,
-    state: trade.state || null,
-    ticker: trade.ticker,
-    asset_description: trade.assetDescription || null,
-    type: trade.type,
-    amount: trade.amount || null,
-    amount_min: Number.isFinite(trade.amountMin) ? trade.amountMin : 0,
-    transaction_date: trade.transactionDate || null,
-    disclosure_date: trade.disclosureDate || null,
-    filing_url: trade.filingUrl || null,
-    chamber: trade.chamber || 'house',
-    updated_at: new Date().toISOString(),
-  }));
-
-  const { error } = await serverSupabase
-    .from('congress_trades')
-    .upsert(rows, { onConflict: 'id' });
-  if (error) {
-    throw new Error(`congress db write failed: ${error.message}`);
+  if (!hasMarketDataDb() || !Array.isArray(trades) || trades.length === 0) {
+    return { written: 0, skipped: 0, failedChunks: 0 };
   }
+
+  const cutoff = new Date();
+  cutoff.setUTCDate(cutoff.getUTCDate() - 365);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  // Dedupe by id within the batch. Postgres upsert with ON CONFLICT errors out
+  // ("cannot affect row a second time") if the same conflict key appears twice
+  // in one statement, which is common in the Quiver feed when amount/date/etc
+  // collide for the same member+ticker+type.
+  const dedup = new Map();
+  let skipped = 0;
+  for (const trade of trades) {
+    if (!trade?.id) { skipped += 1; continue; }
+    if (!trade.transactionDate || trade.transactionDate < cutoffStr) { skipped += 1; continue; }
+    if (dedup.has(trade.id)) { skipped += 1; continue; }
+    dedup.set(trade.id, {
+      id: trade.id,
+      member: trade.member,
+      party: trade.party || null,
+      state: trade.state || null,
+      ticker: trade.ticker,
+      asset_description: trade.assetDescription || null,
+      type: trade.type,
+      amount: trade.amount || null,
+      amount_min: Number.isFinite(trade.amountMin) ? trade.amountMin : 0,
+      transaction_date: trade.transactionDate || null,
+      disclosure_date: trade.disclosureDate || null,
+      filing_url: trade.filingUrl || null,
+      chamber: trade.chamber || 'house',
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  const rows = Array.from(dedup.values());
+  const chunkSize = 200;
+  let written = 0;
+  let failedChunks = 0;
+
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const { error } = await serverSupabase
+      .from('congress_trades')
+      .upsert(chunk, { onConflict: 'id' });
+    if (error) {
+      failedChunks += 1;
+      console.error(`[congress-db-write] chunk ${i}-${i + chunk.length} failed: ${error.message}`);
+      continue;
+    }
+    written += chunk.length;
+  }
+
+  console.log(`[congress-db-write] written=${written} skipped=${skipped} failedChunks=${failedChunks} total=${trades.length}`);
+  return { written, skipped, failedChunks };
 }
 
 async function readCaInsiderTradesFromDb(days, mode) {
@@ -444,8 +529,16 @@ async function refreshCongressTradesFromSource() {
       );
 
     if (hasMarketDataDb()) {
-      await writeCongressTradesToDb(mappedTrades);
-      await setMarketDataSyncState(MARKET_DATA_DATASETS.congress, mappedTrades.length);
+      try {
+        const result = await writeCongressTradesToDb(mappedTrades);
+        if (result.written > 0) {
+          await setMarketDataSyncState(MARKET_DATA_DATASETS.congress, result.written);
+        } else {
+          console.error('[congress-refresh] no rows written; sync state not updated');
+        }
+      } catch (err) {
+        console.error('[congress-refresh] db write threw:', err.message);
+      }
     }
 
     return mappedTrades;
@@ -829,6 +922,52 @@ app.get('/api/company-metadata', async (req, res) => {
   }
 });
 
+app.get('/api/portfolio-snapshot', async (req, res) => {
+  const playerId = String(req.query.playerId || '').trim();
+  if (!playerId) {
+    return res.status(400).json({ error: 'Missing playerId' });
+  }
+  if (!hasServerSupabase()) {
+    return res.status(503).json({ error: 'Portfolio snapshot not configured' });
+  }
+
+  try {
+    const snapshot = await readPortfolioSnapshotFromDb(playerId);
+    if (!snapshot.player) {
+      return res.status(404).json({ error: 'Player not found', player: null, holdings: [], watchlist: [] });
+    }
+    res.json(snapshot);
+  } catch (err) {
+    console.error('[portfolio-snapshot]', err.message);
+    res.status(502).json({ error: err.message, player: null, holdings: [], watchlist: [] });
+  }
+});
+
+function ensureMarketFilingsCache(cacheKey, days, force = false) {
+  const cached = marketFilingsCache.get(cacheKey);
+  if (!force && cached && Date.now() - cached.ts < MARKET_FILINGS_TTL) {
+    return Promise.resolve(cached.payload);
+  }
+  if (marketFilingsBuilds.has(cacheKey)) {
+    return marketFilingsBuilds.get(cacheKey);
+  }
+  const build = fetchMarketFilings(days)
+    .then((filings) => {
+      const payload = { filings };
+      marketFilingsCache.set(cacheKey, { ts: Date.now(), payload });
+      return payload;
+    })
+    .catch((err) => {
+      if (cached) return cached.payload;
+      throw err;
+    })
+    .finally(() => {
+      marketFilingsBuilds.delete(cacheKey);
+    });
+  marketFilingsBuilds.set(cacheKey, build);
+  return build;
+}
+
 app.get('/api/market-filings', async (req, res) => {
   const days = Math.min(Math.max(parseInt(req.query.days || '14', 10), 7), 30);
   const cacheKey = String(days);
@@ -838,23 +977,11 @@ app.get('/api/market-filings', async (req, res) => {
     if (cached && Date.now() - cached.ts < MARKET_FILINGS_TTL) {
       return res.json(cached.payload);
     }
-
-    if (!marketFilingsBuilds.has(cacheKey)) {
-      marketFilingsBuilds.set(
-        cacheKey,
-        fetchMarketFilings(days)
-          .then((filings) => {
-            const payload = { filings };
-            marketFilingsCache.set(cacheKey, { ts: Date.now(), payload });
-            return payload;
-          })
-          .finally(() => {
-            marketFilingsBuilds.delete(cacheKey);
-          })
-      );
+    if (cached) {
+      void ensureMarketFilingsCache(cacheKey, days, true);
+      return res.json(cached.payload);
     }
-
-    const payload = await marketFilingsBuilds.get(cacheKey);
+    const payload = await ensureMarketFilingsCache(cacheKey, days, true);
     res.json(payload);
   } catch (err) {
     console.error('[market-filings]', err.message);

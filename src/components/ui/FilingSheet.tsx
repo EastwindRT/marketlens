@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { ExternalLink, X, Sparkles, RotateCcw } from 'lucide-react';
 import type { MarketFiling } from '../../api/edgar';
-import { DeepAnalyzeDrawer, type DeepAnalyzeTarget } from '../ai/DeepAnalyzeDrawer';
+import type { DeepAnalyzeTarget } from '../ai/DeepAnalyzeDrawer';
 import { DeepAnalyzeButton } from '../ai/DeepAnalyzeButton';
+
+const DeepAnalyzeDrawer = lazy(() =>
+  import('../ai/DeepAnalyzeDrawer').then((m) => ({ default: m.DeepAnalyzeDrawer }))
+);
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -425,11 +429,15 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
         </a>
       </div>
 
-      <DeepAnalyzeDrawer
-        open={deepTarget !== null}
-        onClose={() => setDeepTarget(null)}
-        target={deepTarget}
-      />
+      <Suspense fallback={null}>
+        {deepTarget !== null && (
+          <DeepAnalyzeDrawer
+            open={true}
+            onClose={() => setDeepTarget(null)}
+            target={deepTarget}
+          />
+        )}
+      </Suspense>
     </>
   );
 }

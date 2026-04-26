@@ -1,3 +1,11 @@
+## Lesson: 2026-04-25 - Read-heavy portfolio pages should load from one snapshot, not three loosely coupled queries
+
+**Observation:** Even after caching and debounce work, portfolio pages still felt slower than they should because the server had to answer separate `player`, `holdings`, and `watchlist` reads before the UI could fully settle.
+**Root cause:** We treated the portfolio page as a composition problem on the client instead of a snapshot problem on the server. That left extra round trips, more partial-state churn, and more opportunities for one subquery to lag or fail independently.
+**Rule:** For high-traffic read-heavy pages with a stable domain object, prefer one server-aggregated snapshot endpoint and keep the older direct-query path only as a fallback. It improves perceived speed, simplifies refresh behavior, and gives future agents a cleaner unit to consume.
+
+---
+
 ## Lesson: 2026-04-25 - Warm in-memory cache is not enough for slow third-party research feeds
 
 **Observation:** Congress and Canadian insider pages could feel fast in one moment and slow in the next, depending mostly on whether the Render instance had already rebuilt its in-memory cache.

@@ -1,14 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowUpRight, ArrowDownRight, LogOut, Briefcase, Plus, Star } from 'lucide-react';
-import { getHoldings, supabase } from '../api/supabase';
+import { getHoldings, getPortfolioSnapshot, supabase } from '../api/supabase';
 import { useLeagueStore } from '../store/leagueStore';
 import { useStockQuotes } from '../hooks/useStockData';
 import type { Holding, Player } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
-import AddPositionModal from '../components/trade/AddPositionModal';
-import AddWatchlistModal from '../components/trade/AddWatchlistModal';
 import { useWatchlistStore } from '../store/watchlistStore';
+import ErrorBoundary from '../components/ui/ErrorBoundary';
+
+const AddPositionModal = lazy(() => import('../components/trade/AddPositionModal'));
+const AddWatchlistModal = lazy(() => import('../components/trade/AddWatchlistModal'));
 
 const portfolioCacheKey = (playerId: string) => `tars:portfolio-holdings:${playerId}`;
 
@@ -165,7 +167,13 @@ export default function Portfolio() {
         if (showBlockingState && !hasLoadedRef.current) setLoading(true);
         else setRefreshing(true);
         if (showBlockingState || !hasLoadedRef.current) setLoadError('');
-        const h = await getHoldings(playerId);
+        let h: Holding[];
+        try {
+          const snapshot = await getPortfolioSnapshot(playerId);
+          h = snapshot.holdings;
+        } catch {
+          h = await getHoldings(playerId);
+        }
         if (!isActive || runId !== requestId) return;
         setHoldings(h);
         writeCachedHoldings(playerId, h);
@@ -279,7 +287,9 @@ export default function Portfolio() {
         </button>
       </div>
 
-      <PortfolioSummary player={player} holdings={holdings} quoteMap={quoteMap} />
+      <ErrorBoundary label="portfolio:summary" compact>
+        <PortfolioSummary player={player} holdings={holdings} quoteMap={quoteMap} />
+      </ErrorBoundary>
 
       <div className="mt-6">
         <div className="flex items-center justify-between mb-3">
@@ -336,7 +346,9 @@ export default function Portfolio() {
             </button>
           </div>
         ) : (
-          holdings.map(h => <HoldingRow key={h.id} holding={h} quote={quoteMap[h.symbol]} />)
+          <ErrorBoundary label="portfolio:holdings" compact>
+            {holdings.map(h => <HoldingRow key={h.id} holding={h} quote={quoteMap[h.symbol]} />)}
+          </ErrorBoundary>
         )}
       </div>
 
@@ -359,9 +371,11 @@ export default function Portfolio() {
               Add symbol
             </button>
           </div>
-          {watchlist.map(item => (
-            <WatchRow key={item.symbol} symbol={item.symbol} name={item.name} quote={quoteMap[item.symbol]} />
-          ))}
+          <ErrorBoundary label="portfolio:watchlist" compact>
+            {watchlist.map(item => (
+              <WatchRow key={item.symbol} symbol={item.symbol} name={item.name} quote={quoteMap[item.symbol]} />
+            ))}
+          </ErrorBoundary>
         </div>
       )}
 
@@ -393,13 +407,17 @@ export default function Portfolio() {
         </div>
       )}
 
-      {showAddPosition && (
-        <AddPositionModal onClose={() => setShowAddPosition(false)} />
-      )}
+      <Suspense fallback={null}>
+        {showAddPosition && (
+          <AddPositionModal onClose={() => setShowAddPosition(false)} />
+        )}
+      </Suspense>
 
-      {showAddWatchlist && (
-        <AddWatchlistModal onClose={() => setShowAddWatchlist(false)} />
-      )}
+      <Suspense fallback={null}>
+        {showAddWatchlist && (
+          <AddWatchlistModal onClose={() => setShowAddWatchlist(false)} />
+        )}
+      </Suspense>
     </div>
   );
 }
