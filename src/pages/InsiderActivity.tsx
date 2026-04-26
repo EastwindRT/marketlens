@@ -110,7 +110,7 @@ export default function InsiderActivityPage() {
   const sectorOptions = useMemo(() => {
     const values = new Set<string>();
     for (const item of symbolMetadata?.items ?? []) {
-      values.add(item.sector || 'Unknown');
+      values.add(item.sector || (item.symbol.endsWith('.TO') ? 'Unknown sector (CA)' : 'Unknown'));
     }
     return ['All sectors', ...[...values].sort((a, b) => a.localeCompare(b))];
   }, [symbolMetadata]);
@@ -122,10 +122,11 @@ export default function InsiderActivityPage() {
       return true;
     }).filter((trade) => {
       if (sectorFilter === 'All sectors') return true;
-      return (metadataMap.get(trade.symbol)?.sector || 'Unknown') === sectorFilter;
+      const fallbackSector = trade.symbol.endsWith('.TO') ? 'Unknown sector (CA)' : 'Unknown';
+      return (metadataMap.get(trade.symbol)?.sector || fallbackSector) === sectorFilter;
     }).map((trade) => ({
       ...trade,
-      sector: metadataMap.get(trade.symbol)?.sector || null,
+      sector: metadataMap.get(trade.symbol)?.sector || (trade.symbol.endsWith('.TO') ? 'Unknown sector (CA)' : null),
     }));
 
     return [...filtered].sort((a, b) => {

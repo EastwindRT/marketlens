@@ -263,6 +263,7 @@ export default function NewsPage() {
     const values = new Set<string>();
     for (const filing of enrichedFilings) {
       if (filing.sector) values.add(filing.sector);
+      else if ((filing.symbol || '').endsWith('.TO')) values.add('Unknown sector (CA)');
     }
     return ['All sectors', ...[...values].sort((a, b) => a.localeCompare(b))];
   }, [enrichedFilings]);
@@ -270,7 +271,12 @@ export default function NewsPage() {
   const sortedFilings = useMemo(() => {
     let list = enrichedFilings;
     if (formFilter !== 'all') list = list.filter((filing) => filing.formType === formFilter);
-    if (sectorFilter !== 'All sectors') list = list.filter((filing) => (filing.sector || 'Unknown') === sectorFilter);
+    if (sectorFilter !== 'All sectors') {
+      list = list.filter((filing) => {
+        const fallbackSector = (filing.symbol || '').endsWith('.TO') ? 'Unknown sector (CA)' : 'Unknown';
+        return (filing.sector || fallbackSector) === sectorFilter;
+      });
+    }
     return [...list].sort((a, b) => {
       if (filingsSort === 'filer') return (a.filerName ?? '').localeCompare(b.filerName ?? '');
       if (filingsSort === 'subject') return (a.subjectCompany ?? 'ZZZ').localeCompare(b.subjectCompany ?? 'ZZZ');
@@ -601,7 +607,11 @@ export default function NewsPage() {
                         <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace" }}>
                           {filing.filedDate}
                           {filing.symbol ? ` · ${filing.symbol}` : ''}
-                          {filing.sector ? ` · ${filing.sector}` : ''}
+                          {filing.sector
+                            ? ` · ${filing.sector}`
+                            : filing.symbol?.endsWith('.TO')
+                              ? ' · Unknown sector (CA)'
+                              : ''}
                           {filing.periodOfReport && filing.periodOfReport !== filing.filedDate ? ` · Period: ${filing.periodOfReport}` : ''}
                         </p>
                       </div>

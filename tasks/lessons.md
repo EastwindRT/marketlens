@@ -1,3 +1,19 @@
+## Lesson: 2026-04-25 - Generic "Unknown" copy hides whether missing metadata is expected or suspicious
+
+**Observation:** When Canadian sector enrichment missed, the UI showed a plain `Unknown`, which looked like a broken app instead of a known metadata gap.
+**Root cause:** The copy did not tell the user whether the field was unresolved by design or simply absent due to a bug.
+**Rule:** When a metadata fallback is a known coverage limitation, say so explicitly in the UI. `Unknown sector (CA)` is clearer than a generic `Unknown` because it tells both users and future maintainers what class of gap they are looking at.
+
+---
+
+## Lesson: 2026-04-25 - AI preset UX should map to a cheaper model path, not just a different prompt
+
+**Observation:** The product already distinguished quick preset analyses from a full deep dive, but the backend still ran every request through the same premium Claude model and generous token budget.
+**Root cause:** We treated "preset vs full" as a prompt-shaping concern only, not a cost-profile concern.
+**Rule:** If an AI surface has both quick presets and a premium long-form mode, wire them to different model profiles. Keep cache keys model-aware, lower token budgets on presets, and make the UI honest about which path the user is invoking.
+
+---
+
 ## Lesson: 2026-04-25 - A one-time boot prewarm is not the same as a durable warm-data strategy
 
 **Observation:** The app could feel fast right after boot, then gradually fall back into user-triggered cold refreshes once Congress or Canadian insider caches expired.

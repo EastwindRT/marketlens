@@ -2886,14 +2886,15 @@ async function callAI(provider, apiKey, filingText) {
 // (override via CLAUDE_MODEL env var). Returns markdown text rather than JSON
 // so the client can render a long structured briefing.
 
-const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
+const CLAUDE_MODEL_FULL = process.env.CLAUDE_MODEL_FULL || process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
+const CLAUDE_MODEL_PRESET = process.env.CLAUDE_MODEL_PRESET || 'claude-haiku-4-5-20251001';
 
-async function callClaude(systemPrompt, userPrompt, { maxTokens = 2500, temperature = 0.4 } = {}) {
+async function callClaude(systemPrompt, userPrompt, { model = CLAUDE_MODEL_FULL, maxTokens = 2500, temperature = 0.4 } = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('Deep analysis not configured — ANTHROPIC_API_KEY missing.');
 
   const body = JSON.stringify({
-    model: CLAUDE_MODEL,
+    model,
     max_tokens: maxTokens,
     temperature,
     system: systemPrompt,
@@ -3078,6 +3079,24 @@ function buildDeepStockFocusBlock(focus) {
   return `\nANALYSIS FOCUS: ${focus}\nTilt the analysis toward this focus while still grounding every conclusion in the provided data.`;
 }
 
+function getDeepAnalyzeProfile(type, focus) {
+  if (type === 'stock' && focus) {
+    return {
+      model: CLAUDE_MODEL_PRESET,
+      maxTokens: 1100,
+      temperature: 0.25,
+      profile: 'preset',
+    };
+  }
+
+  return {
+    model: CLAUDE_MODEL_FULL,
+    maxTokens: 2500,
+    temperature: 0.35,
+    profile: 'full',
+  };
+}
+
 function buildDeepFilingContext(filing) {
   const parts = [];
   parts.push(`FORM TYPE: ${filing?.formType || 'unknown'}`);
@@ -3137,13 +3156,18 @@ app.post('/api/deep-analyze', async (req, res) => {
       cacheParts = { route: 'deep-news', id: news.id || news.url || news.headline, symbol: symbol || '' };
     }
 
-    const cacheKey = aiCacheKey(cacheParts);
+    const profile = getDeepAnalyzeProfile(type, focus);
+    const cacheKey = aiCacheKey({ ...cacheParts, model: profile.model, profile: profile.profile });
     const cached = aiCacheGet(cacheKey);
-    if (cached) return res.json({ analysis: cached, cached: true, model: CLAUDE_MODEL });
+    if (cached) return res.json({ analysis: cached, cached: true, model: profile.model, profile: profile.profile });
 
-    const analysis = await callClaude(systemPrompt, userPrompt, { maxTokens: 2500, temperature: 0.4 });
+    const analysis = await callClaude(systemPrompt, userPrompt, {
+      model: profile.model,
+      maxTokens: profile.maxTokens,
+      temperature: profile.temperature,
+    });
     aiCacheSet(cacheKey, analysis);
-    res.json({ analysis, cached: false, model: CLAUDE_MODEL });
+    res.json({ analysis, cached: false, model: profile.model, profile: profile.profile });
   } catch (err) {
     console.error('[deep-analyze]', err.message);
     res.status(502).json({ error: err.message });

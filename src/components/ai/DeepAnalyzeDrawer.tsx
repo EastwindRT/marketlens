@@ -148,6 +148,7 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [cached, setCached] = useState(false);
   const [model, setModel] = useState<string | null>(null);
+  const [profile, setProfile] = useState<'full' | 'preset' | null>(null);
   const [copied, setCopied] = useState(false);
 
   // Close on Escape
@@ -166,6 +167,7 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
     setLoading(false);
     setCached(false);
     setModel(null);
+    setProfile(null);
   }, [open, targetKey(target)]);
 
   async function run() {
@@ -188,6 +190,7 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
       setAnalysis(json.analysis as string);
       setCached(Boolean(json.cached));
       setModel(typeof json.model === 'string' ? json.model : null);
+      setProfile(json.profile === 'preset' || json.profile === 'full' ? json.profile : null);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       if (message.includes('ANTHROPIC_API_KEY')) {
@@ -314,7 +317,7 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
             <Sparkles size={15} color="#D97757" />
             Run Deep Analysis
             <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 500 }}>
-              · Claude Sonnet 4.5
+              · {target.type === 'stock' && target.focus ? 'Cheaper preset mode' : 'Full deep dive'}
             </span>
           </button>
         )}
@@ -336,7 +339,9 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
                 Claude is analyzing…
               </p>
               <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)' }}>
-                Sonnet 4.5 deep dive · this may take 20-40 seconds
+                {target.type === 'stock' && target.focus
+                  ? 'Preset analysis on the lower-cost Claude path · usually faster'
+                  : 'Full deep dive on the premium Claude path · this may take 20-40 seconds'}
               </p>
             </div>
           </div>
@@ -383,6 +388,14 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
                   fontFamily: "'Roboto Mono', monospace",
                 }}>
                   {model}
+                </span>
+              )}
+              {profile && (
+                <span style={{
+                  fontSize: 10, color: 'var(--text-tertiary)',
+                  textTransform: 'uppercase', letterSpacing: '0.05em',
+                }}>
+                  {profile === 'preset' ? 'Preset' : 'Full'}
                 </span>
               )}
               <button

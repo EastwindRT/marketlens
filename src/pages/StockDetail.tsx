@@ -653,11 +653,13 @@ function SignalSummaryPanel({
                 metric="20-day average"
                 value={sma20 != null ? formatPrice(sma20, currency) : '—'}
                 read={priceVs20 != null ? `${formatSignedPercent(priceVs20)} vs 20-day trend` : 'Need 20 trading days'}
+                valueTone={getDeltaTone(priceVs20)}
               />
               <SignalTableRow
                 metric="50-day average"
                 value={sma50 != null ? formatPrice(sma50, currency) : '—'}
                 read={priceVs50 != null ? `${formatSignedPercent(priceVs50)} vs 50-day trend` : 'Need 50 trading days'}
+                valueTone={getDeltaTone(priceVs50)}
               />
               <SignalTableRow
                 metric="Trend structure"
@@ -668,6 +670,7 @@ function SignalSummaryPanel({
                 metric="Relative volume"
                 value={rvol != null ? `${rvol.toFixed(2)}x` : '—'}
                 read={rvol != null ? `${participationLabel} volume vs 20-day average` : 'Need more volume history'}
+                valueTone={rvol == null ? undefined : rvol >= 1 ? 'positive' : 'negative'}
               />
               <SignalTableRow
                 metric="RSI (14)"
@@ -715,17 +718,30 @@ function SignalTableRow({
   metric,
   value,
   read,
+  valueTone,
 }: {
   metric: string;
   value: string;
   read: string;
+  valueTone?: 'positive' | 'negative';
 }) {
   return (
     <tr>
       <td style={{ padding: '12px 8px 12px 0', borderBottom: '1px solid var(--border-subtle)', fontSize: 13, color: 'var(--text-primary)', fontWeight: 600 }}>
         {metric}
       </td>
-      <td style={{ padding: '12px 8px', borderBottom: '1px solid var(--border-subtle)', fontSize: 13, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}>
+      <td style={{
+        padding: '12px 8px',
+        borderBottom: '1px solid var(--border-subtle)',
+        fontSize: 13,
+        color: valueTone === 'positive'
+          ? 'var(--color-up)'
+          : valueTone === 'negative'
+            ? 'var(--color-down)'
+            : 'var(--text-primary)',
+        fontFamily: "'Roboto Mono', monospace",
+        fontWeight: valueTone ? 700 : 400,
+      }}>
         {value}
       </td>
       <td style={{ padding: '12px 0 12px 8px', borderBottom: '1px solid var(--border-subtle)', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
@@ -737,6 +753,11 @@ function SignalTableRow({
 
 function formatSignedPercent(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
+}
+
+function getDeltaTone(value: number | null): 'positive' | 'negative' | undefined {
+  if (value == null || value === 0) return undefined;
+  return value > 0 ? 'positive' : 'negative';
 }
 
 function SignalPill({

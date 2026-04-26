@@ -1,3 +1,45 @@
+## Plan: Sprint C item 1 — Deep Analyze cost tuning (2026-04-25)
+
+### Goal
+Cut routine Deep Analyze cost by routing the stock-page preset prompts through a cheaper Claude tier while keeping the full long-form deep dive on the premium model.
+
+### Root cause
+- Every Deep Analyze request was going through the same Sonnet model and large token budget, even when the user only clicked a narrow preset like `Bull Case` or `2-Week Setup`.
+- The UX already distinguished presets from the full dive, but the backend pricing path did not.
+
+### Shipped
+- [x] `server.cjs` — split Deep Analyze model selection into:
+  - `CLAUDE_MODEL_FULL` (default: Sonnet 4.5)
+  - `CLAUDE_MODEL_PRESET` (default: Haiku 4.5)
+- [x] `server.cjs` — preset stock analyses now use the cheaper model with a tighter token budget and slightly lower temperature.
+- [x] `server.cjs` — full deep dives keep the premium model and large token budget.
+- [x] `server.cjs` — cache keys now include the model/profile so preset and full responses do not collide.
+- [x] `src/components/ai/DeepAnalyzeDrawer.tsx` — drawer now reflects whether the run is a cheaper preset path or a full premium deep dive.
+- [x] `render.yaml` — added optional `CLAUDE_MODEL_FULL` and `CLAUDE_MODEL_PRESET` env vars for explicit Render control.
+
+### Expected user-facing outcome
+- Preset buttons should stay useful but become materially cheaper to run.
+- `Full Deep Dive with Claude` remains the premium higher-depth path.
+- The UI now makes that split clearer instead of implying every run is the same Sonnet-grade analysis.
+
+---
+
+## Plan: Sprint C item 2 — Signal evidence and sector-copy polish (2026-04-25)
+
+### Goal
+Make stock-level signal evidence faster to read and make unresolved Canadian sector metadata feel intentional instead of broken.
+
+### Shipped
+- [x] `src/pages/StockDetail.tsx` — added color-coded value treatment for positive/negative evidence rows so price-vs-average and relative-volume reads scan faster.
+- [x] `src/pages/News.tsx` — Canadian filings that do not resolve a sector now use explicit `Unknown sector (CA)` copy in filters and row metadata.
+- [x] `src/pages/InsiderActivity.tsx` — Canadian insider rows and sector filters now use the same `Unknown sector (CA)` fallback instead of a generic ambiguous `Unknown`.
+
+### Expected user-facing outcome
+- Signal Evidence reads become faster because the most important deltas are now visually encoded, not just written out.
+- Users looking at Canadian names no longer have to guess whether a missing sector is a bug or simply unresolved metadata coverage.
+
+---
+
 ## Plan: Sprint B item 3 — Scheduled background sync for Congress + CA (2026-04-25)
 
 ### Goal
