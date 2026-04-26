@@ -1,6 +1,6 @@
 import { ReactNode, useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Newspaper, Building2, Menu, CircleDollarSign } from 'lucide-react';
+import { Newspaper, Building2, Menu, CircleDollarSign, Bell } from 'lucide-react';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 
@@ -83,7 +83,8 @@ function MobileBottomNav({ onMenuClick }: { onMenuClick: () => void }) {
   const location = useLocation();
 
   const navItems = [
-    { to: '/news',        icon: <Newspaper size={20} />, label: 'Signals'  },
+    { to: '/news-impact', icon: <Newspaper size={20} />, label: 'Impact'   },
+    { to: '/alerts',      icon: <Bell size={20} />, label: 'Alerts'        },
     { to: '/insiders',    icon: <CircleDollarSign size={20} />, label: 'Insider' },
     { to: '/congress',    icon: <Building2 size={20} />, label: 'Congress' },
   ];

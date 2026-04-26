@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
-import { Minus, Star, X, Trophy, Users, TrendingUp, TrendingDown, Shield, User, Newspaper, Building2, Briefcase, CircleDollarSign, Plus } from 'lucide-react';
+import { Minus, Star, X, Trophy, Users, TrendingUp, TrendingDown, Shield, User, Newspaper, Building2, Briefcase, CircleDollarSign, Plus, Bell } from 'lucide-react';
 
 const AddPositionModal = lazy(() => import('../trade/AddPositionModal'));
 import { useWatchlistStore } from '../../store/watchlistStore';
@@ -311,6 +311,8 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
       )}
 
       {/* ── Market nav — always visible ── */}
+      <NavLink to="/news-impact" icon={<Newspaper size={14} />} label="News Impact" onClose={onClose} />
+      <NavLink to="/alerts"   icon={<Bell size={14} />}       label="Alerts" onClose={onClose} />
       <NavLink to="/news"     icon={<Newspaper size={14} />}  label="Market Signals" onClose={onClose} />
       <NavLink to="/insiders" icon={<CircleDollarSign size={14} />} label="Insider $" onClose={onClose} />
       <NavLink to="/congress" icon={<Building2 size={14} />}  label="Congress Trades" onClose={onClose} />

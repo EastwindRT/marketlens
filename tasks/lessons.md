@@ -444,3 +444,11 @@
 **Observation:** The US insider route could still feel bad after cache expiry because `sec.gov` throttling made synchronous cache rebuilds slow and noisy.
 **Root cause:** We had caching, but not the right serving strategy. A cached route that blocks on refresh is still user-visible when the upstream is rate-limited.
 **Rule:** For rate-limited data providers, pair caching with in-flight dedupe and stale-while-revalidate. Users should get the last good snapshot immediately while refreshes happen in the background.
+
+---
+
+## Lesson: 2026-04-26 - Parallel UI work needs honest contract-fallback copy, not fake success states
+
+**Observation:** In a phased parallel build, the UI routes can exist before the backend stub endpoints are actually published in the local workspace.
+**Root cause:** Route wiring and contract wiring move at different speeds when file ownership is strict. If the UI assumes the backend is already live, Phase 1 feels broken even when the real issue is just sequencing.
+**Rule:** For wiring-only phases, build shell pages that do three things clearly: render the route, attempt the real endpoint, and explain when the contract is not live yet. That keeps progress visible without masking backend readiness.

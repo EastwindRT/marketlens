@@ -1,3 +1,144 @@
+## Plan: News Impact + Agent Alerts (2026-04-26)
+
+> Two new features built end-to-end. Feature 1 = scored, filtered news feed.
+> Feature 2 = hourly agent that combines news + insider filings against the
+> user's watchlist into a short briefing. Twitter/X is scaffolded only.
+> All Claude calls use headlines/metadata only — never full article text.
+
+### Goal
+1. Ship a News Impact section that pulls headlines hourly from Yahoo Finance + NewsAPI.org (financial, US politics, Canada macro, geopolitical/trade), scores them with Claude, persists only flagged items, and exposes them via a UI with category filters and a default ≥7 impact filter.
+2. Ship an Agent Alerts section that runs hourly after news ingestion, pulls unseen news + recent material Form 4 insider filings, intersects with the user's watchlist, and produces a max-5-bullet briefing via Claude.
+3. Scaffold Twitter/X behind a `twitter_enabled` flag without building it.
+
+### Root cause / context
+- TARS already has News, Insiders, and watchlist surfaces, but nothing scores news for market impact, and nothing produces a personalised, watchlist-aware briefing.
+- We already have Anthropic + EDGAR plumbing (`/api/deep-analyze`, `fetchRecentForm4Entries`), Supabase service-role wiring, the background scheduler (`startBackgroundSyncLoop`), and a sync-state pattern. All the new work fits these existing patterns.
+- The cost/observability bar is real: every Claude call must log tokens, cache must be honoured, and the agent must use seen-flag pattern to avoid reprocessing.
+
+### File ownership lock list (parallel build with Codex)
+
+To run Claude + Codex in parallel without merge conflicts, work is split by file. Whoever owns a file is the only side editing it this round.
+
+**Claude owns** (server, schema, ingestion, scoring):
+- `server.cjs` — new endpoints, scheduled jobs, NewsAPI/Yahoo fetchers, Claude scoring, EDGAR Form 4 filter, agent briefing pipeline, twitter stub, run-log helpers
+- `supabase_migration_news_alerts.sql` (new) — `news_items`, `agent_alerts`, `agent_run_logs`, `app_settings` tables + RLS
+- `src/api/news.ts` (new) — typed client for `/api/news/impact` and `/api/alerts/latest`
+- `docs/news-and-alerts.md` (new) — schema, prompt, scheduler, cost notes
+- `render.yaml` — `NEWSAPI_KEY`, `YAHOO_FINANCE_KEY` (if needed), `NEWS_AGENT_ENABLED`, `TWITTER_ENABLED`
+
+**Codex owns** (UI, routing, design language):
+- `src/pages/NewsImpact.tsx` (new) — News Impact tab page with filter chips and ≥7 toggle
+- `src/pages/AgentAlerts.tsx` (new) — briefing card + insider filings table with watchlist highlight
+- `src/components/news/ImpactCard.tsx` (new) — score badge, category tag, summary, ticker chips
+- `src/components/news/FilterChips.tsx` (new) — All / Macro / Sector / Company / US Politics / Canada / Trade Policy
+- `src/components/alerts/BriefingCard.tsx` (new) — digest card with timestamp + bullet list
+- `src/components/alerts/InsiderFilingsTable.tsx` (new) — table with watchlist highlight
+- `src/App.tsx` — add the two new routes (`/news-impact`, `/alerts`)
+- `src/components/layout/Sidebar.tsx` + bottom-nav — add nav entries
+- `Status.md` — Codex appends its own dated UI block; Claude appends its own dated server block
+
+**Shared docs**: `tasks/todo.md` and `Status.md` are append-only by side; each side adds a dated `Verified and Shipped` block. Neither edits the other's lines.
+
+### Phased build order
+
+#### Phase 1 — Schema + ingestion (Claude)
+- [x] `supabase_migration_news_alerts.sql` — create:
+  - `news_items` (id uuid pk, headline text, source text, published_at timestamptz, fetched_at timestamptz default now(), url text, impact_score int, category text, summary text, affected_tickers text[], seen_by_agent boolean default false, raw_query text, dedup_key text unique)
+  - `agent_alerts` (id uuid pk, created_at timestamptz default now(), briefing_text text, source_news_ids uuid[], source_filings jsonb, delivered boolean default false, watchlist_snapshot text[])
+  - `agent_run_logs` (id uuid pk, run_at timestamptz default now(), job text, items_processed int, tokens_used int, ms_elapsed int, error text)
+  - `app_settings` (key text pk, value jsonb) — seed `twitter_enabled=false`
+  - RLS: read-only public on `news_items` and `agent_alerts`; service-role-only writes; deny all on `agent_run_logs`
+- [ ] `server.cjs` — Supabase server helpers for the new tables (insert/update/select), reusing `serverSupabase`
+- [ ] `server.cjs` — `fetchYahooFinanceHeadlines()` (existing TMX/Yahoo pattern, headlines only)
+- [ ] `server.cjs` — `fetchNewsApiHeadlines(query, sources)` with the four queries:
+  - financial (default markets/business)
+  - "Trump" sources=Reuters, AP, Bloomberg, CNBC
+  - "Canada OR Canadian economy OR tariffs OR Bank of Canada OR Carney" sources=Reuters, AP, Globe and Mail, CBC
+  - "political OR policy OR sanctions OR trade war OR executive order" sources=Reuters, AP, FT
+- [ ] `server.cjs` — `dedupeHeadline(headline, publishedAt)` builds a stable `dedup_key` so re-fetches don't re-score the same story
+- [ ] Verification: `node --check server.cjs`, dry-run fetcher with `console.log` only
+
+#### Phase 2 — Claude scoring + scheduled job (Claude)
+- [ ] `server.cjs` — `scoreHeadlineWithClaude(headline, source, publishedAt)`:
+  - Model: `CLAUDE_MODEL_PRESET` (Haiku 4.5) — cheap path, headlines only
+  - System prompt:
+    > You are a financial analyst. Does this headline have market impact in the next 30 days? Categories: macro, sector, company, policy, us_politics, canada_macro, trade_policy, geopolitical. For political news, only flag if it plausibly affects interest rates, trade, specific sectors, or currency — otherwise return null. If yes, return JSON: `{impact_score:1-10, category, why:"one sentence", affected_tickers:[...]}`. If no market impact, return null. Be strict — only flag genuinely material news.
+  - Cache key: `sha1(headline + publishedAt)` in `aiResponseCache` (24h TTL)
+  - Returns `{score, category, summary, affected_tickers} | null`; logs tokens to `agent_run_logs`
+- [ ] `server.cjs` — `runNewsImpactJob()`:
+  - Pulls all four NewsAPI queries + Yahoo finance headlines
+  - Dedupes against `news_items.dedup_key`
+  - Scores each new headline; persists only non-null results
+  - Writes one `agent_run_logs` row with totals
+  - Wired into `startBackgroundSyncLoop` at 60-min cadence (gated on `NEWS_AGENT_ENABLED`, default off in local)
+- [ ] Verification: trigger one run via dev endpoint `POST /api/news/run-now` (admin-only); confirm rows in `news_items` + `agent_run_logs`
+
+#### Phase 3 — News API surface (Claude)
+- [ ] `GET /api/news/impact?minScore=7&category=…&days=1` — returns today's flagged items sorted by `impact_score desc`, optional category filter, optional `?all=1` to drop the score floor
+- [ ] `POST /api/news/run-now` — admin guard (existing admin email allow-list); kicks off `runNewsImpactJob` on demand for verification
+- [ ] `src/api/news.ts` — typed client wrappers + zod-light shape guards
+- [ ] `docs/news-and-alerts.md` — endpoint reference, schema, prompt, cost model
+
+#### Phase 4 — Agent Alerts pipeline (Claude)
+- [ ] `server.cjs` — `fetchRecentMaterialForm4Entries({ days=7 })`:
+  - Reuses existing daily-index Form 4 parser
+  - Filters to: net purchase value ≥ $100k, **or** cluster buying = ≥3 distinct insiders at same ticker within 7 days
+  - Returns normalised `{ticker, insider_name, type:'BUY'|'SELL', amount, filedDate, accessionNo}`
+- [ ] `server.cjs` — `runAgentBriefingJob()`:
+  - Pulls `news_items` where `seen_by_agent=false` (cap at 50)
+  - Pulls material Form 4 entries
+  - Reads each player's watchlist (`watchlists` table) and groups by player
+  - For each player with non-empty watchlist, sends to Claude (`CLAUDE_MODEL_PRESET`):
+    > You are a portfolio analyst. Given these news items and insider filings, generate a briefing for a user holding these watchlist tickers. Return max 5 bullets, only what is directly relevant to their positions or watchlist. Each bullet states: what happened, which ticker, why it matters. Be concise.
+  - Inserts into `agent_alerts` with `source_news_ids`, `source_filings`, `watchlist_snapshot`
+  - Marks all processed `news_items.seen_by_agent=true` only on success
+  - Writes `agent_run_logs` row with tokens + ms
+  - Scheduler runs hourly, **after** `runNewsImpactJob` finishes (chained, not parallel)
+- [ ] `GET /api/alerts/latest?playerId=…` — returns most recent briefing for that player; falls back to global briefing if per-player not yet generated
+- [ ] `GET /api/alerts/insider-filings?days=7` — returns the material Form 4 list (so the UI can render the filings table independently of the briefing cache)
+- [ ] Verification: trigger via `POST /api/alerts/run-now`; confirm `agent_alerts` row + `seen_by_agent` flip
+
+#### Phase 5 — Twitter/X scaffold only (Claude)
+- [ ] `app_settings.twitter_enabled` seeded `false`
+- [ ] `server.cjs` — `fetchTwitterHeadlines()` stub returns `[]` and logs `"[twitter] disabled by app_settings.twitter_enabled"`
+- [ ] `runNewsImpactJob` reads the flag and calls the stub when true; no real Twitter integration yet
+- [ ] `docs/news-and-alerts.md` — phase-2 section describing the planned curated-account list and ticker-mention filter
+
+#### Phase 6 — UI (Codex)
+- [ ] `src/pages/NewsImpact.tsx` — fetches `/api/news/impact`, default `minScore=7`, toggle to show all, category filter chips
+- [ ] `src/components/news/ImpactCard.tsx` — headline, score badge (colour by tier: 9-10 red, 7-8 amber, ≤6 grey), category tag, one-line `summary`, `affected_tickers` as chips that link to `/stock/:symbol`
+- [ ] `src/components/news/FilterChips.tsx` — All / Macro / Sector / Company / US Politics / Canada / Trade Policy (maps to `category` query)
+- [ ] `src/pages/AgentAlerts.tsx` — top: latest `BriefingCard` with timestamp + bullets; below: `InsiderFilingsTable` from `/api/alerts/insider-filings`, watchlist rows highlighted via Zustand `watchlistStore`
+- [ ] Sidebar + bottom-nav entries; route guards; Suspense lazy-load to keep bundle clean
+- [ ] Match existing TARS design language: same card surfaces, same skeleton pattern, same `DataStatus` freshness line
+
+### General requirements (apply to both features)
+- Seen-flag pattern: `news_items.seen_by_agent` — agent never reprocesses an item
+- Caching: Claude scoring uses `aiResponseCache` (24h) keyed by `sha1(headline+published_at)`; briefing is cached in `agent_alerts` and only regenerated when there's new unseen news *or* new material filings
+- Token discipline: headlines + metadata only, never article body; cap batch sizes (50 headlines per run, 25 filings per run); always log tokens to `agent_run_logs`
+- Observability: every scheduled job writes one `agent_run_logs` row with `items_processed`, `tokens_used`, `ms_elapsed`, optional `error`; admin page can read this later
+- Safety: agent jobs are no-ops if `serverSupabase` or `ANTHROPIC_API_KEY` is missing; `DISABLE_BACKGROUND_SYNC=1` and `NEWS_AGENT_ENABLED=0` both halt the loop
+- Auth: `/api/news/impact` and `/api/alerts/latest` are public read; `*/run-now` and `agent_run_logs` reads are admin-only
+
+### Verification checklist (both sides before marking shipped)
+- [ ] Claude side: `node --check server.cjs`, `npm run build`, manual `POST /api/news/run-now` populates `news_items` with non-null `impact_score`, `POST /api/alerts/run-now` writes one `agent_alerts` row and flips `seen_by_agent`
+- [ ] Codex side: `npm run build`, News Impact page renders cards with score colours, filter chips switch categories, ≥7 toggle works, Alerts page shows briefing + filings table with watchlist highlight
+- [ ] Cross-review: each side reads the other's diff and posts a short note in this plan's Review section
+- [ ] Cost smoke test: 1 hourly cycle stays under ~$0.05 in Claude tokens (Haiku-priced, ≤50 headlines + 1 briefing per active player)
+
+### Open / explicit non-goals
+- Twitter/X integration is **scaffold-only** this round (config flag + stub); no API keys, no live polling
+- No push notifications or email digests yet — UI surface only
+- No per-user customisation of the briefing prompt this round
+- Yahoo Finance auth: assume the existing public RSS/JSON endpoint suffices; if it requires a key, log it as a follow-up rather than block the rollout
+
+### Review (filled in after both sides finish)
+- Claude review of Codex diff:
+- Codex review of Claude diff:
+- Final cost + token snapshot from `agent_run_logs`:
+
+---
+
 ## Plan: Stock signal expansion — ownership conviction, event pressure, and float context (2026-04-25)
 
 ### Goal
@@ -693,3 +834,27 @@ Make `congress_trades` actually fill in production. After the broader market-dat
 - [x] `server.cjs` - reduced SEC XML batch concurrency to be gentler on `sec.gov` rate limits during cold cache rebuilds.
 - [x] `src/pages/InsiderActivity.tsx` - rebuilt insider page copy and loading behavior so tab/period switches keep prior data visible and show a lightweight refreshing state.
 - [x] `npm run build` clean after the change.
+
+---
+
+## Plan: News Impact + Agent Alerts — Codex Phase 1 wiring (2026-04-26)
+
+### Goal
+Wire the two new routes, nav entries, and shell pages on the Codex-owned side so Claude can publish the Phase 1 stub contract without blocking UI development.
+
+### Root cause
+- The feature plan depends on parallel work, but the UI had no route or page surface for `/news-impact` or `/alerts`.
+- Claude’s Phase 1 contract files are not live in this workspace yet, so the shell pages need to degrade cleanly while still proving the route and endpoint wiring path.
+
+### Shipped
+- [x] `src/pages/NewsImpact.tsx` — added a Phase 1 shell page with direct fetch wiring to `/api/news/impact`, TARS-style skeletons, `DataStatus`, and explicit fallback copy when Claude’s stub endpoint is not live yet.
+- [x] `src/pages/AgentAlerts.tsx` — added a Phase 1 shell page with direct fetch wiring to `/api/alerts/latest` and `/api/alerts/insider-filings`, plus skeletons, `DataStatus`, and endpoint-not-live fallback copy.
+- [x] `src/App.tsx` — registered lazy routes for `/news-impact` and `/alerts`.
+- [x] `src/components/layout/Sidebar.tsx` — added `News Impact` and `Alerts` nav entries in the desktop/mobile drawer sidebar.
+- [x] `src/components/layout/AppShell.tsx` — added `Impact` and `Alerts` entries to the mobile bottom nav.
+- [x] `npm run build` passed cleanly.
+
+### Expected user-facing outcome
+- Both new routes now exist and render coherent shells in the app.
+- Codex-side wiring is ready for Claude’s empty-array Phase 1 contract as soon as those endpoints are published.
+- If the backend is not live yet, users see a clear wiring-state message instead of a broken blank page.

@@ -14,6 +14,8 @@ const importPortfolio = () => import('./pages/Portfolio')
 const importPlayerPortfolio = () => import('./pages/PlayerPortfolio')
 const importAdmin = () => import('./pages/Admin')
 const importNews = () => import('./pages/News')
+const importNewsImpact = () => import('./pages/NewsImpact')
+const importAgentAlerts = () => import('./pages/AgentAlerts')
 const importInsiderActivity = () => import('./pages/InsiderActivity')
 const importCongress = () => import('./pages/Congress')
 const importFunds = () => import('./pages/Funds')
@@ -26,6 +28,8 @@ const Portfolio           = lazyWithAutoReload(importPortfolio)
 const PlayerPortfolio     = lazyWithAutoReload(importPlayerPortfolio)
 const Admin               = lazyWithAutoReload(importAdmin)
 const NewsPage            = lazyWithAutoReload(importNews)
+const NewsImpactPage      = lazyWithAutoReload(importNewsImpact)
+const AgentAlertsPage     = lazyWithAutoReload(importAgentAlerts)
 const InsiderActivityPage = lazyWithAutoReload(importInsiderActivity)
 const CongressPage        = lazyWithAutoReload(importCongress)
 const FundsPage           = lazyWithAutoReload(importFunds)
@@ -270,6 +274,8 @@ export default function App() {
             <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
             <Route path="/admin" element={<Admin />} />
             <Route path="/news" element={<NewsPage />} />
+            <Route path="/news-impact" element={<NewsImpactPage />} />
+            <Route path="/alerts" element={<AgentAlertsPage />} />
             <Route path="/insiders" element={<InsiderActivityPage />} />
             <Route path="/congress" element={<CongressPage />} />
             <Route path="/funds" element={<FundsPage />} />
