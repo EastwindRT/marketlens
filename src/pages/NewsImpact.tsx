@@ -159,6 +159,20 @@ export default function NewsImpactPage() {
         />
       </div>
 
+      <div
+        style={{
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 16,
+          padding: 14,
+          marginBottom: 16,
+        }}
+      >
+        <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--text-tertiary)' }}>
+          The default view is intentionally strict: <strong style={{ color: 'var(--text-secondary)' }}>24H + 7+ impact</strong>. If a story is missing, it may have been scored below the floor or filtered out before scoring.
+        </p>
+      </div>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 18 }}>
         <FilterChips value={category} onChange={setCategory} />
 

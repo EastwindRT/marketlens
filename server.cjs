@@ -4972,14 +4972,20 @@ const NEWS_SCORING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h — same headline sco
 const NEWS_QUERIES = [
   {
     label: 'financial',
-    q: 'stock market OR earnings OR Federal Reserve OR interest rates OR inflation OR GDP OR recession OR IPO OR merger OR acquisition',
+    q: 'stock market OR earnings OR Federal Reserve OR interest rates OR inflation OR GDP OR recession OR IPO OR merger OR acquisition OR bankruptcy OR creditors OR restructuring OR debt OR distressed OR "equity wiped out" OR "chapter 11" OR "liability management" OR "debt restructuring" OR "private equity"',
     sources: '',
     language: 'en',
   },
   {
     label: 'us_politics',
-    q: 'Trump',
+    q: 'Trump OR "White House" OR tariffs OR tariff OR "executive order" OR sanctions OR "Treasury Department" OR "Commerce Department" OR briefing',
     sources: 'reuters,associated-press,bloomberg,cnbc',
+    language: 'en',
+  },
+  {
+    label: 'policy',
+    q: '"White House" OR "U.S. Treasury" OR "Federal Reserve" OR tariffs OR tariff OR sanctions OR "export controls" OR "trade restrictions" OR "industrial policy" OR "tax policy"',
+    sources: 'reuters,associated-press,bloomberg,cnbc,financial-times',
     language: 'en',
   },
   {
@@ -5050,6 +5056,13 @@ async function fetchAllHeadlines() {
     seen.add(k);
     return true;
   });
+}
+
+function buildNewsFeedNote({ minScore, category, days, showAll }) {
+  const windowLabel = days === 1 ? '24H' : `${days}D`;
+  const scoreLabel = showAll ? 'all scored stories' : `${minScore}+ impact only`;
+  const categoryLabel = category && category !== 'all' ? `, ${String(category).replace(/_/g, ' ')}` : '';
+  return `Showing ${windowLabel}, ${scoreLabel}${categoryLabel}. Stories only appear after query matching + Claude market-impact scoring.`;
 }
 
 async function scoreHeadlineWithClaude(headline, source, publishedAt) {
@@ -5408,7 +5421,12 @@ app.get('/api/news/impact', async (req, res) => {
       affectedTickers: r.affected_tickers ?? [],
     }));
 
-    res.json({ schemaVersion: NEWS_SCHEMA_VERSION, items, generatedAt: new Date().toISOString() });
+    res.json({
+      schemaVersion: NEWS_SCHEMA_VERSION,
+      items,
+      generatedAt: new Date().toISOString(),
+      note: buildNewsFeedNote({ minScore, category, days, showAll }),
+    });
   } catch (err) {
     console.error('[api/news/impact]', err.message);
     res.status(502).json({ schemaVersion: NEWS_SCHEMA_VERSION, items: [], error: err.message, generatedAt: new Date().toISOString() });
