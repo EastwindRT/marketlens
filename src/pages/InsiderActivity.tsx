@@ -10,7 +10,7 @@ import { DataStatus } from '../components/ui/DataStatus';
 type SortMode = 'value' | 'date';
 type FilterMode = 'all' | 'buy' | 'sell';
 type PeriodMode = '7d' | '14d' | '30d';
-type MarketTab = 'us' | 'ca-insiders' | 'ca-filings';
+type MarketTab = 'us' | 'ca-insiders';
 type SymbolMetadata = {
   symbol: string;
   sector: string | null;
@@ -42,7 +42,7 @@ function formatSignalLabel(signal?: string | null): string {
 
 export default function InsiderActivityPage() {
   const navigate = useNavigate();
-  const [marketTab, setMarketTab] = useState<MarketTab>('ca-filings');
+  const [marketTab, setMarketTab] = useState<MarketTab>('ca-insiders');
   const [sortMode, setSortMode] = useState<SortMode>('date');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [periodMode, setPeriodMode] = useState<PeriodMode>('30d');
@@ -50,7 +50,7 @@ export default function InsiderActivityPage() {
   const watchlistSymbols = useWatchlistStore((state) => state.items.map((item) => item.symbol));
 
   const days = periodMode === '7d' ? 7 : periodMode === '14d' ? 14 : 30;
-  const caMode = marketTab === 'ca-filings' ? 'filings' : 'insiders';
+  const caMode = 'insiders';
 
   const {
     data: usData,
@@ -146,7 +146,6 @@ export default function InsiderActivityPage() {
   const tabLabel = {
     us: 'US · SEC Form 4',
     'ca-insiders': 'CA · SEDI open-market',
-    'ca-filings': 'CA · all SEDI filings',
   }[marketTab];
 
   return (
@@ -166,7 +165,6 @@ export default function InsiderActivityPage() {
           {([
             { id: 'us', label: 'US Insiders' },
             { id: 'ca-insiders', label: 'CA Insiders' },
-            { id: 'ca-filings', label: 'CA Filings' },
           ] as const).map((tab) => (
             <button
               key={tab.id}
@@ -205,17 +203,15 @@ export default function InsiderActivityPage() {
               { id: 'date', label: 'Newest' },
             ]}
           />
-          {marketTab !== 'ca-filings' && (
-            <SegmentedControl<FilterMode>
-              value={filterMode}
-              onChange={setFilterMode}
-              options={[
-                { id: 'all', label: 'All' },
-                { id: 'buy', label: 'Buys' },
-                { id: 'sell', label: 'Sells' },
-              ]}
-            />
-          )}
+          <SegmentedControl<FilterMode>
+            value={filterMode}
+            onChange={setFilterMode}
+            options={[
+              { id: 'all', label: 'All' },
+              { id: 'buy', label: 'Buys' },
+              { id: 'sell', label: 'Sells' },
+            ]}
+          />
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
