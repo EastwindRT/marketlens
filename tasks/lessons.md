@@ -500,3 +500,11 @@
 **Observation:** The feed looked politically and energy-biased even after adding better frontend filtering.
 **Root cause:** The backend query mix was not balanced. If tech, M&A, and IPO headlines are underfetched upstream, no amount of UI filtering can make them appear later.
 **Rule:** For multi-sector market news products, keep separate ingestion lanes for macro/policy, company-specific, sector-specific, and deal/IPO flow so one domain does not dominate the feed by accident.
+
+---
+
+## Lesson: 2026-04-27 - Client-side timeouts on multi-step writes can create fake failures
+
+**Observation:** The trade modal no longer had a global timeout, but users were still seeing timeout-style failures during slow Supabase windows.
+**Root cause:** The write path still had per-step client-side timeouts inside the DB helper, so a slow but valid request could be treated as failed before the backend had actually given up.
+**Rule:** For critical multi-step writes, prefer user-facing slow-state messaging plus targeted retries for real transport failures. Hard client-side timeouts are more likely to create false negatives than protect the flow.

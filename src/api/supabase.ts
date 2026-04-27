@@ -5,21 +5,18 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const DB_STEP_TIMEOUT_MS = 8000;
 const DB_STEP_RETRIES = 1;
 
-async function withDbTimeout<T>(promise: Promise<T>, label: string, timeoutMs = DB_STEP_TIMEOUT_MS): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+function shouldRetryDbStep(error: unknown): boolean {
+  const message = String((error as Error)?.message || error).toLowerCase();
+  return (
+    message.includes('fetch failed') ||
+    message.includes('network') ||
+    message.includes('socket') ||
+    message.includes('timeout') ||
+    message.includes('temporarily unavailable') ||
+    message.includes('failed to fetch')
+  );
 }
 
 async function runDbStep<T>(label: string, factory: () => Promise<T>, retries = DB_STEP_RETRIES): Promise<T> {
@@ -27,10 +24,10 @@ async function runDbStep<T>(label: string, factory: () => Promise<T>, retries = 
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      return await withDbTimeout(factory(), label);
+      return await factory();
     } catch (error) {
       lastError = error;
-      if (attempt === retries) break;
+      if (attempt === retries || !shouldRetryDbStep(error)) break;
       await new Promise((resolve) => setTimeout(resolve, 350));
     }
   }

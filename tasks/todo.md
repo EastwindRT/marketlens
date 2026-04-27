@@ -971,3 +971,22 @@ Reduce the feed's political/oil bias by widening ingestion to include stronger c
 ### Expected user-facing outcome
 - The News feed should surface materially more tech, earnings, M&A, and IPO stories instead of skewing so heavily toward politics/policy and oil.
 - Sector and company category filters should become much more useful because the ingestion mix feeding them is broader.
+
+## Plan: Trade timeout hardening follow-up (2026-04-27)
+
+### Goal
+Stop slow-but-valid Supabase trade writes from failing early just because the client imposes its own per-step timeout.
+
+### Root cause
+- `TradeModal` no longer had a hard modal timeout, but `src/api/supabase.ts` still wrapped each DB step (`load existing holding`, `update/create holding`, `log trade`) in an 8-second timeout.
+- That meant a legitimate slow Supabase response could still throw a client-side timeout even though the write path was alive.
+- The result was a false failure mode: users saw a timeout/error even when the safest behavior was to keep waiting and show the existing slow-processing notice.
+
+### Shipped
+- [x] `src/api/supabase.ts` - removed the hard per-step client timeout wrapper from the buy/sell DB path.
+- [x] `src/api/supabase.ts` - kept one retry only for genuinely transient network/service failures instead of forcing a timeout-based retry path.
+- [x] `npm run build` passed cleanly.
+
+### Expected user-facing outcome
+- Trades should stop failing just because Supabase is slow for a moment.
+- Users now stay on the existing `Still processing your trade` path instead of tripping a false timeout during a live request.
