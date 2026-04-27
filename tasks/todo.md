@@ -950,3 +950,24 @@ Make the actual news feed the default landing page and reshape it into a denser,
 - Opening the site or clicking the logo now lands on the actual news feed.
 - News is much easier to skim quickly because headlines, impact, sector, and time live in one compact row layout.
 - Users can still narrow by impact and by sector without losing the faster scanning experience.
+
+## Plan: News coverage rebalance (2026-04-27)
+
+### Goal
+Reduce the feed's political/oil bias by widening ingestion to include stronger company, tech, M&A, and IPO coverage before scoring.
+
+### Root cause
+- The News Impact backend had one broad financial query and several policy-heavy queries.
+- That meant policy and energy headlines were overrepresented before Claude scoring even ran.
+- Tech, company-specific, and deals/IPO stories were underfetched, so they often never had a chance to appear in the feed.
+
+### Shipped
+- [x] `server.cjs` - added a dedicated `company` query for earnings, guidance, outlook changes, buybacks, layoffs, activist stakes, and strategic reviews.
+- [x] `server.cjs` - added a dedicated `sector` query for semis, AI infrastructure, cloud, cybersecurity, EVs, biotech/pharma, energy, metals, and financials.
+- [x] `server.cjs` - added a dedicated large-cap/company lane to improve headline pickup for major tech names.
+- [x] `server.cjs` - added a dedicated `company` query for IPO, direct listing, SPAC, merger, acquisition, takeover, buyout, private equity, and deal-talk coverage.
+- [x] `npm run build` passed cleanly.
+
+### Expected user-facing outcome
+- The News feed should surface materially more tech, earnings, M&A, and IPO stories instead of skewing so heavily toward politics/policy and oil.
+- Sector and company category filters should become much more useful because the ingestion mix feeding them is broader.

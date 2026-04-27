@@ -4979,6 +4979,30 @@ const NEWS_QUERIES = [
     language: 'en',
   },
   {
+    label: 'company',
+    q: 'earnings OR guidance OR outlook OR revenue OR profit warning OR "beats estimates" OR "misses estimates" OR "share buyback" OR layoff OR layoffs OR "strategic review" OR "activist investor" OR "stake in" OR "raises forecast" OR "cuts forecast"',
+    sources: 'reuters,associated-press,bloomberg,cnbc,financial-times,the-wall-street-journal',
+    language: 'en',
+  },
+  {
+    label: 'sector',
+    q: 'semiconductor OR chipmaker OR AI infrastructure OR datacenter OR cloud software OR cybersecurity OR EV OR electric vehicle OR biotech OR pharma OR oil OR gas OR uranium OR copper OR gold miners OR banks OR insurers',
+    sources: 'reuters,associated-press,bloomberg,cnbc,financial-times',
+    language: 'en',
+  },
+  {
+    label: 'company',
+    q: 'Apple OR Microsoft OR Nvidia OR AMD OR Amazon OR Alphabet OR Google OR Meta OR Tesla OR Broadcom OR Palantir OR Oracle OR Salesforce OR ServiceNow OR CrowdStrike OR Snowflake OR Shopify',
+    sources: 'reuters,associated-press,bloomberg,cnbc,financial-times,the-wall-street-journal',
+    language: 'en',
+  },
+  {
+    label: 'company',
+    q: 'IPO OR "initial public offering" OR "direct listing" OR SPAC OR merger OR acquisition OR takeover OR buyout OR "private equity" OR "strategic alternatives" OR "goes public" OR "deal talks" OR "deal valued at"',
+    sources: 'reuters,associated-press,bloomberg,cnbc,financial-times,the-wall-street-journal',
+    language: 'en',
+  },
+  {
     label: 'us_politics',
     q: 'Trump OR "White House" OR tariffs OR tariff OR "executive order" OR sanctions OR "Treasury Department" OR "Commerce Department" OR briefing',
     sources: 'reuters,associated-press,bloomberg,cnbc',

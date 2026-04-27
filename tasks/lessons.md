@@ -492,3 +492,11 @@
 **Observation:** Users wanted sector filters on the news feed even though the news API did not yet provide a dedicated `sector` field on each story.
 **Root cause:** The backend contract and the ideal UI filters were out of phase. Waiting for a contract change would have blocked a useful filter, but relabeling an unrelated field would have been misleading.
 **Rule:** When a filterable attribute is missing from the contract, derive it from the closest trustworthy metadata source and label it honestly until the backend grows a first-class field.
+
+---
+
+## Lesson: 2026-04-27 - A balanced news feed starts at ingestion, not at the UI filter
+
+**Observation:** The feed looked politically and energy-biased even after adding better frontend filtering.
+**Root cause:** The backend query mix was not balanced. If tech, M&A, and IPO headlines are underfetched upstream, no amount of UI filtering can make them appear later.
+**Rule:** For multi-sector market news products, keep separate ingestion lanes for macro/policy, company-specific, sector-specific, and deal/IPO flow so one domain does not dominate the feed by accident.
