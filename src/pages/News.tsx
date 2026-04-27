@@ -6,7 +6,7 @@ import { format, subDays } from 'date-fns';
 import { edgar } from '../api/edgar';
 import type { MarketFiling } from '../api/edgar';
 import type { CongressTrade } from '../api/congress';
-import type { InsiderTransaction } from '../api/types';
+import type { InsiderFeedItem, InsiderTransaction } from '../api/types';
 
 const FilingSheet = lazy(() =>
   import('../components/ui/FilingSheet').then((m) => ({ default: m.FilingSheet }))
@@ -15,6 +15,7 @@ import { useWatchlistStore } from '../store/watchlistStore';
 import { fetchInsiderData, getInsiderType } from '../hooks/useInsiderData';
 import { useCongressTradesForWatchlist } from '../hooks/useCongressTrades';
 import { DataStatus } from '../components/ui/DataStatus';
+import { formatLargeNumber } from '../utils/formatters';
 
 interface CorrelatedSignal {
   ticker: string;
@@ -285,6 +286,41 @@ export default function NewsPage() {
     });
   }, [enrichedFilings, filingsSort, formFilter, sectorFilter]);
 
+  const {
+    data: caFilingsData,
+    isLoading: caFilingsLoading,
+    isFetching: caFilingsFetching,
+    dataUpdatedAt: caFilingsUpdatedAt,
+    error: caFilingsError,
+  } = useQuery({
+    queryKey: ['market-signals-ca-filings', days],
+    queryFn: async (): Promise<{ trades: InsiderFeedItem[] }> => {
+      const response = await fetch(`/api/ca-insider-activity?days=${days}&mode=filings&limit=80`);
+      if (!response.ok) throw new Error(`CA filings ${response.status}`);
+      return response.json();
+    },
+    staleTime: 30 * 60 * 1000,
+    retry: 1,
+    placeholderData: (previous) => previous,
+  });
+
+  const caWatchlistSymbols = useMemo(
+    () => new Set(watchlist.map((item) => item.symbol.toUpperCase())),
+    [watchlist]
+  );
+
+  const caSignalFilings = useMemo(() => {
+    const trades = caFilingsData?.trades ?? [];
+    return [...trades]
+      .sort((a, b) => (b.filingDate || '').localeCompare(a.filingDate || '') || ((b.totalValue ?? 0) - (a.totalValue ?? 0)))
+      .sort((a, b) => {
+        const aWatch = caWatchlistSymbols.has(a.symbol.toUpperCase()) ? 1 : 0;
+        const bWatch = caWatchlistSymbols.has(b.symbol.toUpperCase()) ? 1 : 0;
+        return bWatch - aWatch;
+      })
+      .slice(0, 10);
+  }, [caFilingsData?.trades, caWatchlistSymbols]);
+
   const fromDate = format(subDays(new Date(), days), 'MMM d');
   const toDate = format(new Date(), 'MMM d');
   const signalsLoading = signalSymbols.length > 0 && (congressLoading || insiderQueries.some((query) => query.isLoading));
@@ -436,6 +472,85 @@ export default function NewsPage() {
                         <span style={{ color: 'var(--text-tertiary)', marginLeft: 6 }}>
                           ({signal.insiderTrades.length} trade{signal.insiderTrades.length !== 1 ? 's' : ''})
                         </span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10, gap: 12 }}>
+            <SectionHeader
+              noMargin
+              title="Canadian Insider Filings"
+              subtitle="Latest SEDI filing flow — surfaced here because it reads more like a market signal than a pure insider tape"
+            />
+            <DataStatus refreshing={caFilingsFetching} updatedAt={caFilingsUpdatedAt} />
+          </div>
+
+          {caFilingsLoading && <FilingsSkeleton />}
+
+          {!caFilingsLoading && caFilingsError && (
+            <p style={{ color: 'var(--color-down)', fontSize: 13, padding: '0 0 20px' }}>
+              Could not load Canadian insider filings right now.
+            </p>
+          )}
+
+          {!caFilingsLoading && !caFilingsError && caSignalFilings.length === 0 && (
+            <EmptyState message="No Canadian insider filings matched the current window." />
+          )}
+
+          {!caFilingsLoading && !caFilingsError && caSignalFilings.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 32 }}>
+              {caSignalFilings.map((trade) => {
+                const watchlistHit = caWatchlistSymbols.has(trade.symbol.toUpperCase());
+                return (
+                  <button
+                    key={trade.id}
+                    onClick={() => navigate(`/stock/${trade.symbol}`)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                      width: '100%',
+                      padding: '12px 14px',
+                      borderRadius: 12,
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      background: watchlistHit ? 'rgba(45,107,255,0.08)' : 'var(--bg-elevated)',
+                      border: `1px solid ${watchlistHit ? 'rgba(45,107,255,0.3)' : 'var(--border-subtle)'}`,
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace" }}>
+                          {trade.symbol}
+                        </span>
+                        {watchlistHit && (
+                          <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: 'var(--accent-blue)', color: '#fff' }}>
+                            WATCHLIST
+                          </span>
+                        )}
+                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                          {trade.filingDate || trade.transactionDate}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 3 }}>
+                        {trade.insiderName} · {trade.companyName}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                        {trade.title || trade.exchange || 'SEDI filing'}
+                      </div>
+                    </div>
+
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: trade.type === 'BUY' ? '#05B169' : trade.type === 'SELL' ? '#F6465D' : 'var(--text-primary)' }}>
+                        {trade.type}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                        {formatLargeNumber(trade.totalValue)}
                       </div>
                     </div>
                   </button>

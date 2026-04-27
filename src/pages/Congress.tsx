@@ -58,6 +58,7 @@ function formatPercent(value: number | null | undefined): string {
 
 export default function CongressPage() {
   const [tickerFilter, setTickerFilter] = useState('');
+  const [memberFilter, setMemberFilter] = useState('');
   const [sortBy, setSortBy] = useState<'date' | 'size'>('date');
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
   const [memberSort, setMemberSort] = useState<'active' | 'buyers' | 'sellers' | 'returns'>('returns');
@@ -86,7 +87,7 @@ export default function CongressPage() {
 
   const rankedMembers = useMemo(() => {
     const list = memberActivity?.members ?? [];
-    return [...list].sort((a, b) => {
+    const sorted = [...list].sort((a, b) => {
       if (memberSort === 'returns') {
         return (b.averageReturnPct ?? -Infinity) - (a.averageReturnPct ?? -Infinity)
           || b.totalAmountMin - a.totalAmountMin
@@ -100,7 +101,15 @@ export default function CongressPage() {
       }
       return b.totalAmountMin - a.totalAmountMin || b.totalTrades - a.totalTrades || b.latestTradeDate.localeCompare(a.latestTradeDate);
     });
-  }, [memberActivity?.members, memberSort]);
+    if (!memberFilter.trim()) return sorted;
+    const needle = memberFilter.trim().toLowerCase();
+    return sorted.filter((member) =>
+      member.member.toLowerCase().includes(needle)
+      || member.state.toLowerCase().includes(needle)
+      || member.party.toLowerCase().includes(needle)
+      || member.chamber.toLowerCase().includes(needle)
+    );
+  }, [memberActivity?.members, memberFilter, memberSort]);
 
   const selectedMember = useMemo(() => {
     if (selectedMemberId) return rankedMembers.find((member) => member.memberId === selectedMemberId) ?? null;
@@ -159,6 +168,32 @@ export default function CongressPage() {
             </div>
           </div>
 
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+            <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 360 }}>
+              <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
+              <input
+                value={memberFilter}
+                onChange={(e) => setMemberFilter(e.target.value)}
+                placeholder="Filter members (Pelosi, TX, R...)"
+                style={{
+                  width: '100%',
+                  padding: '10px 12px 10px 34px',
+                  borderRadius: 10,
+                  boxSizing: 'border-box',
+                  background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border-default)',
+                  color: 'var(--text-primary)',
+                  fontSize: 13,
+                  outline: 'none',
+                }}
+              />
+            </div>
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)' }}>
+              Showing {Math.min(rankedMembers.length, 24)} of {rankedMembers.length} ranked members
+              {memberSort === 'returns' ? ' · sorted by estimated return' : ''}
+            </p>
+          </div>
+
           {membersLoading && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8, marginBottom: 14 }}>
               {Array.from({ length: 6 }).map((_, index) => (
@@ -178,7 +213,7 @@ export default function CongressPage() {
           {!membersLoading && !membersError && rankedMembers.length > 0 && (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8, marginBottom: 14 }}>
-                {rankedMembers.slice(0, 8).map((member) => {
+                {rankedMembers.slice(0, 24).map((member, index) => {
                   const party = partyColor(member.party);
                   const selected = selectedMember?.memberId === member.memberId;
                   return (
@@ -197,7 +232,7 @@ export default function CongressPage() {
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {member.member}
+                            #{index + 1} · {member.member}
                           </div>
                           <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
                             {member.chamber} {member.state ? `· ${member.state}` : ''}
