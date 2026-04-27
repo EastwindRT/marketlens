@@ -9,6 +9,8 @@ services:
         value: production
       - key: VITE_FINNHUB_API_KEY
         sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
       - key: VITE_POLYGON_API_KEY
         sync: false
       - key: VITE_SUPABASE_URL

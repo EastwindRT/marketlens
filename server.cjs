@@ -4968,6 +4968,7 @@ async function getAppSetting(key) {
 
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY || '';
 const NEWS_SCORING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h — same headline scored at most once/day
+const FINNHUB_NEWS_CATEGORIES = ['general'];
 
 const NEWS_QUERIES = [
   {
@@ -5042,8 +5043,32 @@ async function fetchNewsApiHeadlines(query) {
   }
 }
 
+async function fetchFinnhubNewsHeadlines(category) {
+  if (!FINNHUB_KEY) return [];
+  try {
+    const json = await fetchFinnhubJson('/news', { category });
+    if (!Array.isArray(json)) return [];
+    return json.map((item) => ({
+      headline: String(item?.headline || '').trim(),
+      source: item?.source || 'Finnhub',
+      publishedAt: item?.datetime
+        ? new Date(Number(item.datetime) * 1000).toISOString()
+        : new Date().toISOString(),
+      url: item?.url || null,
+      rawQuery: `finnhub:${category}`,
+    })).filter((item) => item.headline);
+  } catch (err) {
+    console.warn(`[news-fetch:finnhub:${category}]`, err.message);
+    return [];
+  }
+}
+
 async function fetchAllHeadlines() {
-  const results = await Promise.allSettled(NEWS_QUERIES.map(q => fetchNewsApiHeadlines(q)));
+  const sourceJobs = [
+    ...NEWS_QUERIES.map((q) => fetchNewsApiHeadlines(q)),
+    ...FINNHUB_NEWS_CATEGORIES.map((category) => fetchFinnhubNewsHeadlines(category)),
+  ];
+  const results = await Promise.allSettled(sourceJobs);
   const all = [];
   for (const r of results) {
     if (r.status === 'fulfilled') all.push(...r.value);
@@ -5062,7 +5087,7 @@ function buildNewsFeedNote({ minScore, category, days, showAll }) {
   const windowLabel = days === 1 ? '24H' : `${days}D`;
   const scoreLabel = showAll ? 'all scored stories' : `${minScore}+ impact only`;
   const categoryLabel = category && category !== 'all' ? `, ${String(category).replace(/_/g, ' ')}` : '';
-  return `Showing ${windowLabel}, ${scoreLabel}${categoryLabel}. Stories only appear after query matching + Claude market-impact scoring.`;
+  return `Showing ${windowLabel}, ${scoreLabel}${categoryLabel}. Stories only appear after NewsAPI/Finnhub ingestion, query matching, and Claude market-impact scoring.`;
 }
 
 async function scoreHeadlineWithClaude(headline, source, publishedAt) {
@@ -5138,8 +5163,8 @@ let newsImpactJobRunning = false;
 
 async function runNewsImpactJob() {
   if (!NEWS_AGENT_ENABLED) return { written: 0, skipped: 0, tokensUsed: 0 };
-  if (!NEWSAPI_KEY) {
-    console.warn('[news-impact-job] NEWSAPI_KEY not set — skipping');
+  if (!NEWSAPI_KEY && !FINNHUB_KEY) {
+    console.warn('[news-impact-job] NEWSAPI_KEY and FINNHUB_KEY not set — skipping');
     return { written: 0, skipped: 0, tokensUsed: 0 };
   }
   if (newsImpactJobRunning) {
