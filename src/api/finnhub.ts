@@ -75,6 +75,8 @@ export const finnhub = {
 };
 
 export function formatTickerForFinnhub(ticker: string, exchange?: string): string {
-  if (exchange === 'TSX' || ticker.endsWith('.TO')) return ticker.includes('.') ? ticker : `${ticker}.TO`;
+  if (exchange === 'TSX' || exchange === 'TSXV' || /\.(TO|V)$/i.test(ticker)) {
+    return ticker.includes('.') ? ticker : `${ticker}.TO`;
+  }
   return ticker;
 }

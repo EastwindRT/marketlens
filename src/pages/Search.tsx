@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search as SearchIcon, AlertCircle } from 'lucide-react';
 import { finnhub } from '../api/finnhub';
+import { tmx } from '../api/tmx';
 import { Skeleton } from '../components/ui/LoadingSkeleton';
 import { recordSearchLog } from '../api/supabase';
 import { useLeagueStore } from '../store/leagueStore';
@@ -15,6 +16,10 @@ export default function Search() {
   const navigate = useNavigate();
   const player = useLeagueStore((state) => state.player);
   const [loggedQuery, setLoggedQuery] = useState('');
+
+  function looksLikeCanadianExactTicker(value: string) {
+    return /^[A-Z0-9-]+\.(TO|TSX|V|TSXV)$/i.test(value.trim());
+  }
 
   useEffect(() => {
     if (!query) { setResults([]); setError(null); return; }
@@ -31,8 +36,30 @@ export default function Search() {
             { symbol: 'TD.TO', description: 'Toronto-Dominion Bank', type: 'Common Stock' },
           ].filter(r => r.symbol.toLowerCase().includes(query.toLowerCase()) || r.description.toLowerCase().includes(query.toLowerCase())));
         } else {
+          const exactCanadian = looksLikeCanadianExactTicker(query)
+            ? await tmx.getQuote(query).then((quote) => quote ? [{
+                symbol: query.trim().toUpperCase(),
+                description: quote.name || query.trim().toUpperCase(),
+                type: quote.exchangeCode || 'TSXV',
+              }] : []).catch(() => [])
+            : [];
+
           const res = await finnhub.search(query);
-          setResults(res.result?.slice(0, 20) || []);
+          const finnhubResults = res.result?.slice(0, 20) || [];
+          const exactSymbol = query.trim().toUpperCase();
+          const merged = [...exactCanadian];
+          for (const item of finnhubResults) {
+            if (merged.some((existing) => existing.symbol.toUpperCase() === item.symbol.toUpperCase())) continue;
+            merged.push(item);
+          }
+
+          merged.sort((a, b) => {
+            const aExact = a.symbol.toUpperCase() === exactSymbol ? 1 : 0;
+            const bExact = b.symbol.toUpperCase() === exactSymbol ? 1 : 0;
+            return bExact - aExact;
+          });
+
+          setResults(merged);
         }
       } catch (err: any) {
         setError(err?.message || 'Search failed');

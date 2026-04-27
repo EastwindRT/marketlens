@@ -53,7 +53,7 @@ export const tmx = {
    * @param symbol  Base ticker without exchange suffix e.g. "BDT" not "BDT.TO"
    */
   getInsiderTransactions: async (symbol: string): Promise<TMXInsiderTransaction[]> => {
-    const ticker = symbol.replace(/\.TO$/i, '').toUpperCase();
+    const ticker = symbol.replace(/\.(TO|TSX|V|TSXV)$/i, '').toUpperCase();
     const data = await gql<{ getInsiderTransactions: TMXInsiderTransaction[] }>(
       `{ getInsiderTransactions(symbol: "${ticker}") }`
     );
@@ -65,7 +65,7 @@ export const tmx = {
    * Returns normalised shape compatible with Finnhub quote + profile.
    */
   getQuote: async (symbol: string) => {
-    const ticker = symbol.replace(/\.TO$/i, '').toUpperCase();
+    const ticker = symbol.replace(/\.(TO|TSX|V|TSXV)$/i, '').toUpperCase();
     const data = await gql<{ getQuoteBySymbol: TMXQuote }>(
       `{ getQuoteBySymbol(symbol: "${ticker}", locale: "en") {
           symbol name price priceChange percentChange prevClose openPrice

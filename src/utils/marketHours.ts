@@ -17,10 +17,10 @@ export function getMarketStatus(): { open: boolean; label: string } {
 }
 
 export function isTSXTicker(symbol: string): boolean {
-  return symbol.endsWith('.TO') || symbol.endsWith('.TSX');
+  return /\.(TO|TSX|V|TSXV)$/i.test(symbol);
 }
 
 export function formatTicker(symbol: string): string {
-  if (symbol.endsWith('.TO')) return symbol.replace('.TO', '');
+  if (/\.(TO|TSX|V|TSXV)$/i.test(symbol)) return symbol.replace(/\.(TO|TSX|V|TSXV)$/i, '');
   return symbol;
 }
