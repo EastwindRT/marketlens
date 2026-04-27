@@ -156,7 +156,7 @@ function formatPublishedAt(value: string) {
 
 export default function NewsImpactPage() {
   const [category, setCategory] = useState<NewsCategory | 'all'>('all');
-  const [showAllScores, setShowAllScores] = useState(false);
+  const [showAllScores, setShowAllScores] = useState(true);
   const [days, setDays] = useState<1 | 7>(1);
   const [sectorFilter, setSectorFilter] = useState('All sectors');
 
@@ -265,7 +265,7 @@ export default function NewsImpactPage() {
         }}
       >
         <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--text-tertiary)' }}>
-          The default view is intentionally strict: <strong style={{ color: 'var(--text-secondary)' }}>24H + 7+ impact</strong>. If a story is missing, it may have been scored below the floor or filtered out before scoring.
+          The default view now shows <strong style={{ color: 'var(--text-secondary)' }}>all scored stories</strong> in the current window. Use the impact toggle when you want to tighten it back to the highest-signal headlines only.
         </p>
       </div>
 
