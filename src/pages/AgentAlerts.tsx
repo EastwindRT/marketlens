@@ -1,8 +1,9 @@
 import { Bell } from 'lucide-react';
 import { BriefingCard } from '../components/alerts/BriefingCard';
 import { InsiderFilingsTable } from '../components/alerts/InsiderFilingsTable';
+import { MacroCalendarCard } from '../components/alerts/MacroCalendarCard';
 import { DataStatus } from '../components/ui/DataStatus';
-import { useAgentInsiderFilings, useAgentLatestAlert } from '../hooks/useAgentAlerts';
+import { useAgentInsiderFilings, useAgentLatestAlert, useMacroCalendar } from '../hooks/useAgentAlerts';
 import { useLeagueStore } from '../store/leagueStore';
 import { useWatchlistStore } from '../store/watchlistStore';
 
@@ -65,13 +66,16 @@ export default function AgentAlertsPage() {
   const watchlistSymbols = useWatchlistStore((state) => state.items.map((item) => item.symbol.toUpperCase()));
   const latestAlert = useAgentLatestAlert(playerId);
   const insiderFilings = useAgentInsiderFilings(7);
+  const macroCalendar = useMacroCalendar(8);
 
-  const isLoading = latestAlert.isLoading || insiderFilings.isLoading;
-  const hasError = latestAlert.error || insiderFilings.error;
-  const updatedAt = Math.max(latestAlert.dataUpdatedAt || 0, insiderFilings.dataUpdatedAt || 0);
-  const note = latestAlert.data?.note ?? latestAlert.data?.error ?? insiderFilings.data?.error ?? null;
+  const isLoading = latestAlert.isLoading || insiderFilings.isLoading || macroCalendar.isLoading;
+  const hasError = latestAlert.error || insiderFilings.error || macroCalendar.error;
+  const updatedAt = Math.max(latestAlert.dataUpdatedAt || 0, insiderFilings.dataUpdatedAt || 0, macroCalendar.dataUpdatedAt || 0);
+  const note = latestAlert.data?.note ?? latestAlert.data?.error ?? insiderFilings.data?.error ?? macroCalendar.data?.error ?? null;
   const alert = latestAlert.data?.alert ?? null;
   const filings = insiderFilings.data?.filings ?? [];
+  const macroEvents = macroCalendar.data?.events ?? [];
+  const macroNote = macroCalendar.data?.note ?? null;
 
   return (
     <div className="px-4 md:px-8 pt-5 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
@@ -102,6 +106,7 @@ export default function AgentAlertsPage() {
         <SummaryCard label="Briefing status" value={alert ? 'Live' : 'Waiting'} tone={alert ? 'blue' : 'neutral'} />
         <SummaryCard label="Watchlist names" value={String(watchlistSymbols.length)} tone="neutral" />
         <SummaryCard label="Filings in view" value={String(filings.length)} tone="amber" />
+        <SummaryCard label="Macro events" value={String(macroEvents.length)} tone="blue" />
       </div>
 
       {note && !hasError && (
@@ -152,6 +157,7 @@ export default function AgentAlertsPage() {
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
+          <MacroCalendarCard events={macroEvents} note={macroNote} />
           <BriefingCard alert={alert} />
           <InsiderFilingsTable filings={filings} watchlistSymbols={watchlistSymbols} />
         </div>

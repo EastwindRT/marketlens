@@ -4969,6 +4969,7 @@ async function getAppSetting(key) {
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY || '';
 const NEWS_SCORING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h — same headline scored at most once/day
 const FINNHUB_NEWS_CATEGORIES = ['general'];
+const MACRO_SCHEMA_VERSION = 1;
 
 const NEWS_QUERIES = [
   {
@@ -5088,6 +5089,186 @@ function buildNewsFeedNote({ minScore, category, days, showAll }) {
   const scoreLabel = showAll ? 'all scored stories' : `${minScore}+ impact only`;
   const categoryLabel = category && category !== 'all' ? `, ${String(category).replace(/_/g, ' ')}` : '';
   return `Showing ${windowLabel}, ${scoreLabel}${categoryLabel}. Stories only appear after NewsAPI/Finnhub ingestion, query matching, and Claude market-impact scoring.`;
+}
+
+function macroIsoDate(month, day) {
+  return `2026-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function buildMacroCalendarEvents() {
+  const events = [
+    {
+      id: 'bea-gdp-2026-04-30',
+      kind: 'gdp',
+      title: 'U.S. GDP (Advance Estimate)',
+      scheduledAt: `${macroIsoDate(4, 30)}T08:30:00-04:00`,
+      source: 'BEA',
+      sourceUrl: 'https://www.bea.gov/news/schedule',
+      importance: 'high',
+      whyImportant: 'GDP is the broadest read on U.S. growth and shapes recession risk, earnings expectations, and rate-cut odds.',
+      implications: [
+        'Hotter-than-expected growth can push yields up and reduce near-term rate-cut hopes.',
+        'Weak growth can pressure cyclicals, but may help duration if traders expect a softer Fed path.',
+      ],
+    },
+    {
+      id: 'bea-pce-2026-04-30',
+      kind: 'pce',
+      title: 'PCE Inflation / Personal Income & Outlays',
+      scheduledAt: `${macroIsoDate(4, 30)}T08:30:00-04:00`,
+      source: 'BEA',
+      sourceUrl: 'https://www.bea.gov/products/personal-income-outlays',
+      importance: 'high',
+      whyImportant: 'PCE is the Fed’s preferred inflation gauge, so it directly affects policy expectations, yields, and growth-stock valuations.',
+      implications: [
+        'Hot core PCE can lift yields and pressure long-duration tech.',
+        'Cooler PCE can support equities if it improves the odds of easier policy.',
+      ],
+    },
+    {
+      id: 'bls-jolts-2026-05-05',
+      kind: 'labor',
+      title: 'JOLTS Job Openings',
+      scheduledAt: `${macroIsoDate(5, 5)}T10:00:00-04:00`,
+      source: 'BLS',
+      sourceUrl: 'https://www.bls.gov/schedule/2026/05_sched_list.htm',
+      importance: 'medium',
+      whyImportant: 'JOLTS is an early read on labor-market tightness and helps frame how sticky wage and services inflation may be.',
+      implications: [
+        'A still-tight labor market can keep the Fed cautious.',
+        'A cooling openings trend can ease inflation fears and support rate-sensitive assets.',
+      ],
+    },
+    {
+      id: 'bls-nfp-2026-05-08',
+      kind: 'employment',
+      title: 'Employment Situation (Nonfarm Payrolls)',
+      scheduledAt: `${macroIsoDate(5, 8)}T08:30:00-04:00`,
+      source: 'BLS',
+      sourceUrl: 'https://www.bls.gov/schedule/news_release/empsit.htm',
+      importance: 'high',
+      whyImportant: 'Payrolls, unemployment, and wage growth often move rates, the dollar, and broad equity sentiment within minutes.',
+      implications: [
+        'Strong payrolls and wages can push yields up and delay rate-cut pricing.',
+        'A softer report can help bonds and growth stocks if recession fears do not dominate.',
+      ],
+    },
+    {
+      id: 'bls-cpi-2026-05-12',
+      kind: 'inflation',
+      title: 'Consumer Price Index (CPI)',
+      scheduledAt: `${macroIsoDate(5, 12)}T08:30:00-04:00`,
+      source: 'BLS',
+      sourceUrl: 'https://www.bls.gov/schedule/news_release/cpi.htm',
+      importance: 'high',
+      whyImportant: 'CPI is one of the fastest market-moving inflation reports and resets expectations for Fed policy and sector leadership.',
+      implications: [
+        'Hot CPI can hit rate-sensitive sectors and raise real-yield pressure.',
+        'Cool CPI can help duration, small caps, and multiple expansion if disinflation looks credible.',
+      ],
+    },
+    {
+      id: 'bls-ppi-2026-05-13',
+      kind: 'inflation',
+      title: 'Producer Price Index (PPI)',
+      scheduledAt: `${macroIsoDate(5, 13)}T08:30:00-04:00`,
+      source: 'BLS',
+      sourceUrl: 'https://www.bls.gov/schedule/2026/05_sched_list.htm',
+      importance: 'medium',
+      whyImportant: 'PPI can reinforce or challenge the CPI signal by showing pipeline inflation and margin pressure building upstream.',
+      implications: [
+        'Rising producer prices can revive inflation worries after a benign CPI.',
+        'Soft PPI can support the case that upstream price pressure is easing.',
+      ],
+    },
+    {
+      id: 'bea-gdp-2026-05-28',
+      kind: 'gdp',
+      title: 'U.S. GDP (Second Estimate)',
+      scheduledAt: `${macroIsoDate(5, 28)}T08:30:00-04:00`,
+      source: 'BEA',
+      sourceUrl: 'https://www.bea.gov/news/schedule',
+      importance: 'medium',
+      whyImportant: 'The second GDP estimate can materially revise the growth narrative if consumption, inventories, or trade are re-estimated.',
+      implications: [
+        'Upward revisions can support cyclicals but keep rates elevated.',
+        'Downward revisions can hurt growth confidence and pull yields lower.',
+      ],
+    },
+    {
+      id: 'bea-pce-2026-05-28',
+      kind: 'pce',
+      title: 'PCE Inflation / Personal Income & Outlays',
+      scheduledAt: `${macroIsoDate(5, 28)}T08:30:00-04:00`,
+      source: 'BEA',
+      sourceUrl: 'https://www.bea.gov/news/schedule',
+      importance: 'high',
+      whyImportant: 'This refreshes the Fed’s preferred inflation gauge and consumer-spending picture heading into the next policy meeting.',
+      implications: [
+        'Sticky core PCE can harden hawkish expectations into the next FOMC.',
+        'Cooling inflation plus weaker spending can strengthen the easing narrative.',
+      ],
+    },
+    {
+      id: 'fomc-2026-06-16',
+      kind: 'fomc',
+      title: 'FOMC Rate Decision and SEP',
+      scheduledAt: `${macroIsoDate(6, 17)}T14:00:00-04:00`,
+      source: 'Federal Reserve',
+      sourceUrl: 'https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm',
+      importance: 'high',
+      whyImportant: 'FOMC decisions and projections drive the policy-rate path, liquidity expectations, and the relative winners across equities, bonds, and FX.',
+      implications: [
+        'A hawkish dot-plot or firm inflation language can pressure multiples and lift the dollar.',
+        'A dovish shift can help duration, rate-sensitive sectors, and risk appetite broadly.',
+      ],
+    },
+    {
+      id: 'bea-gdp-2026-06-25',
+      kind: 'gdp',
+      title: 'U.S. GDP (Third Estimate)',
+      scheduledAt: `${macroIsoDate(6, 25)}T08:30:00-04:00`,
+      source: 'BEA',
+      sourceUrl: 'https://www.bea.gov/news/schedule',
+      importance: 'medium',
+      whyImportant: 'The third GDP print is less market-moving than the advance estimate, but can still revise corporate-profit and final-demand trends.',
+      implications: [
+        'Big revisions can reframe the quarter for cyclicals and margins.',
+        'A weak final print can deepen concern about late-cycle slowing.',
+      ],
+    },
+    {
+      id: 'bea-pce-2026-06-25',
+      kind: 'pce',
+      title: 'PCE Inflation / Personal Income & Outlays',
+      scheduledAt: `${macroIsoDate(6, 25)}T08:30:00-04:00`,
+      source: 'BEA',
+      sourceUrl: 'https://www.bea.gov/news/schedule',
+      importance: 'high',
+      whyImportant: 'This report updates both inflation and the health of the consumer, which is central to the U.S. growth outlook.',
+      implications: [
+        'Hot inflation with firm spending can keep the Fed restrictive for longer.',
+        'Cooling prices or spending can shift market focus toward slower growth and easier policy.',
+      ],
+    },
+  ];
+
+  return events;
+}
+
+function getUpcomingMacroEvents(limit = 8) {
+  const now = new Date();
+  return buildMacroCalendarEvents()
+    .map((event) => {
+      const scheduledMs = Date.parse(event.scheduledAt);
+      const daysUntil = Number.isFinite(scheduledMs)
+        ? Math.ceil((scheduledMs - now.getTime()) / (1000 * 60 * 60 * 24))
+        : null;
+      return { ...event, daysUntil };
+    })
+    .filter((event) => event.daysUntil == null || event.daysUntil >= 0)
+    .sort((a, b) => Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt))
+    .slice(0, limit);
 }
 
 async function scoreHeadlineWithClaude(headline, source, publishedAt) {
@@ -5488,6 +5669,27 @@ app.get('/api/alerts/insider-filings', async (req, res) => {
   } catch (err) {
     console.error('[api/alerts/insider-filings]', err.message);
     res.status(502).json({ schemaVersion: NEWS_SCHEMA_VERSION, filings: [], error: err.message, generatedAt: new Date().toISOString() });
+  }
+});
+
+app.get('/api/alerts/macro-calendar', async (req, res) => {
+  try {
+    const limit = Math.min(12, Math.max(3, parseInt(req.query.limit ?? '8', 10)));
+    const events = getUpcomingMacroEvents(limit);
+    res.json({
+      schemaVersion: MACRO_SCHEMA_VERSION,
+      generatedAt: new Date().toISOString(),
+      note: 'Upcoming official macro events from BLS, BEA, and the Federal Reserve, limited to high-signal business and policy releases.',
+      events,
+    });
+  } catch (err) {
+    console.error('[api/alerts/macro-calendar]', err.message);
+    res.status(502).json({
+      schemaVersion: MACRO_SCHEMA_VERSION,
+      generatedAt: new Date().toISOString(),
+      events: [],
+      error: err.message,
+    });
   }
 });
 

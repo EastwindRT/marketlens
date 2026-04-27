@@ -65,6 +65,27 @@ export interface InsiderFilingsResponse {
   error?: string;
 }
 
+export interface MacroCalendarEvent {
+  id: string;
+  kind: 'gdp' | 'pce' | 'employment' | 'inflation' | 'fomc' | 'labor';
+  title: string;
+  scheduledAt: string;
+  source: string;
+  sourceUrl: string;
+  importance: 'high' | 'medium' | 'low';
+  whyImportant: string;
+  implications: string[];
+  daysUntil: number | null;
+}
+
+export interface MacroCalendarResponse {
+  schemaVersion: number;
+  events: MacroCalendarEvent[];
+  generatedAt: string;
+  note?: string;
+  error?: string;
+}
+
 // ── Query params ──────────────────────────────────────────────────────────────
 
 export interface NewsImpactParams {
@@ -98,5 +119,11 @@ export async function fetchAlertsLatest(playerId?: string): Promise<AlertsLatest
 export async function fetchInsiderFilings(days = 7): Promise<InsiderFilingsResponse> {
   const res = await fetch(`/api/alerts/insider-filings?days=${days}`);
   if (!res.ok) throw new Error(`Insider filings fetch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchMacroCalendar(limit = 8): Promise<MacroCalendarResponse> {
+  const res = await fetch(`/api/alerts/macro-calendar?limit=${limit}`);
+  if (!res.ok) throw new Error(`Macro calendar fetch failed: ${res.status}`);
   return res.json();
 }
