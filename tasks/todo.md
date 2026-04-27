@@ -926,3 +926,27 @@ Stop production from ever degrading into believable fake prices, profiles, or ca
 ### Expected user-facing outcome
 - The app may show fewer values during an outage, but the values it does show are trustworthy.
 - Missing provider config will surface as unavailable/stale data instead of fake market data.
+
+## Plan: News landing page + terminal-style feed (2026-04-27)
+
+### Goal
+Make the actual news feed the default landing page and reshape it into a denser, line-by-line tape that feels closer to a terminal or Finviz-style scan surface while keeping impact and sector filtering.
+
+### Root cause
+- `/` was still landing on `Market Signals`, not the actual scored news feed.
+- `News Impact` was visually clear, but the card layout was too sparse for quick scanning through many headlines.
+- Users wanted sector filtering in the news feed, but the API does not expose a first-class sector field per story, so the UI needed a practical derived sector view from affected tickers.
+
+### Shipped
+- [x] `src/App.tsx` - `/` now redirects to `/news-impact`.
+- [x] `src/components/layout/Sidebar.tsx` - renamed the main nav entry from `News Impact` to `News`.
+- [x] `src/components/layout/AppShell.tsx` - mobile bottom nav now labels `/news-impact` as `News`.
+- [x] `src/pages/NewsImpact.tsx` - replaced the card grid with a denser line-by-line news tape.
+- [x] `src/pages/NewsImpact.tsx` - added sector filtering driven by the first affected ticker's company profile / industry when available.
+- [x] `src/pages/NewsImpact.tsx` - kept impact filtering, category chips, 24H / 7D, and clearer first-run empty-state copy.
+- [x] `npm run build` passed cleanly.
+
+### Expected user-facing outcome
+- Opening the site or clicking the logo now lands on the actual news feed.
+- News is much easier to skim quickly because headlines, impact, sector, and time live in one compact row layout.
+- Users can still narrow by impact and by sector without losing the faster scanning experience.

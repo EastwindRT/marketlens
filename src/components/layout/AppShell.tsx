@@ -83,7 +83,7 @@ function MobileBottomNav({ onMenuClick }: { onMenuClick: () => void }) {
   const location = useLocation();
 
   const navItems = [
-    { to: '/news-impact', icon: <Newspaper size={20} />, label: 'Impact'   },
+    { to: '/news-impact', icon: <Newspaper size={20} />, label: 'News'     },
     { to: '/alerts',      icon: <Bell size={20} />, label: 'Alerts'        },
     { to: '/insiders',    icon: <CircleDollarSign size={20} />, label: 'Insider' },
     { to: '/congress',    icon: <Building2 size={20} />, label: 'Congress' },

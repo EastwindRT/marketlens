@@ -476,3 +476,19 @@
 **Observation:** The main stock-data hooks were returning mock candles, quotes, and profiles whenever a provider key was missing or an upstream request failed.
 **Root cause:** Demo data started as a convenience for development, but because it lived inside production hooks, provider outages could silently degrade into believable fake market data.
 **Rule:** If a product has demo data at all, gate it behind an explicit flag like `VITE_DEMO_MODE=1`. In production, missing providers should surface as `null`, `stale`, or `unavailable` states — never fabricated market values.
+
+---
+
+## Lesson: 2026-04-27 - High-volume news scanning wants a tape, not a card deck
+
+**Observation:** The News Impact page was informative, but once the feed had enough stories users wanted to scan many headlines quickly, the card layout forced too much vertical reading and hid the relative ordering of items.
+**Root cause:** Research cards are good for explanation, but news scanning is a density problem first. A feed with source, score, sector, and time works better as a compact tape once the ingestion layer is mature enough to populate it.
+**Rule:** For headline-heavy surfaces, default to a dense row/tape layout and keep cards for detail surfaces. Optimize the first screen for comparison, not decoration.
+
+---
+
+## Lesson: 2026-04-27 - Derived metadata is a valid bridge when the API contract lags the filter UX
+
+**Observation:** Users wanted sector filters on the news feed even though the news API did not yet provide a dedicated `sector` field on each story.
+**Root cause:** The backend contract and the ideal UI filters were out of phase. Waiting for a contract change would have blocked a useful filter, but relabeling an unrelated field would have been misleading.
+**Rule:** When a filterable attribute is missing from the contract, derive it from the closest trustworthy metadata source and label it honestly until the backend grows a first-class field.

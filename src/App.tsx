@@ -264,7 +264,7 @@ export default function App() {
           </div>
         }>
           <Routes>
-            <Route path="/" element={<Navigate to="/news" replace />} />
+            <Route path="/" element={<Navigate to="/news-impact" replace />} />
             <Route path="/stock/:symbol" element={<StockDetail />} />
             <Route path="/search" element={<Search />} />
             <Route path="/dashboard" element={<Dashboard />} />

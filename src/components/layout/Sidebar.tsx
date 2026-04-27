@@ -311,7 +311,7 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
       )}
 
       {/* ── Market nav — always visible ── */}
-      <NavLink to="/news-impact" icon={<Newspaper size={14} />} label="News Impact" onClose={onClose} />
+      <NavLink to="/news-impact" icon={<Newspaper size={14} />} label="News" onClose={onClose} />
       <NavLink to="/alerts"   icon={<Bell size={14} />}       label="Alerts" onClose={onClose} />
       <NavLink to="/news"     icon={<Newspaper size={14} />}  label="Market Signals" onClose={onClose} />
       <NavLink to="/insiders" icon={<CircleDollarSign size={14} />} label="Insider $" onClose={onClose} />

@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react';
-import { Newspaper } from 'lucide-react';
+import { useQueries } from '@tanstack/react-query';
+import { ExternalLink, Newspaper } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import type { NewsCategory } from '../api/news';
-import { ImpactCard } from '../components/news/ImpactCard';
+import { finnhub } from '../api/finnhub';
+import type { CompanyProfile } from '../api/types';
 import { FilterChips } from '../components/news/FilterChips';
 import { DataStatus } from '../components/ui/DataStatus';
 import { useNewsImpact } from '../hooks/useNewsImpact';
@@ -118,10 +121,44 @@ function categoryLabel(category: NewsCategory | 'all') {
   }
 }
 
+function scoreTone(score: number) {
+  if (score >= 9) {
+    return {
+      color: '#F6465D',
+      background: 'rgba(246, 70, 93, 0.12)',
+      border: 'rgba(246, 70, 93, 0.24)',
+    };
+  }
+  if (score >= 7) {
+    return {
+      color: '#F7931A',
+      background: 'rgba(247, 147, 26, 0.12)',
+      border: 'rgba(247, 147, 26, 0.24)',
+    };
+  }
+  return {
+    color: 'var(--text-secondary)',
+    background: 'var(--bg-elevated)',
+    border: 'var(--border-subtle)',
+  };
+}
+
+function formatPublishedAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 export default function NewsImpactPage() {
   const [category, setCategory] = useState<NewsCategory | 'all'>('all');
   const [showAllScores, setShowAllScores] = useState(false);
   const [days, setDays] = useState<1 | 7>(1);
+  const [sectorFilter, setSectorFilter] = useState('All sectors');
 
   const {
     data,
@@ -139,7 +176,69 @@ export default function NewsImpactPage() {
   const generatedAt = data?.generatedAt ? new Date(data.generatedAt).getTime() : dataUpdatedAt;
   const note = data?.note ?? data?.error ?? null;
   const items = data?.items ?? [];
-  const highlightedCount = useMemo(() => items.filter((item) => item.impactScore >= 9).length, [items]);
+
+  const primaryTickers = useMemo(
+    () => [...new Set(items.map((item) => item.affectedTickers[0]).filter(Boolean))] as string[],
+    [items]
+  );
+
+  const profileQueries = useQueries({
+    queries: primaryTickers.map((symbol) => ({
+      queryKey: ['news-impact-profile', symbol],
+      queryFn: async (): Promise<CompanyProfile | null> => {
+        try {
+          return await finnhub.getProfile(symbol);
+        } catch {
+          return null;
+        }
+      },
+      staleTime: 6 * 60 * 60 * 1000,
+      retry: 0,
+      enabled: Boolean(symbol),
+    })),
+  });
+
+  const sectorByTicker = useMemo(() => {
+    const map = new Map<string, string | null>();
+    primaryTickers.forEach((symbol, index) => {
+      map.set(symbol, profileQueries[index]?.data?.finnhubIndustry || null);
+    });
+    return map;
+  }, [primaryTickers, profileQueries]);
+
+  const enrichedItems = useMemo(() => {
+    return items.map((item) => {
+      const primaryTicker = item.affectedTickers[0] || null;
+      const sector = primaryTicker ? sectorByTicker.get(primaryTicker) || null : null;
+      return {
+        ...item,
+        primaryTicker,
+        sector,
+      };
+    });
+  }, [items, sectorByTicker]);
+
+  const sectorOptions = useMemo(() => {
+    const values = new Set<string>();
+    for (const item of enrichedItems) {
+      if (item.sector) values.add(item.sector);
+      else if (item.affectedTickers.length > 0) values.add('Unknown sector');
+    }
+    return ['All sectors', ...[...values].sort((a, b) => a.localeCompare(b))];
+  }, [enrichedItems]);
+
+  const filteredItems = useMemo(() => {
+    if (sectorFilter === 'All sectors') return enrichedItems;
+    return enrichedItems.filter((item) => {
+      const label = item.sector || (item.affectedTickers.length > 0 ? 'Unknown sector' : null);
+      return label === sectorFilter;
+    });
+  }, [enrichedItems, sectorFilter]);
+
+  const highlightedCount = useMemo(
+    () => filteredItems.filter((item) => item.impactScore >= 9).length,
+    [filteredItems]
+  );
 
   return (
     <div className="px-4 md:px-8 pt-5 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
@@ -147,16 +246,13 @@ export default function NewsImpactPage() {
         <div>
           <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
             <Newspaper size={18} style={{ color: 'var(--accent-blue-light)' }} />
-            <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>News Impact</h1>
+            <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>News</h1>
           </div>
           <p style={{ margin: 0, fontSize: 14, color: 'var(--text-secondary)', maxWidth: 720 }}>
-            Market-moving headlines ranked by impact, with a default score floor so you can skim what actually matters first.
+            Market-moving headlines in a faster tape view, with impact and sector filters so you can scan the feed line by line.
           </p>
         </div>
-        <DataStatus
-          updatedAt={generatedAt}
-          refreshing={isFetching}
-        />
+        <DataStatus updatedAt={generatedAt} refreshing={isFetching} />
       </div>
 
       <div
@@ -177,31 +273,54 @@ export default function NewsImpactPage() {
         <FilterChips value={category} onChange={setCategory} />
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {([
-              { id: 1 as const, label: '24H' },
-              { id: 7 as const, label: '7D' },
-            ]).map((option) => {
-              const active = days === option.id;
-              return (
-                <button
-                  key={option.id}
-                  onClick={() => setDays(option.id)}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: 999,
-                    border: `1px solid ${active ? 'var(--accent-blue)' : 'var(--border-default)'}`,
-                    background: active ? 'rgba(45, 107, 255, 0.14)' : 'var(--bg-elevated)',
-                    color: active ? 'var(--accent-blue-light)' : 'var(--text-secondary)',
-                    fontSize: 12,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {option.label}
-                </button>
-              );
-            })}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {([
+                { id: 1 as const, label: '24H' },
+                { id: 7 as const, label: '7D' },
+              ]).map((option) => {
+                const active = days === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    onClick={() => setDays(option.id)}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: 999,
+                      border: `1px solid ${active ? 'var(--accent-blue)' : 'var(--border-default)'}`,
+                      background: active ? 'rgba(45, 107, 255, 0.14)' : 'var(--bg-elevated)',
+                      color: active ? 'var(--accent-blue-light)' : 'var(--text-secondary)',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <select
+              value={sectorFilter}
+              onChange={(event) => setSectorFilter(event.target.value)}
+              style={{
+                minWidth: 170,
+                padding: '8px 10px',
+                borderRadius: 999,
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-default)',
+                color: 'var(--text-primary)',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              {sectorOptions.map((sector) => (
+                <option key={sector} value={sector}>
+                  {sector}
+                </option>
+              ))}
+            </select>
           </div>
 
           <button
@@ -230,9 +349,10 @@ export default function NewsImpactPage() {
           marginBottom: 18,
         }}
       >
-        <SummaryCard label="Stories in view" value={String(items.length)} tone="neutral" />
+        <SummaryCard label="Stories in view" value={String(filteredItems.length)} tone="neutral" />
         <SummaryCard label="9-10 impact" value={String(highlightedCount)} tone="hot" />
         <SummaryCard label="Category" value={categoryLabel(category)} tone="neutral" />
+        <SummaryCard label="Sector" value={sectorFilter} tone="neutral" />
       </div>
 
       {note && !error && (
@@ -272,7 +392,7 @@ export default function NewsImpactPage() {
           }}
         >
           <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
-            News Impact is wired, but the feed could not be loaded right now.
+            News is wired, but the feed could not be loaded right now.
           </p>
           <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--text-tertiary)' }}>
             Expected endpoint: <code>/api/news/impact</code>
@@ -281,7 +401,7 @@ export default function NewsImpactPage() {
             {(error as Error).message}
           </p>
         </div>
-      ) : items.length === 0 ? (
+      ) : filteredItems.length === 0 ? (
         <div
           style={{
             background: 'var(--bg-surface)',
@@ -294,14 +414,150 @@ export default function NewsImpactPage() {
             No flagged stories for this view yet
           </p>
           <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)', maxWidth: 680 }}>
-            This may just be the first run. Try widening the time window, switching categories, or dropping the 7+ score floor to inspect lower-conviction stories.
+            This may just be the first run. Try widening the time window, switching categories, changing the sector filter, or dropping the 7+ score floor to inspect lower-conviction stories.
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {items.map((item) => (
-            <ImpactCard key={item.id} item={item} />
-          ))}
+        <div
+          style={{
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 18,
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1.8fr) 110px 150px 130px',
+              gap: 12,
+              padding: '12px 16px',
+              borderBottom: '1px solid var(--border-subtle)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+              color: 'var(--text-tertiary)',
+            }}
+          >
+            <span>Headline</span>
+            <span>Impact</span>
+            <span>Sector</span>
+            <span>Time</span>
+          </div>
+
+          {filteredItems.map((item) => {
+            const tone = scoreTone(item.impactScore);
+            const sector = item.sector || (item.affectedTickers.length > 0 ? 'Unknown sector' : 'Market-wide');
+
+            return (
+              <article
+                key={item.id}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1.8fr) 110px 150px 130px',
+                  gap: 12,
+                  padding: '14px 16px',
+                  borderBottom: '1px solid var(--border-subtle)',
+                  alignItems: 'start',
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 5 }}>
+                    {item.url ? (
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          color: 'var(--text-primary)',
+                          textDecoration: 'none',
+                          fontSize: 14,
+                          fontWeight: 700,
+                          lineHeight: 1.45,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                        }}
+                      >
+                        <span>{item.headline}</span>
+                        <ExternalLink size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                      </a>
+                    ) : (
+                      <span style={{ color: 'var(--text-primary)', fontSize: 14, fontWeight: 700, lineHeight: 1.45 }}>
+                        {item.headline}
+                      </span>
+                    )}
+                  </div>
+
+                  <p style={{ margin: '0 0 6px', fontSize: 12, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+                    {item.summary}
+                  </p>
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{item.source}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>·</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{categoryLabel(item.category)}</span>
+                    {item.affectedTickers.length > 0 && (
+                      <>
+                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>·</span>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {item.affectedTickers.map((ticker) => (
+                            <Link
+                              key={ticker}
+                              to={`/stock/${ticker}`}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                padding: '4px 8px',
+                                borderRadius: 999,
+                                background: 'rgba(45, 107, 255, 0.10)',
+                                color: 'var(--accent-blue-light)',
+                                border: '1px solid rgba(45, 107, 255, 0.22)',
+                                textDecoration: 'none',
+                                fontSize: 11,
+                                fontWeight: 700,
+                              }}
+                            >
+                              {ticker}
+                            </Link>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      minWidth: 54,
+                      padding: '6px 10px',
+                      borderRadius: 999,
+                      background: tone.background,
+                      color: tone.color,
+                      border: `1px solid ${tone.border}`,
+                      fontSize: 12,
+                      fontWeight: 800,
+                    }}
+                  >
+                    {item.impactScore}/10
+                  </span>
+                </div>
+
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                  {sector}
+                </div>
+
+                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.45 }}>
+                  {formatPublishedAt(item.publishedAt)}
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
     </div>
