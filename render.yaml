@@ -17,6 +17,8 @@ services:
         sync: false
       - key: VITE_SUPABASE_ANON_KEY
         sync: false
+      - key: VITE_DEMO_MODE
+        value: "0"
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: VITE_ADMIN_EMAILS

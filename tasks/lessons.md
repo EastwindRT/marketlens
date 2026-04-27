@@ -468,3 +468,11 @@
 **Observation:** The Alerts filings surface needs ticker, insider, type, amount, filed date, and accession data at once. That fits comfortably on desktop, but on mobile the same columns collapse into a cramped table that hides the watchlist signal.
 **Root cause:** Data-heavy research pages often start from a desktop table mental model. If the mobile fallback is left as horizontal overflow only, the most important context becomes harder to scan exactly where users need compression the most.
 **Rule:** For filings-style tables, switch to stacked cards under the mobile breakpoint and preserve the same semantic highlights there. The priority is fast scanning, not preserving the table shape at all costs.
+
+---
+
+## Lesson: 2026-04-26 - Demo mode must be explicit, never an accidental production fallback
+
+**Observation:** The main stock-data hooks were returning mock candles, quotes, and profiles whenever a provider key was missing or an upstream request failed.
+**Root cause:** Demo data started as a convenience for development, but because it lived inside production hooks, provider outages could silently degrade into believable fake market data.
+**Rule:** If a product has demo data at all, gate it behind an explicit flag like `VITE_DEMO_MODE=1`. In production, missing providers should surface as `null`, `stale`, or `unavailable` states — never fabricated market values.

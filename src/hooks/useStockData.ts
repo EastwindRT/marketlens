@@ -1,7 +1,7 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { finnhub } from '../api/finnhub';
 import { tmx, fetchYahooCandles } from '../api/tmx';
-import type { OHLCVBar, TimeRange } from '../api/types';
+import type { OHLCVBar, TimeRange, Quote, CompanyProfile } from '../api/types';
 import { subDays, subMonths, subYears, getUnixTime, format } from 'date-fns';
 import { generateMockCandles, generateMockQuote, generateMockProfile } from '../utils/mockData';
 import { isTSXTicker } from '../utils/marketHours';
@@ -46,7 +46,8 @@ function getYahooParams(range: TimeRange): { range: string; interval: string } {
   }
 }
 
-const hasApiKey = () => !!import.meta.env.VITE_FINNHUB_API_KEY;
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === '1';
+const hasFinnhubKey = () => !!import.meta.env.VITE_FINNHUB_API_KEY;
 
 // ─── Candles ──────────────────────────────────────────────────────────────────
 
@@ -55,7 +56,7 @@ export function useStockCandles(symbol: string, range: TimeRange) {
     queryKey: ['candles', symbol, range],
     queryFn: async (): Promise<OHLCVBar[]> => {
       // Demo mode (no API key) — return deterministic mock data
-      if (!hasApiKey()) return generateMockCandles(symbol, range);
+      if (DEMO_MODE) return generateMockCandles(symbol, range);
 
       // ── All stocks → Yahoo Finance (US + CA) ─────────────────────────────
       // Yahoo Finance supports all timeframes including intraday, no rate limits.
@@ -76,14 +77,14 @@ export function useStockCandles(symbol: string, range: TimeRange) {
 // ─── Quote ────────────────────────────────────────────────────────────────────
 
 export function useStockQuote(symbol: string) {
-  return useQuery(getStockQuoteQueryOptions(symbol));
+  return useQuery<Quote | undefined>(getStockQuoteQueryOptions(symbol));
 }
 
 function getStockQuoteQueryOptions(symbol: string) {
   return {
     queryKey: ['quote', symbol],
-    queryFn: async () => {
-      if (!hasApiKey()) return generateMockQuote(symbol);
+    queryFn: async (): Promise<Quote | undefined> => {
+      if (DEMO_MODE) return generateMockQuote(symbol);
 
       // ── Canadian stocks → TMX (quote) + Yahoo Finance (day H/L) ─────────
       if (isTSXTicker(symbol)) {
@@ -95,7 +96,7 @@ function getStockQuoteQueryOptions(symbol: string) {
           ]);
 
           const tmxQ = q.status === 'fulfilled' ? q.value : null;
-          if (!tmxQ || !tmxQ.price) return generateMockQuote(symbol);
+          if (!tmxQ || !tmxQ.price) return undefined;
 
           const yDay = yahooResult.status === 'fulfilled' ? yahooResult.value.dayQuote : null;
 
@@ -114,17 +115,18 @@ function getStockQuoteQueryOptions(symbol: string) {
             _name:      tmxQ.name,
           };
         } catch {
-          return generateMockQuote(symbol);
+          return undefined;
         }
       }
 
       // ── US stocks → Finnhub ───────────────────────────────────────────────
+      if (!hasFinnhubKey()) return undefined;
       try {
         const data = await finnhub.getQuote(symbol);
-        if (!data.c || data.c === 0) return generateMockQuote(symbol);
+        if (!data.c || data.c === 0) return undefined;
         return data;
       } catch {
-        return generateMockQuote(symbol);
+        return undefined;
       }
     },
     enabled: !!symbol,
@@ -142,8 +144,8 @@ export function useStockQuotes(symbols: string[]) {
     queries: uniqueSymbols.map((symbol) => getStockQuoteQueryOptions(symbol)),
   });
 
-  const quoteMap = uniqueSymbols.reduce<Record<string, (typeof results)[number]['data']>>((acc, symbol, index) => {
-    acc[symbol] = results[index]?.data;
+  const quoteMap = uniqueSymbols.reduce<Record<string, Quote | undefined>>((acc, symbol, index) => {
+    acc[symbol] = results[index]?.data ?? undefined;
     return acc;
   }, {});
 
@@ -157,16 +159,16 @@ export function useStockQuotes(symbols: string[]) {
 // ─── Profile ──────────────────────────────────────────────────────────────────
 
 export function useStockProfile(symbol: string) {
-  return useQuery({
+  return useQuery<CompanyProfile | undefined>({
     queryKey: ['profile', symbol],
     queryFn: async () => {
-      if (!hasApiKey()) return generateMockProfile(symbol);
+      if (DEMO_MODE) return generateMockProfile(symbol);
 
       // ── Canadian stocks → TMX ─────────────────────────────────────────────
       if (isTSXTicker(symbol)) {
         try {
           const q = await tmx.getQuote(symbol);
-          if (!q || !q.name) return generateMockProfile(symbol);
+          if (!q || !q.name) return undefined;
           // Normalise to Finnhub profile shape
           return {
             name:                 q.name,
@@ -176,17 +178,18 @@ export function useStockProfile(symbol: string) {
             currency:             'CAD',
           };
         } catch {
-          return generateMockProfile(symbol);
+          return undefined;
         }
       }
 
       // ── US stocks → Finnhub ───────────────────────────────────────────────
+      if (!hasFinnhubKey()) return undefined;
       try {
         const data = await finnhub.getProfile(symbol);
-        if (!data.name || !data.marketCapitalization) return generateMockProfile(symbol);
+        if (!data.name || !data.marketCapitalization) return undefined;
         return data;
       } catch {
-        return generateMockProfile(symbol);
+        return undefined;
       }
     },
     staleTime: 24 * 60 * 60 * 1000,

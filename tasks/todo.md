@@ -901,3 +901,28 @@ Turn `/alerts` into a real watchlist-briefing page using Claude’s alert contra
 - Alerts now reads like a real product surface: latest watchlist digest on top, filings underneath, and clear watchlist highlighting when a row is relevant.
 - Mobile users no longer get squeezed tables; filings collapse into readable cards under the desktop breakpoint.
 - Both new pages now feel consistent with the rest of TARS in loading and freshness behavior.
+
+## Plan: Future-proofing pass 1 â€” remove silent production mock market data (2026-04-26)
+
+### Goal
+Stop production from ever degrading into believable fake prices, profiles, or candles when a provider key is missing or an upstream source fails.
+
+### Root cause
+- `src/hooks/useStockData.ts` treated mock generators as a generic fallback, not a demo-only path.
+- That meant missing config or provider failure could still render plausible market data, which is worse than showing a visible gap.
+
+### Shipped
+- [x] `src/hooks/useStockData.ts` now only uses mock candles / quotes / profiles when `VITE_DEMO_MODE=1`.
+- [x] Production quote/profile hooks now return `null` on missing provider config or fetch failure instead of inventing values.
+- [x] Candle fetching keeps the real Yahoo path by default and only returns mock candles in explicit demo mode.
+- [x] `.env.example` now documents `VITE_DEMO_MODE`.
+- [x] `render.yaml` now pins `VITE_DEMO_MODE=0` on Render so the live site stays in honest-data mode.
+
+### Next slice
+- [ ] Audit remaining direct browser-side provider calls (`Search`, `Funds`, `usePeerComparison`, `useStockNews`) for the same demo-vs-production behavior.
+- [ ] Move trade execution into one atomic server/RPC path.
+- [ ] Start splitting `server.cjs` into route/service modules before the next feature wave.
+
+### Expected user-facing outcome
+- The app may show fewer values during an outage, but the values it does show are trustworthy.
+- Missing provider config will surface as unavailable/stale data instead of fake market data.
