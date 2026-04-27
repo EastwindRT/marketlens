@@ -19,6 +19,26 @@ function shouldRetryDbStep(error: unknown): boolean {
   );
 }
 
+export function isLikelyTransientTradeError(error?: string | null): boolean {
+  const message = String(error || '').toLowerCase();
+  return (
+    message.includes('fetch failed') ||
+    message.includes('network') ||
+    message.includes('socket') ||
+    message.includes('timeout') ||
+    message.includes('temporarily unavailable') ||
+    message.includes('failed to fetch') ||
+    message.includes('connection error') ||
+    message.includes('supabase')
+  );
+}
+
+export function buildTradeNote(note: string | null | undefined, clientTradeId: string): string {
+  const trimmed = String(note || '').trim();
+  const marker = `[client-trade:${clientTradeId}]`;
+  return trimmed ? `${trimmed} ${marker}` : marker;
+}
+
 async function runDbStep<T>(label: string, factory: () => Promise<T>, retries = DB_STEP_RETRIES): Promise<T> {
   let lastError: unknown;
 
@@ -69,6 +89,7 @@ export interface Trade {
   price: number;
   total: number;
   traded_at: string;
+  note?: string | null;
 }
 
 export interface WatchlistRecord {
@@ -492,6 +513,20 @@ export async function getPlayerTrades(playerId: string): Promise<Trade[]> {
     .order('traded_at', { ascending: false });
   if (error) throw error;
   return data ?? [];
+}
+
+export async function findTradeByClientRef(playerId: string, clientTradeId: string): Promise<Trade | null> {
+  const marker = `[client-trade:${clientTradeId}]`;
+  const { data, error } = await supabase
+    .from('trades')
+    .select('*')
+    .eq('player_id', playerId)
+    .like('note', `%${marker}%`)
+    .order('traded_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return null;
+  return data;
 }
 
 export async function adminResetPlayer(playerId: string): Promise<void> {

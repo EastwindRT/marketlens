@@ -35,6 +35,7 @@ const CongressPage        = lazyWithAutoReload(importCongress)
 const FundsPage           = lazyWithAutoReload(importFunds)
 import { useLeagueStore } from './store/leagueStore'
 import { useWatchlistStore } from './store/watchlistStore'
+import { syncPendingTradesForPlayer } from './store/pendingTradeStore'
 import { supabase, ensurePlayerForSession, touchPlayerActivity } from './api/supabase'
 
 const SUPABASE_CONFIGURED =
@@ -44,6 +45,7 @@ const LAZY_RELOAD_KEY = 'tars:lazy-reload'
 const BOOTSTRAP_RETRY_DELAY_MS = 1200
 const IDLE_LOGOUT_MS = 30 * 60 * 1000
 const ACTIVITY_HEARTBEAT_MS = 60 * 1000
+const PENDING_TRADE_SYNC_MS = 15 * 1000
 
 function lazyWithAutoReload<T extends { default: ComponentType<any> }>(
   importer: () => Promise<T>
@@ -224,6 +226,34 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [logout, player?.id, session])
+
+  useEffect(() => {
+    if (!SUPABASE_CONFIGURED || !session || !player?.id) return
+
+    let intervalId: number | null = null
+
+    const runSync = () => {
+      void syncPendingTradesForPlayer(player).catch((error) => {
+        console.warn('[App] pending trade sync failed:', error)
+      })
+    }
+
+    const handleOnline = () => runSync()
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') runSync()
+    }
+
+    runSync()
+    intervalId = window.setInterval(runSync, PENDING_TRADE_SYNC_MS)
+    window.addEventListener('online', handleOnline)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      if (intervalId !== null) window.clearInterval(intervalId)
+      window.removeEventListener('online', handleOnline)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [player, session])
 
   useEffect(() => {
     if (!session) return

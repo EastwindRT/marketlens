@@ -990,3 +990,26 @@ Stop slow-but-valid Supabase trade writes from failing early just because the cl
 ### Expected user-facing outcome
 - Trades should stop failing just because Supabase is slow for a moment.
 - Users now stay on the existing `Still processing your trade` path instead of tripping a false timeout during a live request.
+
+## Plan: Instant trade queue with background sync (2026-04-27)
+
+### Goal
+Make slow trade submissions feel instant by queueing transiently failed trades locally, showing them immediately in My Portfolio, and retrying the durable Supabase write in the background.
+
+### Root cause
+- Even after removing brittle client-side timeouts, a real Supabase slowdown still means the user waits for the full write path to finish before seeing the result.
+- That makes the trade flow feel stalled even when the right fallback is to accept the intent, show it optimistically, and keep syncing behind the scenes.
+
+### Shipped
+- [x] `src/store/pendingTradeStore.ts` - added a persisted pending-trade queue with statuses (`pending`, `syncing`, `failed`).
+- [x] `src/store/pendingTradeStore.ts` - added background sync logic that retries queued trades for the signed-in player and clears them once the durable write succeeds.
+- [x] `src/App.tsx` - added a recurring pending-trade sync loop plus retry on `online` and when the tab becomes visible again.
+- [x] `src/api/supabase.ts` - added client-trade note markers plus a helper to detect whether a queued trade already exists in `trades` before retrying.
+- [x] `src/components/trade/TradeModal.tsx` - transient Supabase failures now queue the trade instantly instead of surfacing an immediate hard failure.
+- [x] `src/pages/Portfolio.tsx` - My Portfolio now overlays queued trades optimistically and marks affected positions as `Pending sync`.
+- [x] `npm run build` passed cleanly.
+
+### Expected user-facing outcome
+- A transient Supabase slowdown no longer has to feel like a blocked trade.
+- Users see the trade reflected immediately in My Portfolio with a `Pending sync` state.
+- The app keeps retrying in the background until the durable write lands.

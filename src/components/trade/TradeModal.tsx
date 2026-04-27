@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { X, TrendingUp, TrendingDown } from 'lucide-react';
-import { executeBuy, executeSell } from '../../api/supabase';
+import { buildTradeNote, executeBuy, executeSell, isLikelyTransientTradeError } from '../../api/supabase';
 import { useLeagueStore } from '../../store/leagueStore';
+import { usePendingTradeStore } from '../../store/pendingTradeStore';
 import { formatPrice } from '../../utils/formatters';
 
 const SLOW_TRADE_NOTICE_MS = 10000;
@@ -30,6 +31,8 @@ export default function TradeModal({
   const [slowProcessing, setSlowProcessing] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
+  const [queuedForSync, setQueuedForSync] = useState(false);
+  const enqueueTrade = usePendingTradeStore((state) => state.enqueueTrade);
 
   if (!player) return null;
   const currentPlayer = player;
@@ -61,17 +64,42 @@ export default function TradeModal({
 
     setLoading(true);
     setSlowProcessing(false);
+    setQueuedForSync(false);
     setError('');
     const slowNoticeTimer = window.setTimeout(() => {
       setSlowProcessing(true);
     }, SLOW_TRADE_NOTICE_MS);
 
     try {
+      const clientTradeId = crypto.randomUUID();
+      const tradeNote = buildTradeNote(note || undefined, clientTradeId);
       const result = mode === 'BUY'
-        ? await executeBuy(currentPlayer, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined)
-        : await executeSell(currentPlayer, symbol, exchange, shares, effectivePrice, tradedAt, note || undefined);
+        ? await executeBuy(currentPlayer, symbol, exchange, shares, effectivePrice, tradedAt, tradeNote)
+        : await executeSell(currentPlayer, symbol, exchange, shares, effectivePrice, tradedAt, tradeNote);
 
       if (!result.success) {
+        if (isLikelyTransientTradeError(result.error)) {
+          enqueueTrade({
+            id: clientTradeId,
+            playerId: currentPlayer.id,
+            symbol,
+            exchange,
+            tradeType: mode,
+            shares,
+            price: effectivePrice,
+            total,
+            tradedAt: tradedAt ?? null,
+            note: tradeNote,
+            createdAt: new Date().toISOString(),
+          });
+          setQueuedForSync(true);
+          setDone(true);
+          window.setTimeout(() => {
+            onSuccess?.();
+            onClose();
+          }, 1200);
+          return;
+        }
         setError(result.error ?? 'Trade failed');
         return;
       }
@@ -105,10 +133,10 @@ export default function TradeModal({
             }
           </div>
           <p className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
-            {mode === 'BUY' ? 'Bought' : 'Sold'} {shares} {symbol}
+            {queuedForSync ? 'Queued' : mode === 'BUY' ? 'Bought' : 'Sold'} {shares} {symbol}
           </p>
           <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-            @ {formatPrice(effectivePrice, currency)}
+            {queuedForSync ? 'Pending sync with Supabase' : `@ ${formatPrice(effectivePrice, currency)}`}
           </p>
         </div>
       </Overlay>

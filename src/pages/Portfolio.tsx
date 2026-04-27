@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowUpRight, ArrowDownRight, LogOut, Briefcase, Plus, Star } from 'lucide-react';
 import { getHoldings, getPortfolioSnapshot, supabase } from '../api/supabase';
@@ -7,6 +7,7 @@ import { useStockQuotes } from '../hooks/useStockData';
 import type { Holding, Player } from '../api/supabase';
 import { formatPrice } from '../utils/formatters';
 import { useWatchlistStore } from '../store/watchlistStore';
+import { usePendingTradeStore } from '../store/pendingTradeStore';
 import ErrorBoundary from '../components/ui/ErrorBoundary';
 import { DataStatus } from '../components/ui/DataStatus';
 
@@ -34,7 +35,82 @@ function writeCachedHoldings(playerId: string, holdings: Holding[]) {
   }
 }
 
-const HoldingRow = React.memo(function HoldingRow({ holding, quote }: { holding: Holding; quote?: { c?: number } }) {
+type PendingTradeView = {
+  id: string;
+  playerId: string;
+  symbol: string;
+  exchange: string;
+  tradeType: 'BUY' | 'SELL';
+  shares: number;
+  price: number;
+  createdAt: string;
+};
+
+type DisplayHolding = Holding & {
+  pendingSync?: boolean;
+  pendingTradeCount?: number;
+};
+
+function buildOptimisticHoldings(baseHoldings: Holding[], pendingTrades: PendingTradeView[]): DisplayHolding[] {
+  const holdingMap = new Map<string, DisplayHolding>();
+
+  for (const holding of baseHoldings) {
+    holdingMap.set(holding.symbol, { ...holding, pendingSync: false, pendingTradeCount: 0 });
+  }
+
+  for (const trade of pendingTrades) {
+    const existing = holdingMap.get(trade.symbol);
+
+    if (trade.tradeType === 'BUY') {
+      if (existing) {
+        const nextShares = existing.shares + trade.shares;
+        const nextAvgCost =
+          nextShares > 0
+            ? (existing.shares * existing.avg_cost + trade.shares * trade.price) / nextShares
+            : existing.avg_cost;
+        holdingMap.set(trade.symbol, {
+          ...existing,
+          shares: nextShares,
+          avg_cost: nextAvgCost,
+          updated_at: trade.createdAt,
+          pendingSync: true,
+          pendingTradeCount: (existing.pendingTradeCount || 0) + 1,
+        });
+      } else {
+        holdingMap.set(trade.symbol, {
+          id: `pending-${trade.id}`,
+          player_id: trade.playerId,
+          symbol: trade.symbol,
+          exchange: trade.exchange,
+          shares: trade.shares,
+          avg_cost: trade.price,
+          updated_at: trade.createdAt,
+          pendingSync: true,
+          pendingTradeCount: 1,
+        });
+      }
+      continue;
+    }
+
+    if (!existing) continue;
+    const nextShares = Math.max(0, existing.shares - trade.shares);
+    if (nextShares < 0.0001) {
+      holdingMap.delete(trade.symbol);
+      continue;
+    }
+    holdingMap.set(trade.symbol, {
+      ...existing,
+      shares: nextShares,
+      updated_at: trade.createdAt,
+      pendingSync: true,
+      pendingTradeCount: (existing.pendingTradeCount || 0) + 1,
+    });
+  }
+
+  return [...holdingMap.values()].sort((a, b) => a.symbol.localeCompare(b.symbol));
+}
+
+const HoldingRow = React.memo(function HoldingRow({ holding, quote }: { holding: DisplayHolding; quote?: { c?: number } }) {
   const currentPrice = quote?.c ?? holding.avg_cost;
   const currentValue = currentPrice * holding.shares;
   const costBasis = holding.avg_cost * holding.shares;
@@ -66,6 +142,7 @@ const HoldingRow = React.memo(function HoldingRow({ holding, quote }: { holding:
         </div>
         <div className="text-xs mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
           {holding.shares} shares · avg {formatPrice(holding.avg_cost)}
+          {holding.pendingSync ? ' · Pending sync' : ''}
         </div>
       </div>
 
@@ -132,6 +209,9 @@ const WatchRow = React.memo(function WatchRow({ symbol, name, quote }: { symbol:
 export default function Portfolio() {
   const { player, playerStatus, logout } = useLeagueStore();
   const { items: watchlist, hydrated: watchlistHydrated } = useWatchlistStore();
+  const pendingTrades = usePendingTradeStore((state) =>
+    player ? state.trades.filter((trade) => trade.playerId === player.id) : []
+  );
   const navigate = useNavigate();
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [loading, setLoading] = useState(true);
@@ -149,8 +229,6 @@ export default function Portfolio() {
   }
 
   useEffect(() => {
-    // Don't redirect — App.tsx handles the login wall for unauthenticated users.
-    // Just wait for the player to be set after the session resolves.
     if (!player) return;
     const playerId = player.id;
 
@@ -199,11 +277,12 @@ export default function Portfolio() {
 
     const sub = supabase
       .channel('portfolio')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'holdings',
-        filter: `player_id=eq.${playerId}` }, () => {
-          if (refreshTimer) clearTimeout(refreshTimer);
-          refreshTimer = setTimeout(() => { void load(false); }, 250);
-        })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'holdings', filter: `player_id=eq.${playerId}` }, () => {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => {
+          void load(false);
+        }, 250);
+      })
       .subscribe();
 
     return () => {
@@ -216,10 +295,14 @@ export default function Portfolio() {
   const allSymbols = [...new Set([
     ...holdings.map((holding) => holding.symbol),
     ...watchlist.map((item) => item.symbol),
+    ...pendingTrades.map((trade) => trade.symbol),
   ])];
   const { quoteMap } = useStockQuotes(allSymbols);
+  const displayHoldings = useMemo(
+    () => buildOptimisticHoldings(holdings, pendingTrades),
+    [holdings, pendingTrades]
+  );
 
-  // Show skeleton while session/player is still loading
   if (!player) {
     if (playerStatus === 'loading') return (
       <div className="max-w-2xl mx-auto px-4 md:px-6 py-6">
@@ -296,7 +379,7 @@ export default function Portfolio() {
       </div>
 
       <ErrorBoundary label="portfolio:summary" compact>
-        <PortfolioSummary player={player} holdings={holdings} quoteMap={quoteMap} />
+        <PortfolioSummary player={player} holdings={displayHoldings} quoteMap={quoteMap} />
       </ErrorBoundary>
 
       <div className="mt-6">
@@ -331,7 +414,7 @@ export default function Portfolio() {
           >
             <p className="text-sm" style={{ color: 'var(--color-down)' }}>{loadError}</p>
           </div>
-        ) : holdings.length === 0 ? (
+        ) : displayHoldings.length === 0 ? (
           <div
             className="rounded-2xl p-8 text-center"
             style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}
@@ -350,12 +433,13 @@ export default function Portfolio() {
           </div>
         ) : (
           <ErrorBoundary label="portfolio:holdings" compact>
-            {holdings.map(h => <HoldingRow key={h.id} holding={h} quote={quoteMap[h.symbol]} />)}
+            {displayHoldings.map((holding) => (
+              <HoldingRow key={holding.id} holding={holding} quote={quoteMap[holding.symbol]} />
+            ))}
           </ErrorBoundary>
         )}
       </div>
 
-      {/* ── Watchlist ── */}
       {watchlistHydrated && watchlist.length > 0 && (
         <div className="mt-6">
           <div className="flex items-center justify-between mb-3">
@@ -375,7 +459,7 @@ export default function Portfolio() {
             </button>
           </div>
           <ErrorBoundary label="portfolio:watchlist" compact>
-            {watchlist.map(item => (
+            {watchlist.map((item) => (
               <WatchRow key={item.symbol} symbol={item.symbol} name={item.name} quote={quoteMap[item.symbol]} />
             ))}
           </ErrorBoundary>
@@ -425,13 +509,13 @@ export default function Portfolio() {
   );
 }
 
-function PortfolioSummary({ player, holdings, quoteMap }: { player: Player; holdings: Holding[]; quoteMap: Record<string, { c?: number } | undefined> }) {
-  const holdingsValue = holdings.reduce((sum, h) => {
-    const price = quoteMap[h.symbol]?.c ?? h.avg_cost;
-    return sum + h.shares * price;
+function PortfolioSummary({ player, holdings, quoteMap }: { player: Player; holdings: DisplayHolding[]; quoteMap: Record<string, { c?: number } | undefined> }) {
+  const holdingsValue = holdings.reduce((sum, holding) => {
+    const price = quoteMap[holding.symbol]?.c ?? holding.avg_cost;
+    return sum + holding.shares * price;
   }, 0);
 
-  const costBasis = holdings.reduce((sum, h) => sum + h.shares * h.avg_cost, 0);
+  const costBasis = holdings.reduce((sum, holding) => sum + holding.shares * holding.avg_cost, 0);
   return <SummaryCard player={player} holdingsValue={holdingsValue} costBasis={costBasis} holdingsCount={holdings.length} />;
 }
 

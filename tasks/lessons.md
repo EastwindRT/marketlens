@@ -508,3 +508,11 @@
 **Observation:** The trade modal no longer had a global timeout, but users were still seeing timeout-style failures during slow Supabase windows.
 **Root cause:** The write path still had per-step client-side timeouts inside the DB helper, so a slow but valid request could be treated as failed before the backend had actually given up.
 **Rule:** For critical multi-step writes, prefer user-facing slow-state messaging plus targeted retries for real transport failures. Hard client-side timeouts are more likely to create false negatives than protect the flow.
+
+---
+
+## Lesson: 2026-04-27 - For instant-feeling trade UX, optimistic state needs a durable retry loop
+
+**Observation:** Users wanted trade submissions to feel instant even when Supabase was slow.
+**Root cause:** Waiting for the full write path before showing anything makes the UI feel blocked, but pretending the write succeeded without a retry mechanism is unsafe.
+**Rule:** If a critical write needs to feel instant, pair an optimistic local state with a persisted retry queue, a visible pending status, and a reconciliation step against the durable store.
