@@ -5365,7 +5365,160 @@ function classifyBuyPressure(summary) {
   return { net, buyValue, sellValue, tradeCount: summary.tradeCount || 0 };
 }
 
-async function buildRedditTrendsPayload(filter, page, limit) {
+function emptyRedditConfirmation() {
+  return {
+    score: 0,
+    reasons: [],
+    inPortfolio: false,
+    inWatchlist: false,
+    ownershipFilings: [],
+    congressTrades: [],
+  };
+}
+
+async function fetchPlayerSymbolSets(playerId) {
+  if (!serverSupabase || !playerId) {
+    return { portfolioSymbols: new Set(), watchlistSymbols: new Set() };
+  }
+
+  try {
+    const [{ data: holdings }, { data: watchlists }] = await Promise.all([
+      serverSupabase.from('holdings').select('symbol').eq('player_id', playerId),
+      serverSupabase.from('watchlists').select('symbol').eq('player_id', playerId),
+    ]);
+    return {
+      portfolioSymbols: new Set((holdings || []).map((row) => normalizeSymbol(row.symbol)).filter(Boolean)),
+      watchlistSymbols: new Set((watchlists || []).map((row) => normalizeSymbol(row.symbol)).filter(Boolean)),
+    };
+  } catch (err) {
+    console.warn('[reddit-trends/player-context]', err.message);
+    return { portfolioSymbols: new Set(), watchlistSymbols: new Set() };
+  }
+}
+
+async function buildCachedOwnershipMapForSymbols(symbols) {
+  const bases = new Set((symbols || []).map((symbol) => baseTicker(normalizeSymbol(symbol))).filter(Boolean));
+  const map = new Map();
+  if (bases.size === 0) return map;
+
+  try {
+    let filings = marketFilingsCache.get('30')?.payload?.filings
+      || marketFilingsCache.get('14')?.payload?.filings
+      || marketFilingsCache.get('7')?.payload?.filings
+      || null;
+
+    if (!filings) {
+      ensureMarketFilingsCache('30', 30, false).catch((err) => {
+        console.warn('[reddit-trends/ownership-background]', err.message);
+      });
+      filings = [];
+    }
+
+    for (const filing of filings || []) {
+      const symbol = baseTicker(normalizeSymbol(filing.symbol || ''));
+      if (!symbol || !bases.has(symbol)) continue;
+      const rows = map.get(symbol) || [];
+      if (rows.length < 3) rows.push(filing);
+      map.set(symbol, rows);
+    }
+  } catch (err) {
+    console.warn('[reddit-trends/ownership-cache]', err.message);
+  }
+
+  return map;
+}
+
+async function readCachedCongressTradesForSymbols(baseSymbols, days = 90) {
+  const tickers = [...new Set((baseSymbols || []).map((symbol) => baseTicker(normalizeSymbol(symbol))).filter(Boolean))];
+  if (tickers.length === 0) return [];
+
+  const cutoffDate = new Date();
+  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - days);
+  const cutoff = cutoffDate.toISOString().slice(0, 10);
+
+  if (hasMarketDataDb()) {
+    try {
+      const rows = await readCongressTradesFromDb({ tickers, cutoff, limit: 200 });
+      if (rows.length) return rows;
+    } catch (err) {
+      console.warn('[reddit-trends/congress-db]', err.message);
+    }
+  }
+
+  if (!Array.isArray(congressCache)) return [];
+  return congressCache
+    .map(mapQuiverCongressTrade)
+    .filter(Boolean)
+    .filter((trade) => tickers.includes(trade.ticker) && (!cutoff || trade.transactionDate >= cutoff))
+    .slice(0, 200);
+}
+
+async function buildRedditConfirmationMap(symbols, playerId) {
+  const normalized = [...new Set((symbols || []).map((symbol) => normalizeSymbol(symbol)).filter(Boolean))].slice(0, 40);
+  const baseSymbols = normalized.map(baseTicker);
+
+  const [{ portfolioSymbols, watchlistSymbols }, congressTrades, ownershipBySymbol] = await Promise.all([
+    fetchPlayerSymbolSets(playerId),
+    readCachedCongressTradesForSymbols(baseSymbols, 90),
+    buildCachedOwnershipMapForSymbols(baseSymbols),
+  ]);
+
+  const congressBySymbol = new Map();
+  for (const trade of congressTrades || []) {
+    const symbol = baseTicker(normalizeSymbol(trade.ticker || trade.symbol || ''));
+    if (!symbol) continue;
+    const rows = congressBySymbol.get(symbol) || [];
+    if (rows.length < 4) rows.push(trade);
+    congressBySymbol.set(symbol, rows);
+  }
+
+  const map = new Map();
+  for (const symbol of normalized) {
+    const base = baseTicker(symbol);
+    const ownershipFilings = ownershipBySymbol.get(base) || [];
+    const congressTrades = congressBySymbol.get(base) || [];
+    const inPortfolio = portfolioSymbols.has(symbol) || portfolioSymbols.has(base);
+    const inWatchlist = watchlistSymbols.has(symbol) || watchlistSymbols.has(base);
+    const reasons = [];
+    if (inPortfolio) reasons.push('In portfolio');
+    if (inWatchlist) reasons.push('On watchlist');
+    if (ownershipFilings.length) reasons.push(`${ownershipFilings.length} 13D/13G`);
+    if (congressTrades.length) reasons.push(`${congressTrades.length} congress`);
+
+    const score = Math.min(100,
+      (inPortfolio ? 28 : 0)
+      + (inWatchlist ? 22 : 0)
+      + Math.min(30, ownershipFilings.length * 16)
+      + Math.min(24, congressTrades.length * 8)
+    );
+
+    map.set(symbol, {
+      score,
+      reasons,
+      inPortfolio,
+      inWatchlist,
+      ownershipFilings: ownershipFilings.map((filing) => ({
+        formType: filing.formType,
+        filedDate: filing.filedDate,
+        filerName: filing.filerName || '',
+        subjectCompany: filing.subjectCompany || '',
+        edgarUrl: filing.edgarUrl || '',
+      })),
+      congressTrades: congressTrades.map((trade) => ({
+        member: trade.member,
+        type: trade.type,
+        amount: trade.amount || null,
+        amountMin: finiteNumber(trade.amountMin),
+        transactionDate: trade.transactionDate || '',
+        disclosureDate: trade.disclosureDate || '',
+        filingUrl: trade.filingUrl || '',
+      })),
+    });
+  }
+  return map;
+}
+
+async function buildRedditTrendsPayload(filter, page, limit, playerId = '') {
   const safeFilter = REDDIT_SUPPORTED_FILTERS.has(filter) ? filter : 'all-stocks';
   const safePage = Math.min(20, Math.max(1, page));
   const safeLimit = Math.min(100, Math.max(10, limit));
@@ -5380,6 +5533,7 @@ async function buildRedditTrendsPayload(filter, page, limit) {
   const topForContext = baseResults.slice(0, Math.min(25, safeLimit));
   const buyPressureMap = buildBuyPressureMap();
   const priceMap = await fetchYahooQuoteBatch(topForContext.map((item) => item.ticker));
+  const confirmationMap = await buildRedditConfirmationMap(topForContext.map((item) => item.ticker), playerId);
   const enrichedTop = await Promise.all(topForContext.map(async (item) => {
     const latestNews = await fetchTickerNewsCatalyst(item.ticker);
     return {
@@ -5387,6 +5541,7 @@ async function buildRedditTrendsPayload(filter, page, limit) {
       price: priceMap.get(item.ticker) || { last: null, changePct1d: null, changePct5d: null },
       latestNews,
       buyPressure: classifyBuyPressure(buyPressureMap.get(item.ticker)),
+      confirmation: confirmationMap.get(item.ticker) || emptyRedditConfirmation(),
     };
   }));
 
@@ -5396,6 +5551,7 @@ async function buildRedditTrendsPayload(filter, page, limit) {
     price: { last: null, changePct1d: null, changePct5d: null },
     latestNews: null,
     buyPressure: classifyBuyPressure(buyPressureMap.get(item.ticker)),
+    confirmation: emptyRedditConfirmation(),
   });
 
   return {
@@ -5407,7 +5563,7 @@ async function buildRedditTrendsPayload(filter, page, limit) {
     generatedAt: new Date().toISOString(),
     source: 'ApeWisdom',
     results,
-    note: 'Velocity score blends mention count, upvotes, and 24h mention acceleration. Price context is Yahoo Finance; news catalyst is the TARS scored news DB.',
+    note: 'Velocity score blends mention count, upvotes, and 24h mention acceleration. Confirmation uses TARS news, insider, 13D/13G, congress, portfolio, and watchlist data.',
   };
 }
 
@@ -6186,13 +6342,14 @@ app.get('/api/reddit-trends', async (req, res) => {
     const filter = String(req.query.filter || 'all-stocks');
     const page = parseInt(req.query.page || '1', 10);
     const limit = parseInt(req.query.limit || '50', 10);
-    const cacheKey = `${filter}:${page}:${limit}`;
+    const playerId = String(req.query.playerId || '').trim();
+    const cacheKey = `${filter}:${page}:${limit}:${playerId || 'anon'}`;
     const cached = redditTrendCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < REDDIT_TRENDS_TTL) {
       return res.json(cached.payload);
     }
 
-    const payload = await buildRedditTrendsPayload(filter, page, limit);
+    const payload = await buildRedditTrendsPayload(filter, page, limit, playerId);
     redditTrendCache.set(cacheKey, { ts: Date.now(), payload });
     if (redditTrendCache.size > 25) {
       const firstKey = redditTrendCache.keys().next().value;

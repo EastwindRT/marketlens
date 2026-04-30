@@ -6,6 +6,7 @@ import { useRedditTrends } from '../hooks/useRedditTrends';
 import { useStockQuotes } from '../hooks/useStockData';
 import { DataStatus } from '../components/ui/DataStatus';
 import type { Quote } from '../api/types';
+import { useLeagueStore } from '../store/leagueStore';
 
 const FILTERS: Array<{ id: RedditTrendFilter; label: string }> = [
   { id: 'all-stocks', label: 'Stocks' },
@@ -53,6 +54,12 @@ function buyPressureLabel(item: RedditTrendItem) {
   return `${net} ${formatCurrency(value)}`;
 }
 
+function confirmationTone(score: number): 'hot' | 'good' | 'neutral' {
+  if (score >= 80) return 'hot';
+  if (score >= 40) return 'good';
+  return 'neutral';
+}
+
 function SignalPill({ label, tone = 'neutral' }: { label: string; tone?: 'hot' | 'good' | 'bad' | 'neutral' }) {
   const palette = {
     hot: { color: '#F7931A', background: 'rgba(247,147,26,0.13)', border: 'rgba(247,147,26,0.28)' },
@@ -76,7 +83,7 @@ function TrendRow({ item, quote }: { item: RedditTrendItem; quote?: Quote }) {
     : item.price;
 
   return (
-    <article className="grid md:grid-cols-[72px_minmax(0,1.45fr)_150px_150px_minmax(220px,1fr)] gap-3 md:gap-4" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)', alignItems: 'start' }}>
+    <article className="grid md:grid-cols-[72px_minmax(0,1.25fr)_140px_150px_minmax(190px,0.95fr)_minmax(210px,1fr)] gap-3 md:gap-4" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)', alignItems: 'start' }}>
       <div className="flex md:block items-center justify-between gap-3">
         <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-tertiary)' }}>#{item.rank}</div>
         <SignalPill label={`${item.velocityScore}/100`} tone={mentionTone} />
@@ -115,6 +122,18 @@ function TrendRow({ item, quote }: { item: RedditTrendItem; quote?: Quote }) {
         </p>
       </div>
 
+      <div>
+        <p style={{ margin: '0 0 6px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 800, color: 'var(--text-tertiary)' }}>Convergence</p>
+        <SignalPill label={`${item.confirmation.score}/100`} tone={confirmationTone(item.confirmation.score)} />
+        <div className="flex flex-wrap gap-1.5" style={{ marginTop: 7 }}>
+          {item.confirmation.reasons.length ? item.confirmation.reasons.slice(0, 4).map((reason) => (
+            <SignalPill key={reason} label={reason} tone={reason.includes('portfolio') || reason.includes('watchlist') ? 'good' : 'neutral'} />
+          )) : (
+            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No filing/congress collision</span>
+          )}
+        </div>
+      </div>
+
       <div style={{ minWidth: 0 }}>
         <p style={{ margin: '0 0 6px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 800, color: 'var(--text-tertiary)' }}>Catalyst</p>
         {item.latestNews ? (
@@ -137,9 +156,10 @@ function TrendRow({ item, quote }: { item: RedditTrendItem; quote?: Quote }) {
 }
 
 export default function RedditTrendsPage() {
+  const player = useLeagueStore((state) => state.player);
   const [filter, setFilter] = useState<RedditTrendFilter>('all-stocks');
   const [query, setQuery] = useState('');
-  const { data, error, isLoading, isFetching, dataUpdatedAt } = useRedditTrends({ filter, limit: 60 });
+  const { data, error, isLoading, isFetching, dataUpdatedAt } = useRedditTrends({ filter, limit: 60, playerId: player?.id });
 
   const generatedAt = data?.generatedAt ? new Date(data.generatedAt).getTime() : dataUpdatedAt;
   const results = data?.results ?? [];
@@ -154,6 +174,7 @@ export default function RedditTrendsPage() {
   const hotCount = filteredResults.filter((item) => item.velocityScore >= 70).length;
   const newsCount = filteredResults.filter((item) => item.latestNews).length;
   const buyCount = filteredResults.filter((item) => item.buyPressure.net === 'buy').length;
+  const convergenceCount = filteredResults.filter((item) => item.confirmation.score >= 40).length;
 
   return (
     <div className="px-3 sm:px-4 md:px-8 pt-4 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
@@ -181,7 +202,7 @@ export default function RedditTrendsPage() {
         })}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_180px_180px_180px] gap-2" style={{ marginBottom: 14 }}>
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_160px_160px_160px_160px] gap-2" style={{ marginBottom: 14 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, padding: '0 12px' }}>
           <Search size={15} style={{ color: 'var(--text-tertiary)' }} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by ticker or company" style={{ flex: 1, minWidth: 0, height: 42, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: 13 }} />
@@ -198,6 +219,10 @@ export default function RedditTrendsPage() {
           <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 800 }}>Net buy tape</p>
           <p style={{ margin: '2px 0 0', fontSize: 18, fontWeight: 900, color: 'var(--color-up)' }}>{buyCount}</p>
         </div>
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, padding: '10px 12px' }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 800 }}>Converged</p>
+          <p style={{ margin: '2px 0 0', fontSize: 18, fontWeight: 900, color: '#F7931A' }}>{convergenceCount}</p>
+        </div>
       </div>
 
       {data?.note && (
@@ -209,7 +234,7 @@ export default function RedditTrendsPage() {
       {isLoading ? (
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 18, padding: 24 }}>
           <p style={{ margin: 0, fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>Loading Reddit mention tape...</p>
-          <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--text-tertiary)' }}>ApeWisdom mentions are being enriched with price, news, and insider context.</p>
+          <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--text-tertiary)' }}>ApeWisdom mentions are being enriched with price, news, filings, congress, and insider context.</p>
         </div>
       ) : error ? (
         <div style={{ background: 'var(--bg-surface)', border: '1px solid rgba(246,70,93,0.25)', borderRadius: 18, padding: 18 }}>
@@ -224,11 +249,12 @@ export default function RedditTrendsPage() {
         </div>
       ) : (
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 18, overflow: 'hidden' }}>
-          <div className="hidden md:grid" style={{ gridTemplateColumns: '72px minmax(0,1.45fr) 150px 150px minmax(220px,1fr)', gap: 16, padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 900, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+          <div className="hidden md:grid" style={{ gridTemplateColumns: '72px minmax(0,1.25fr) 140px 150px minmax(190px,0.95fr) minmax(210px,1fr)', gap: 16, padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 900, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
             <span>Rank</span>
             <span>Reddit Flow</span>
             <span>Price</span>
             <span>Buys/Sells</span>
+            <span>Convergence</span>
             <span>News Catalyst</span>
           </div>
           {filteredResults.map((item) => <TrendRow key={`${item.rank}-${item.ticker}`} item={item} quote={quoteMap[item.ticker]} />)}
@@ -237,7 +263,7 @@ export default function RedditTrendsPage() {
 
       <div className="flex items-center gap-2" style={{ marginTop: 12, color: 'var(--text-tertiary)', fontSize: 12 }}>
         <MessageCircle size={13} />
-        <span>Mentions source: ApeWisdom. News catalysts use the TARS scored news database when a ticker match exists.</span>
+        <span>Mentions source: ApeWisdom. Confirmation uses TARS news, filings, congress, insider, portfolio, and watchlist data when a ticker match exists.</span>
         <Newspaper size={13} />
       </div>
     </div>

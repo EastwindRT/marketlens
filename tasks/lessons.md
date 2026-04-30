@@ -548,3 +548,11 @@
 **Observation:** Raw Reddit mention counts are interesting, but they can be noisy without knowing whether price, news, or insider activity agrees with the attention spike.
 **Root cause:** Social feeds are often ranked by conversation volume alone, which makes them good at detecting chatter but weak at separating catalyst-driven attention from memes or stale crowding.
 **Rule:** Show social velocity beside price reaction and independent catalysts. Treat Reddit as an input layer, not a standalone buy/sell signal.
+
+---
+
+## Lesson: 2026-04-30 - Personal context makes public trend feeds more actionable
+
+**Observation:** A Reddit-trending ticker matters more when it also overlaps with a user's portfolio, watchlist, ownership filings, congress disclosures, or insider tape.
+**Root cause:** Public trend feeds rank what the crowd is discussing, but they do not know what the user owns or what other institutional/political data is confirming the move.
+**Rule:** Add a convergence layer to social surfaces. The best rows are not just popular; they collide with data the platform already knows.

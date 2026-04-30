@@ -38,6 +38,28 @@ export interface RedditTrendItem {
     sellValue: number;
     tradeCount: number;
   };
+  confirmation: {
+    score: number;
+    reasons: string[];
+    inPortfolio: boolean;
+    inWatchlist: boolean;
+    ownershipFilings: Array<{
+      formType: string;
+      filedDate: string;
+      filerName?: string;
+      subjectCompany?: string;
+      edgarUrl?: string;
+    }>;
+    congressTrades: Array<{
+      member: string;
+      type: string;
+      amount?: string | null;
+      amountMin?: number | null;
+      transactionDate?: string;
+      disclosureDate?: string;
+      filingUrl?: string;
+    }>;
+  };
 }
 
 export interface RedditTrendsResponse {
@@ -57,6 +79,7 @@ export interface RedditTrendsParams {
   filter?: RedditTrendFilter;
   page?: number;
   limit?: number;
+  playerId?: string;
 }
 
 export async function fetchRedditTrends(params: RedditTrendsParams = {}): Promise<RedditTrendsResponse> {
@@ -64,6 +87,7 @@ export async function fetchRedditTrends(params: RedditTrendsParams = {}): Promis
   if (params.filter) qs.set('filter', params.filter);
   if (params.page) qs.set('page', String(params.page));
   if (params.limit) qs.set('limit', String(params.limit));
+  if (params.playerId) qs.set('playerId', params.playerId);
 
   const res = await fetch(`/api/reddit-trends?${qs.toString()}`);
   if (!res.ok) throw new Error(`Reddit trends fetch failed: ${res.status}`);

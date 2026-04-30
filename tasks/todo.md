@@ -1076,3 +1076,8 @@ Add a Reddit/social tape that helps users see which tickers are gaining attentio
 ### Expected user-facing outcome
 - Users can quickly scan social attention versus price/news confirmation rather than just seeing raw Reddit mentions.
 - The tab can later feed Ask AI and agent-facing summaries as another source of alpha/crowd-pressure context.
+
+### Follow-up shipped
+- [x] `server.cjs` - Reddit Trends now also enriches rows with recent 13D/13G ownership filings, congress disclosures, and signed-in player portfolio/watchlist collisions.
+- [x] `src/pages/RedditTrends.tsx` - added a Convergence column and summary count so social names can be screened for filing/congress/portfolio confirmation.
+- [x] `src/api/reddit.ts` and `src/hooks/useRedditTrends.ts` - added typed confirmation payload and optional `playerId` query support.

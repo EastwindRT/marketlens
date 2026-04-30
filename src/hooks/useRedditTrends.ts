@@ -5,6 +5,7 @@ export interface UseRedditTrendsParams {
   filter?: RedditTrendFilter;
   page?: number;
   limit?: number;
+  playerId?: string;
 }
 
 export function useRedditTrends(params: UseRedditTrendsParams = {}) {
@@ -12,11 +13,12 @@ export function useRedditTrends(params: UseRedditTrendsParams = {}) {
     filter = 'all-stocks',
     page = 1,
     limit = 50,
+    playerId,
   } = params;
 
   return useQuery<RedditTrendsResponse>({
-    queryKey: ['reddit-trends', { filter, page, limit }],
-    queryFn: () => fetchRedditTrends({ filter, page, limit }),
+    queryKey: ['reddit-trends', { filter, page, limit, playerId }],
+    queryFn: () => fetchRedditTrends({ filter, page, limit, playerId }),
     staleTime: 5 * 60 * 1000,
     retry: 1,
     placeholderData: (previous) => previous,
