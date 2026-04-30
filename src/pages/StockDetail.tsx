@@ -983,6 +983,13 @@ function RecentFilingsPanel({
 }
 
 interface ChatMessage { role: 'user' | 'ai'; text: string; }
+interface AskStockResponse {
+  answer?: string;
+  error?: string;
+  cached?: boolean;
+  provider?: string;
+  intelligenceAttached?: boolean;
+}
 
 function escapeHtml(s: string) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -991,6 +998,7 @@ function escapeHtml(s: string) {
 function renderMarkdown(text: string): string {
   return escapeHtml(text)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^_(.+?)_$/gm, '<em>$1</em>')
     .replace(/^Bottom line:\s*/gim, '<strong>Bottom line:</strong> ')
     .replace(/^•\s+/gm, '<span style="display:inline-block;margin-left:4px">•</span> ')
     .replace(/\n/g, '<br/>');
@@ -1033,20 +1041,41 @@ function StockAIChat({ symbol, context }: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question, symbol, context, history }),
       });
-      const data = await res.json();
-      setMessages(prev => [...prev, { role: 'ai', text: data.answer || data.error || 'No response.' }]);
-    } catch {
-      setMessages(prev => [...prev, { role: 'ai', text: 'Request failed — check your connection.' }]);
+      const contentType = res.headers.get('content-type') || '';
+      const data: AskStockResponse = contentType.includes('application/json')
+        ? await res.json()
+        : { error: await res.text() };
+      if (!res.ok) {
+        throw new Error(data.error || `Ask AI failed with ${res.status}`);
+      }
+      const providerLabel = data.cached
+        ? 'Cached answer'
+        : data.provider === 'anthropic'
+          ? 'Claude analyst answer'
+          : data.provider === 'groq'
+            ? 'Groq analyst answer'
+            : null;
+      const answer = data.answer || data.error || 'No response.';
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'ai',
+          text: providerLabel ? `_${providerLabel}${data.intelligenceAttached ? ' with stock intelligence' : ''}_\n\n${answer}` : answer,
+        },
+      ]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Request failed - check your connection.';
+      setMessages(prev => [...prev, { role: 'ai', text: message }]);
     } finally {
       setLoading(false);
     }
-  }, [input, loading, symbol, context]);
+  }, [input, loading, messages, symbol, context]);
 
   const SUGGESTIONS = [
-    `Read the chart, insiders, and news for ${symbol}. What is the setup?`,
-    `Where are the key support and resistance levels for ${symbol}?`,
-    `What do Bollinger Bands and recent price action say about ${symbol}?`,
-    `Give me the bullish and bearish case for ${symbol} right now.`,
+    `What is the strongest actionable read on ${symbol} right now?`,
+    `What changed recently for ${symbol}, and does it matter?`,
+    `Are trend, volume, insiders, filings, and funds confirming each other for ${symbol}?`,
+    `Give me the bull case, bear case, and invalidation level for ${symbol}.`,
   ];
 
   return (

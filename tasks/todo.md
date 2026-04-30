@@ -1013,3 +1013,26 @@ Make slow trade submissions feel instant by queueing transiently failed trades l
 - A transient Supabase slowdown no longer has to feel like a blocked trade.
 - Users see the trade reflected immediately in My Portfolio with a `Pending sync` state.
 - The app keeps retrying in the background until the durable write lands.
+
+## Plan: Ask AI analyst hardening (2026-04-29)
+
+### Goal
+Make stock-page Ask AI answers more useful and less brittle by grounding them in the server-side stock-intelligence object, using the stronger configured Claude path when available, and handling API failures clearly.
+
+### Root cause
+- Ask AI mostly depended on browser-sent context and Groq, so answers could feel generic when the client payload was thin.
+- The client assumed every response was JSON, which could turn server/deploy errors into confusing chat output.
+- The prompt did not explicitly prioritize the richer stock-intelligence data already available on the backend.
+
+### Shipped
+- [x] `server.cjs` - `/api/ask-stock` now attaches server-normalized stock intelligence when it can be built within a short budget.
+- [x] `server.cjs` - Ask AI now prefers the configured Claude Haiku preset path when `ANTHROPIC_API_KEY` is available and falls back to Groq when needed.
+- [x] `server.cjs` - response metadata now reports provider/cache state and whether stock intelligence was attached.
+- [x] `src/pages/StockDetail.tsx` - Ask AI now handles non-JSON/server errors cleanly and shows provider context above the answer.
+- [x] `src/pages/StockDetail.tsx` - starter prompts now ask for actionable read, recent changes, confluence, and invalidation levels.
+- [x] `node --check server.cjs` passed.
+- [x] `npm run build` passed.
+
+### Expected user-facing outcome
+- Ask AI should answer more like an analyst note tied to TARS data instead of a generic model response.
+- Users should see clearer failures if the backend or provider is unavailable.

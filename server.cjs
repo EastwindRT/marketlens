@@ -3954,19 +3954,148 @@ function summarizeInsiders(insiders) {
 }
 
 // ── Stock Q&A Chat ────────────────────────────────────────────────────────────
+function compactJsonForPrompt(value, maxChars = 9000) {
+  try {
+    const text = JSON.stringify(value, null, 2);
+    return text.length > maxChars ? `${text.slice(0, maxChars)}\n...truncated...` : text;
+  } catch {
+    return '';
+  }
+}
+
+function summarizeStockIntelligenceForAsk(intel) {
+  if (!intel || typeof intel !== 'object') return '';
+  return [
+    `SYMBOL INTELLIGENCE (${intel.asOf || 'unknown time'}):`,
+    compactJsonForPrompt({
+      company: intel.company,
+      price: intel.price,
+      trend: intel.trend,
+      signals: intel.signals,
+      events: intel.events,
+      insiders: intel.insiders,
+      ownershipFilings: intel.ownershipFilings,
+      congress: intel.congress,
+      funds: intel.funds,
+      fundamentals: intel.fundamentals,
+      explanations: intel.explanations,
+      dataAvailability: intel.dataAvailability,
+      sources: intel.sources,
+    }, 11000),
+  ].join('\n');
+}
+
+async function buildStockIntelligenceForAsk(symbol) {
+  try {
+    return await Promise.race([
+      buildStockIntelligence(symbol),
+      new Promise((resolve) => setTimeout(() => resolve(null), 9000)),
+    ]);
+  } catch (err) {
+    console.warn('[ask-stock/intelligence]', err.message);
+    return null;
+  }
+}
+
+async function callGroqChat(apiKey, body) {
+  const raw = JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const req2 = https.request(
+      {
+        hostname: 'api.groq.com',
+        path: '/openai/v1/chat/completions',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Length': Buffer.byteLength(raw),
+        },
+      },
+      (r) => {
+        let d = '';
+        r.on('data', (c) => { d += c; });
+        r.on('end', () => {
+          try {
+            const j = JSON.parse(d);
+            if (j.error) return reject(new Error(j.error.message || 'Groq API error'));
+            resolve(j.choices?.[0]?.message?.content || '');
+          } catch {
+            reject(new Error('Invalid Groq response'));
+          }
+        });
+      }
+    );
+    req2.on('error', reject);
+    req2.setTimeout(45000, () => { req2.destroy(); reject(new Error('Groq API timeout')); });
+    req2.write(raw);
+    req2.end();
+  });
+}
+
+function buildAskStockContext(symbol, context, intelligence) {
+  const ctx = [];
+  const quick = [];
+  const companyLabel = context?.companyName || intelligence?.company?.name || symbol;
+
+  if (context?.price) quick.push(`Price ${context.price}`);
+  if (context?.change) quick.push(`Day change ${context.change}`);
+  if (context?.marketCap) quick.push(`Mkt Cap ${context.marketCap}`);
+  if (context?.volume) quick.push(`Volume ${context.volume}`);
+  if (context?.exchange) quick.push(`Exchange ${context.exchange}`);
+  if (quick.length) ctx.push(`CLIENT MARKET SNAPSHOT: ${quick.join(' | ')}`);
+
+  const intelligenceBlock = summarizeStockIntelligenceForAsk(intelligence);
+  if (intelligenceBlock) ctx.push(intelligenceBlock);
+
+  if (context?.candles?.length) {
+    ctx.push('--- CLIENT TECHNICAL READ ---');
+    ctx.push(summarizeTechnicals(context.candles));
+  }
+
+  if (context?.fundamentals) {
+    const fundWithPrice = { ...context.fundamentals };
+    if (!Number.isFinite(fundWithPrice.currentPrice) && context?.priceRaw) {
+      fundWithPrice.currentPrice = Number(context.priceRaw);
+    }
+    const fundBlock = summarizeFundamentals(fundWithPrice);
+    if (fundBlock) {
+      ctx.push('--- CLIENT FUNDAMENTALS & ANALYST VIEW ---');
+      ctx.push(fundBlock);
+    }
+  }
+
+  if (context?.insiders?.length) {
+    ctx.push('--- CLIENT INSIDER FLOW ---');
+    ctx.push(summarizeInsiders(context.insiders));
+  }
+
+  if (context?.news?.length) {
+    ctx.push('--- CLIENT RECENT NEWS ---');
+    ctx.push(summarizeNews(context.news));
+  }
+
+  return {
+    companyLabel,
+    contextText: ctx.join('\n\n') || 'No live context available.',
+  };
+}
+
 app.post('/api/ask-stock', async (req, res) => {
   const { question, symbol, context, history } = req.body ?? {};
   if (!question || !symbol) return res.status(400).json({ error: 'Missing question or symbol' });
 
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) return res.status(503).json({ error: 'AI not configured' });
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const groqKey = process.env.GROQ_API_KEY;
+  if (!anthropicKey && !groqKey) {
+    return res.status(503).json({ error: 'AI not configured - set ANTHROPIC_API_KEY or GROQ_API_KEY.' });
+  }
 
   // Cache check — same question on same symbol within 15min returns the cached answer.
   // Key incorporates price bucket so quote moves still invalidate.
   const priceBucket = context?.priceRaw ? Math.round(Number(context.priceRaw)) : 0;
-  const cacheKey = aiCacheKey({ route: 'ask-stock', symbol, question, priceBucket });
+  const cacheKey = aiCacheKey({ route: 'ask-stock-v2', symbol, question, priceBucket });
   const cached = aiCacheGet(cacheKey);
-  if (cached) return res.json({ answer: cached, cached: true });
+  if (cached) return res.json({ answer: cached, cached: true, provider: 'cache' });
 
   // Build context block from what the client sends
   const ctx = [];
@@ -4008,6 +4137,12 @@ app.post('/api/ask-stock', async (req, res) => {
     ctx.push(summarizeNews(context.news));
   }
 
+  const intelligence = await buildStockIntelligenceForAsk(symbol);
+  const intelligenceBlock = summarizeStockIntelligenceForAsk(intelligence);
+  if (intelligenceBlock) {
+    ctx.unshift(intelligenceBlock);
+  }
+
   const conversationHistory = Array.isArray(history)
     ? history
         .filter((message) =>
@@ -4046,6 +4181,7 @@ RESPONSE FORMAT:
 - Keep response in the 350-700 word range when the question is analytical; be concise only for narrow factual questions
 - Never use generic disclaimers ("consult a financial advisor", "past performance", etc.)
 - If a specific fact isn't in the context and you don't know it, say so briefly and pivot to what the data does show
+- Use the SYMBOL INTELLIGENCE block first when present; it is the server-normalized source for trend, signals, filings, funds, and data availability
 - Tie the technical read to the fundamental read when both are present — do they agree or conflict?
 - Comment explicitly on whether insider flow confirms or contradicts the price action
 - Do not hedge every sentence; if the evidence leans one way, say so clearly
@@ -4055,42 +4191,40 @@ STOCK CONTEXT (live data as of today):
 ${ctx.join('\n') || 'No live context — rely on your training knowledge about this company.'}`;
 
   try {
-    const body = JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      max_tokens: 2200,
-      temperature: 0.25,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...conversationHistory,
-        { role: 'user', content: question },
-      ],
-    });
+    let answer = '';
+    let provider = '';
 
-    const answer = await new Promise((resolve, reject) => {
-      const opts = {
-        hostname: 'api.groq.com',
-        path: '/openai/v1/chat/completions',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`, 'Content-Length': Buffer.byteLength(body) },
-      };
-      const req2 = https.request(opts, r => {
-        let d = '';
-        r.on('data', c => d += c);
-        r.on('end', () => {
-          try {
-            const j = JSON.parse(d);
-            resolve(j.choices?.[0]?.message?.content || 'No response');
-          } catch { reject(new Error('Parse error')); }
-        });
+    if (anthropicKey) {
+      const userPrompt = [
+        ...conversationHistory.map((message) => `${message.role.toUpperCase()}: ${message.content}`),
+        `USER: ${question}`,
+      ].join('\n\n');
+      answer = await callClaude(systemPrompt, userPrompt, {
+        model: process.env.ASK_STOCK_MODEL || CLAUDE_MODEL_PRESET,
+        maxTokens: Number(process.env.ASK_STOCK_MAX_TOKENS || 1400),
+        temperature: 0.2,
       });
-      req2.on('error', reject);
-      req2.setTimeout(30000, () => { req2.destroy(); reject(new Error('Timeout')); });
-      req2.write(body);
-      req2.end();
-    });
+      provider = 'anthropic';
+    } else {
+      answer = await callGroqChat(groqKey, {
+        model: process.env.ASK_STOCK_GROQ_MODEL || 'llama-3.3-70b-versatile',
+        max_tokens: Number(process.env.ASK_STOCK_MAX_TOKENS || 1600),
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...conversationHistory,
+          { role: 'user', content: question },
+        ],
+      });
+      provider = 'groq';
+    }
+
+    if (!answer || !String(answer).trim()) {
+      throw new Error('AI returned an empty answer');
+    }
 
     aiCacheSet(cacheKey, answer);
-    res.json({ answer });
+    res.json({ answer, provider, intelligenceAttached: Boolean(intelligence) });
   } catch (err) {
     console.error('[ask-stock]', err.message);
     res.status(502).json({ error: err.message });
@@ -5088,10 +5222,43 @@ async function fetchFinnhubNewsHeadlines(category) {
   }
 }
 
+async function fetchFinvizHeadlines() {
+  try {
+    const raw = await httpsGet('https://finviz.com/news.ashx', {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Referer': 'https://finviz.com/',
+    });
+    const items = [];
+    // Headline links: external URLs with class="tab-link", text 8–200 chars
+    const headlineRe = /<a[^>]+href="(https?:\/\/(?!(?:www\.)?finviz\.com)[^"]+)"[^>]*class="[^"]*tab-link[^"]*"[^>]*>([^<]{8,200})<\/a>/gi;
+    // Source links: href points back to finviz news with a sourceId
+    const sourceRe = /<a[^>]+href="[^"]*finviz\.com\/news\.ashx[^"]*"[^>]*class="[^"]*tab-link[^"]*"[^>]*>([^<]{1,50})<\/a>/gi;
+    let m;
+    while ((m = headlineRe.exec(raw)) !== null && items.length < 60) {
+      const headline = m[2].trim();
+      if (headline && headline !== '[Removed]') {
+        items.push({ headline, source: 'Finviz', publishedAt: new Date().toISOString(), url: m[1], rawQuery: 'finviz:news' });
+      }
+    }
+    // Back-fill source names from adjacent source links
+    const srcs = [];
+    while ((m = sourceRe.exec(raw)) !== null) srcs.push(m[1].trim());
+    items.forEach((item, i) => { if (srcs[i]) item.source = srcs[i]; });
+    console.log(`[news-fetch:finviz] fetched ${items.length} headlines`);
+    return items;
+  } catch (err) {
+    console.warn('[news-fetch:finviz]', err.message);
+    return [];
+  }
+}
+
 async function fetchAllHeadlines() {
   const sourceJobs = [
     ...NEWS_QUERIES.map((q) => fetchNewsApiHeadlines(q)),
     ...FINNHUB_NEWS_CATEGORIES.map((category) => fetchFinnhubNewsHeadlines(category)),
+    fetchFinvizHeadlines(),
   ];
   const results = await Promise.allSettled(sourceJobs);
   const all = [];

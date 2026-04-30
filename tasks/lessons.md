@@ -516,3 +516,11 @@
 **Observation:** Users wanted trade submissions to feel instant even when Supabase was slow.
 **Root cause:** Waiting for the full write path before showing anything makes the UI feel blocked, but pretending the write succeeded without a retry mechanism is unsafe.
 **Rule:** If a critical write needs to feel instant, pair an optimistic local state with a persisted retry queue, a visible pending status, and a reconciliation step against the durable store.
+
+---
+
+## Lesson: 2026-04-29 - Ask AI should consume the same normalized intelligence object agents use
+
+**Observation:** Stock-page Ask AI answers can feel generic when the model only sees whatever the browser happened to send.
+**Root cause:** The richer stock-intelligence object existed server-side, but the Ask AI prompt was not using it as the primary context source.
+**Rule:** Any analyst-style AI surface should be grounded in the canonical server-normalized intelligence payload first, then supplemented with client context and conversation history.
