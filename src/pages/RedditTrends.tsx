@@ -33,6 +33,11 @@ function formatPct(value: number | null | undefined) {
   return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
+function formatSpikePct(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return 'building';
+  return `${value > 0 ? '+' : ''}${value.toFixed(0)}%`;
+}
+
 function formatTime(value: string | null | undefined) {
   if (!value) return '';
   const date = new Date(value);
@@ -79,14 +84,22 @@ function TrendRow({ item, quote }: { item: RedditTrendItem; quote?: Quote }) {
   const mentionTone = (item.mentionChangePct ?? 0) >= 50 || item.velocityScore >= 70 ? 'hot' : 'neutral';
   const buyTone = item.buyPressure.net === 'buy' ? 'good' : item.buyPressure.net === 'sell' ? 'bad' : 'neutral';
   const price = quote
-    ? { last: quote.c, changePct1d: quote.dp, changePct5d: item.price.changePct5d }
+    ? { last: quote.c, changePct1d: quote.dp }
     : item.price;
 
   return (
-    <article className="grid md:grid-cols-[72px_minmax(0,1.25fr)_140px_150px_minmax(190px,0.95fr)_minmax(210px,1fr)] gap-3 md:gap-4" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)', alignItems: 'start' }}>
-      <div className="flex md:block items-center justify-between gap-3">
-        <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-tertiary)' }}>#{item.rank}</div>
-        <SignalPill label={`${item.velocityScore}/100`} tone={mentionTone} />
+    <article className="grid md:grid-cols-[112px_minmax(0,1.2fr)_120px_150px_minmax(190px,0.95fr)_minmax(210px,1fr)] gap-3 md:gap-4" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)', alignItems: 'start' }}>
+      <div>
+        <p style={{ margin: '0 0 5px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 800, color: 'var(--text-tertiary)' }}>Mention Spike</p>
+        <p style={{ margin: 0, fontSize: 18, fontWeight: 900, color: pctTone(item.mentionChangePct) }}>
+          {formatSpikePct(item.mentionChangePct)}
+        </p>
+        <p style={{ margin: '3px 0 0', fontSize: 12, fontWeight: 700, color: pctTone(item.mentionChange7dPct) }}>
+          7D {formatSpikePct(item.mentionChange7dPct)}
+        </p>
+        <p style={{ margin: '5px 0 0', fontSize: 11, color: 'var(--text-tertiary)' }}>
+          velocity {item.velocityScore}/100
+        </p>
       </div>
 
       <div style={{ minWidth: 0 }}>
@@ -108,9 +121,6 @@ function TrendRow({ item, quote }: { item: RedditTrendItem; quote?: Quote }) {
         <p style={{ margin: 0, fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>{formatCurrency(price.last)}</p>
         <p style={{ margin: '3px 0 0', fontSize: 12, fontWeight: 700, color: pctTone(price.changePct1d) }}>
           1D {formatPct(price.changePct1d)}
-        </p>
-        <p style={{ margin: '2px 0 0', fontSize: 12, color: pctTone(price.changePct5d) }}>
-          5D {formatPct(price.changePct5d)}
         </p>
       </div>
 
@@ -249,8 +259,8 @@ export default function RedditTrendsPage() {
         </div>
       ) : (
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 18, overflow: 'hidden' }}>
-          <div className="hidden md:grid" style={{ gridTemplateColumns: '72px minmax(0,1.25fr) 140px 150px minmax(190px,0.95fr) minmax(210px,1fr)', gap: 16, padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 900, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-            <span>Rank</span>
+          <div className="hidden md:grid" style={{ gridTemplateColumns: '112px minmax(0,1.2fr) 120px 150px minmax(190px,0.95fr) minmax(210px,1fr)', gap: 16, padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 900, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+            <span>Change</span>
             <span>Reddit Flow</span>
             <span>Price</span>
             <span>Buys/Sells</span>

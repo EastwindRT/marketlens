@@ -556,3 +556,11 @@
 **Observation:** A Reddit-trending ticker matters more when it also overlaps with a user's portfolio, watchlist, ownership filings, congress disclosures, or insider tape.
 **Root cause:** Public trend feeds rank what the crowd is discussing, but they do not know what the user owns or what other institutional/political data is confirming the move.
 **Rule:** Add a convergence layer to social surfaces. The best rows are not just popular; they collide with data the platform already knows.
+
+---
+
+## Lesson: 2026-04-30 - Trend surfaces should lead with acceleration, not ordinal rank
+
+**Observation:** Reddit rank is less useful than whether mentions are accelerating versus the prior period.
+**Root cause:** Rank tells where a ticker sits in a crowd leaderboard, but acceleration shows what changed and is more likely to identify a developing setup.
+**Rule:** In social trend tables, prioritize mention spike, velocity, and change from baseline over static rank.

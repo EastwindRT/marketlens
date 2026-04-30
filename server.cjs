@@ -5266,6 +5266,7 @@ function normalizeApeTrend(item) {
   const rank24hAgo = item?.rank_24h_ago == null ? null : normalizeApeNumber(item.rank_24h_ago);
   const mentionChange = mentions24hAgo == null ? null : mentions - mentions24hAgo;
   const mentionChangePct = mentions24hAgo && mentions24hAgo > 0 ? (mentionChange / mentions24hAgo) * 100 : null;
+  const mentionChange7dPct = null;
   const velocityScore = Math.max(0, Math.min(100, Math.round(
     Math.log10(Math.max(mentions, 1)) * 24
     + Math.log10(Math.max(upvotes, 1)) * 10
@@ -5282,6 +5283,7 @@ function normalizeApeTrend(item) {
     mentions24hAgo,
     mentionChange,
     mentionChangePct,
+    mentionChange7dPct,
     velocityScore,
   };
 }
@@ -5303,7 +5305,6 @@ async function fetchYahooQuoteBatch(symbols) {
       map.set(symbol, {
         last: finiteNumber(quote.regularMarketPrice),
         changePct1d: finiteNumber(quote.regularMarketChangePercent),
-        changePct5d: null,
       });
     }
     return map;
@@ -5538,7 +5539,7 @@ async function buildRedditTrendsPayload(filter, page, limit, playerId = '') {
     const latestNews = await fetchTickerNewsCatalyst(item.ticker);
     return {
       ...item,
-      price: priceMap.get(item.ticker) || { last: null, changePct1d: null, changePct5d: null },
+      price: priceMap.get(item.ticker) || { last: null, changePct1d: null },
       latestNews,
       buyPressure: classifyBuyPressure(buyPressureMap.get(item.ticker)),
       confirmation: confirmationMap.get(item.ticker) || emptyRedditConfirmation(),
@@ -5548,7 +5549,7 @@ async function buildRedditTrendsPayload(filter, page, limit, playerId = '') {
   const enrichedMap = new Map(enrichedTop.map((item) => [item.ticker, item]));
   const results = baseResults.map((item) => enrichedMap.get(item.ticker) || {
     ...item,
-    price: { last: null, changePct1d: null, changePct5d: null },
+    price: { last: null, changePct1d: null },
     latestNews: null,
     buyPressure: classifyBuyPressure(buyPressureMap.get(item.ticker)),
     confirmation: emptyRedditConfirmation(),

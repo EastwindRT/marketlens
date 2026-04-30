@@ -19,11 +19,11 @@ export interface RedditTrendItem {
   mentions24hAgo: number | null;
   mentionChange: number | null;
   mentionChangePct: number | null;
+  mentionChange7dPct: number | null;
   velocityScore: number;
   price: {
     last: number | null;
     changePct1d: number | null;
-    changePct5d: number | null;
   };
   latestNews: {
     headline: string;

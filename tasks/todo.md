@@ -1081,3 +1081,4 @@ Add a Reddit/social tape that helps users see which tickers are gaining attentio
 - [x] `server.cjs` - Reddit Trends now also enriches rows with recent 13D/13G ownership filings, congress disclosures, and signed-in player portfolio/watchlist collisions.
 - [x] `src/pages/RedditTrends.tsx` - added a Convergence column and summary count so social names can be screened for filing/congress/portfolio confirmation.
 - [x] `src/api/reddit.ts` and `src/hooks/useRedditTrends.ts` - added typed confirmation payload and optional `playerId` query support.
+- [x] `src/pages/RedditTrends.tsx` - replaced the rank column with mention-change stats, removed 5D price from the row, and made 24h mention spike more prominent.
