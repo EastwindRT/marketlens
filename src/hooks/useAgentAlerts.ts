@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { fetchAlertsLatest, fetchInsiderFilings, fetchMacroCalendar, type AlertsLatestResponse, type InsiderFilingsResponse, type MacroCalendarResponse } from '../api/news';
+import { fetchAlertsLatest, fetchConvergenceSignals, fetchInsiderFilings, fetchMacroCalendar, type AlertsLatestResponse, type ConvergenceResponse, type InsiderFilingsResponse, type MacroCalendarResponse } from '../api/news';
 
 export function useAgentLatestAlert(playerId?: string | null) {
   return useQuery<AlertsLatestResponse>({
@@ -26,6 +26,17 @@ export function useMacroCalendar(limit = 8) {
     queryKey: ['agent-alerts', 'macro-calendar', limit],
     queryFn: () => fetchMacroCalendar(limit),
     staleTime: 30 * 60 * 1000,
+    retry: 1,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useConvergenceSignals(playerId?: string | null, days = 14) {
+  return useQuery<ConvergenceResponse>({
+    queryKey: ['agent-alerts', 'convergence', playerId ?? 'none', days],
+    queryFn: () => fetchConvergenceSignals(playerId ?? undefined, days),
+    enabled: Boolean(playerId),
+    staleTime: 5 * 60 * 1000,
     retry: 1,
     placeholderData: (previous) => previous,
   });

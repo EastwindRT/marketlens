@@ -1036,3 +1036,27 @@ Make stock-page Ask AI answers more useful and less brittle by grounding them in
 ### Expected user-facing outcome
 - Ask AI should answer more like an analyst note tied to TARS data instead of a generic model response.
 - Users should see clearer failures if the backend or provider is unavailable.
+
+## Plan: Trade reliability, convergence alerts, and mobile news polish (2026-04-30)
+
+### Goal
+Stop browser-side Supabase stalls from blocking trade UX, make the phone News page readable, surface portfolio/watchlist filing collisions, and give Ask AI richer external catalyst context.
+
+### Root cause
+- Trades were still ultimately assembled through browser-side Supabase writes, which can hang when Supabase or the client connection is slow.
+- The News mobile tape still had a compressed score/headline/meta layout that squeezed content into too little horizontal space.
+- Alerts did not yet show when a held/watchlist symbol collided with insider filings, congress disclosures, or 13D/13G ownership filings.
+- Stock intelligence counted recent news but did not include the actual recent catalyst headlines for Ask AI to reason over.
+
+### Shipped
+- [x] `server.cjs` - added `/api/trade-execute` so trade execution can run server-side with the service-role Supabase client.
+- [x] `src/api/supabase.ts` - buy/sell now call the server trade endpoint first and queue transient server wake-up failures for background sync.
+- [x] `server.cjs` - added `/api/alerts/convergence` for portfolio/watchlist collisions with filings and congress disclosures.
+- [x] `src/components/alerts/ConvergenceCard.tsx` and `src/pages/AgentAlerts.tsx` - added a visible Convergence section to Alerts.
+- [x] `src/pages/NewsImpact.tsx` - reworked the phone layout into a vertical, readable story tape with compact metadata chips.
+- [x] `server.cjs` - stock intelligence now includes recent news/catalyst headlines so Ask AI has external context beyond technicals.
+- [x] `node --check server.cjs` passed.
+- [x] `npm run build` passed.
+
+### Follow-up
+- Live filing freshness could not be verified from this environment because the Render hostname did not resolve here; recheck the live endpoints after deploy.

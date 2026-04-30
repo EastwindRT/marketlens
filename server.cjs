@@ -1858,6 +1858,15 @@ async function buildStockIntelligence(symbol) {
     recentOwnershipFilings: ownershipFilings.length,
     recentCongressTrades: normalizedCongress.length,
   };
+  const recentNews = Array.isArray(marketData.news)
+    ? marketData.news.slice(0, 8).map((item) => ({
+        headline: item.headline || item.title || '',
+        source: item.source || '',
+        datetime: item.datetime || item.publishedAt || null,
+        summary: item.summary || '',
+        url: item.url || '',
+      }))
+    : [];
   const ownershipConviction = summarizeOwnershipConviction({
     ownershipFilings,
     insiderSummary,
@@ -1911,6 +1920,7 @@ async function buildStockIntelligence(symbol) {
     price,
     trend,
     events: eventCounts,
+    news: recentNews,
     insiders: insiderSummary,
     ownershipFilings: ownershipSummary,
     congress: {
@@ -2980,6 +2990,215 @@ function aiCacheSet(key, answer) {
   }
 }
 
+function tradeClientMarker(clientTradeId) {
+  return `[client-trade:${clientTradeId}]`;
+}
+
+function normalizeTradeInput(raw) {
+  const playerId = String(raw?.playerId || '').trim();
+  const symbol = normalizeSymbol(raw?.symbol || '');
+  const exchange = String(raw?.exchange || '').trim() || 'US';
+  const tradeType = String(raw?.tradeType || '').toUpperCase();
+  const shares = Number(raw?.shares);
+  const price = Number(raw?.price);
+  const tradedAt = raw?.tradedAt ? String(raw.tradedAt) : null;
+  const clientTradeId = String(raw?.clientTradeId || '').trim();
+  const note = String(raw?.note || '').trim();
+
+  if (!playerId) throw new Error('Missing player id.');
+  if (!symbol) throw new Error('Missing symbol.');
+  if (tradeType !== 'BUY' && tradeType !== 'SELL') throw new Error('Trade type must be BUY or SELL.');
+  if (!(shares > 0) || !(price > 0)) throw new Error('Shares and price must be greater than zero.');
+
+  const marker = clientTradeId ? tradeClientMarker(clientTradeId) : '';
+  const noteWithMarker = marker && !note.includes(marker) ? `${note ? `${note} ` : ''}${marker}` : note;
+  return { playerId, symbol, exchange, tradeType, shares, price, total: shares * price, tradedAt, clientTradeId, note: noteWithMarker || null };
+}
+
+async function executeTradeOnServer(input) {
+  if (!serverSupabase) throw new Error('Server trade execution is not configured.');
+
+  if (input.clientTradeId) {
+    const { data, error } = await serverSupabase
+      .from('trades')
+      .select('*')
+      .eq('player_id', input.playerId)
+      .like('note', `%${tradeClientMarker(input.clientTradeId)}%`)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return { duplicate: true, trade: data };
+  }
+
+  const { data: holding, error: holdingError } = await serverSupabase
+    .from('holdings')
+    .select('*')
+    .eq('player_id', input.playerId)
+    .eq('symbol', input.symbol)
+    .maybeSingle();
+  if (holdingError) throw holdingError;
+
+  if (input.tradeType === 'BUY') {
+    if (holding) {
+      const nextShares = Number(holding.shares) + input.shares;
+      const nextAvgCost = ((Number(holding.shares) * Number(holding.avg_cost)) + (input.shares * input.price)) / nextShares;
+      const { error } = await serverSupabase
+        .from('holdings')
+        .update({ shares: nextShares, avg_cost: nextAvgCost, updated_at: new Date().toISOString() })
+        .eq('id', holding.id);
+      if (error) throw error;
+    } else {
+      const { error } = await serverSupabase
+        .from('holdings')
+        .insert({ player_id: input.playerId, symbol: input.symbol, exchange: input.exchange, shares: input.shares, avg_cost: input.price });
+      if (error) throw error;
+    }
+  } else {
+    if (!holding || Number(holding.shares) < input.shares) {
+      throw new Error(`Not enough shares. Have ${holding?.shares ?? 0}, trying to sell ${input.shares}`);
+    }
+    const nextShares = Number(holding.shares) - input.shares;
+    if (nextShares < 0.0001) {
+      const { error } = await serverSupabase.from('holdings').delete().eq('id', holding.id);
+      if (error) throw error;
+    } else {
+      const { error } = await serverSupabase
+        .from('holdings')
+        .update({ shares: nextShares, updated_at: new Date().toISOString() })
+        .eq('id', holding.id);
+      if (error) throw error;
+    }
+  }
+
+  const tradeRow = {
+    player_id: input.playerId,
+    symbol: input.symbol,
+    exchange: input.exchange,
+    trade_type: input.tradeType,
+    shares: input.shares,
+    price: input.price,
+    total: input.total,
+  };
+  if (input.tradedAt) tradeRow.traded_at = input.tradedAt;
+  if (input.note) tradeRow.note = input.note;
+
+  const { data: trade, error: tradeError } = await serverSupabase
+    .from('trades')
+    .insert(tradeRow)
+    .select('*')
+    .single();
+  if (tradeError) throw tradeError;
+  return { duplicate: false, trade };
+}
+
+app.post('/api/trade-execute', async (req, res) => {
+  try {
+    const input = normalizeTradeInput(req.body);
+    const result = await executeTradeOnServer(input);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Trade failed';
+    const status = /not enough shares|greater than zero|missing|must be/i.test(message) ? 400 : 502;
+    console.error('[trade-execute]', message);
+    res.status(status).json({ success: false, error: message });
+  }
+});
+
+async function buildConvergenceSignals(playerId, days = 14) {
+  if (!serverSupabase || !playerId) {
+    return [];
+  }
+
+  const [{ data: holdings }, { data: watchlists }] = await Promise.all([
+    serverSupabase.from('holdings').select('symbol').eq('player_id', playerId),
+    serverSupabase.from('watchlists').select('symbol').eq('player_id', playerId),
+  ]);
+
+  const portfolioSymbols = new Set((holdings || []).map((row) => normalizeSymbol(row.symbol)).filter(Boolean));
+  const watchlistSymbols = new Set((watchlists || []).map((row) => normalizeSymbol(row.symbol)).filter(Boolean));
+  const symbols = [...new Set([...portfolioSymbols, ...watchlistSymbols])].slice(0, 60);
+  if (!symbols.length) return [];
+
+  const baseSymbols = symbols.map(baseTicker);
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const [usInsiders, caInsiders, congressResult] = await Promise.all([
+    readUsInsiderTradesFromDb(days).catch(() => []),
+    readCaInsiderTradesFromDb(days, 'insiders').catch(() => []),
+    ensureCongressTrades({ tickers: baseSymbols, days }).catch(() => ({ trades: [] })),
+  ]);
+
+  const ownershipBySymbol = new Map();
+  await Promise.all(baseSymbols.slice(0, 20).map(async (symbol) => {
+    try {
+      const filings = await fetchCompanyOwnershipFilings(symbol);
+      const recent = filings.filter((filing) => !filing.filedDate || filing.filedDate >= since).slice(0, 3);
+      if (recent.length) ownershipBySymbol.set(symbol, recent);
+    } catch (err) {
+      console.warn(`[convergence/ownership:${symbol}]`, err.message);
+    }
+  }));
+
+  const rows = symbols.map((symbol) => {
+    const base = baseTicker(symbol);
+    const insiderRows = [...usInsiders, ...caInsiders]
+      .filter((trade) => baseTicker(normalizeSymbol(trade.symbol)) === base)
+      .slice(0, 6);
+    const congressRows = (congressResult.trades || [])
+      .filter((trade) => baseTicker(normalizeSymbol(trade.ticker || trade.symbol)) === base)
+      .slice(0, 6);
+    const ownershipRows = ownershipBySymbol.get(base) || [];
+    const sourceCount = [
+      insiderRows.length > 0,
+      congressRows.length > 0,
+      ownershipRows.length > 0,
+      portfolioSymbols.has(symbol),
+      watchlistSymbols.has(symbol),
+    ].filter(Boolean).length;
+
+    const reasons = [];
+    if (portfolioSymbols.has(symbol)) reasons.push('In portfolio');
+    if (watchlistSymbols.has(symbol)) reasons.push('On watchlist');
+    if (insiderRows.length) reasons.push(`${insiderRows.length} insider filing${insiderRows.length === 1 ? '' : 's'}`);
+    if (congressRows.length) reasons.push(`${congressRows.length} congress disclosure${congressRows.length === 1 ? '' : 's'}`);
+    if (ownershipRows.length) reasons.push(`${ownershipRows.length} 13D/13G filing${ownershipRows.length === 1 ? '' : 's'}`);
+
+    return {
+      symbol,
+      score: sourceCount * 20 + Math.min(20, insiderRows.length * 4 + congressRows.length * 4 + ownershipRows.length * 6),
+      reasons,
+      inPortfolio: portfolioSymbols.has(symbol),
+      inWatchlist: watchlistSymbols.has(symbol),
+      insiders: insiderRows,
+      congress: congressRows,
+      ownershipFilings: ownershipRows,
+    };
+  })
+    .filter((row) => row.score >= 40 && (row.insiders.length || row.congress.length || row.ownershipFilings.length))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 12);
+
+  return rows;
+}
+
+app.get('/api/alerts/convergence', async (req, res) => {
+  try {
+    const playerId = String(req.query.playerId || '').trim();
+    const days = Math.min(Math.max(parseInt(req.query.days || '14', 10), 1), 90);
+    const signals = await buildConvergenceSignals(playerId, days);
+    res.json({
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      days,
+      signals,
+      note: signals.length ? undefined : 'No portfolio/watchlist convergence found in the current window.',
+    });
+  } catch (err) {
+    console.error('[alerts/convergence]', err.message);
+    res.status(502).json({ schemaVersion: 1, generatedAt: new Date().toISOString(), signals: [], error: err.message });
+  }
+});
+
 async function fetchEdgarFilingText(edgarUrl) {
   const UA = 'TARS admin@tars.app';
 
@@ -3973,6 +4192,7 @@ function summarizeStockIntelligenceForAsk(intel) {
       trend: intel.trend,
       signals: intel.signals,
       events: intel.events,
+      news: intel.news,
       insiders: intel.insiders,
       ownershipFilings: intel.ownershipFilings,
       congress: intel.congress,

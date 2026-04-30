@@ -241,113 +241,69 @@ export default function NewsImpactPage() {
   );
 
   return (
-    <div className="px-4 md:px-8 pt-5 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
-      <div className="flex items-start justify-between gap-4" style={{ marginBottom: 18 }}>
-        <div>
-          <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
-            <Newspaper size={18} style={{ color: 'var(--accent-blue-light)' }} />
-            <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>News</h1>
-          </div>
-          <p style={{ margin: 0, fontSize: 14, color: 'var(--text-secondary)', maxWidth: 720 }}>
-            Market-moving headlines in a faster tape view, with impact and sector filters so you can scan the feed line by line.
-          </p>
+    <div className="px-3 sm:px-4 md:px-8 pt-4 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
+
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3" style={{ marginBottom: 14 }}>
+        <div className="flex items-center gap-2">
+          <Newspaper size={18} style={{ color: 'var(--accent-blue-light)' }} />
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>News</h1>
         </div>
         <DataStatus updatedAt={generatedAt} refreshing={isFetching} />
       </div>
 
-      <div
-        style={{
-          background: 'var(--bg-surface)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 16,
-          padding: 14,
-          marginBottom: 16,
-        }}
-      >
-        <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--text-tertiary)' }}>
-          The default view now shows <strong style={{ color: 'var(--text-secondary)' }}>all scored stories</strong> in the current window. Use the impact toggle when you want to tighten it back to the highest-signal headlines only.
-        </p>
+      {/* Description — desktop only */}
+      <p className="hidden md:block" style={{ margin: '0 0 16px', fontSize: 14, color: 'var(--text-secondary)', maxWidth: 720 }}>
+        Market-moving headlines scored by impact, with category and sector filters.
+      </p>
+
+      {/* Filter chips */}
+      <div style={{ marginBottom: 10 }}>
+        <FilterChips value={category} onChange={setCategory} />
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 18 }}>
-        <FilterChips value={category} onChange={setCategory} />
+      {/* Controls row */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+        {([{ id: 1 as const, label: '24H' }, { id: 7 as const, label: '7D' }]).map((option) => {
+          const active = days === option.id;
+          return (
+            <button key={option.id} onClick={() => setDays(option.id)} style={{ padding: '7px 12px', borderRadius: 999, border: `1px solid ${active ? 'var(--accent-blue)' : 'var(--border-default)'}`, background: active ? 'rgba(45, 107, 255, 0.14)' : 'var(--bg-elevated)', color: active ? 'var(--accent-blue-light)' : 'var(--text-secondary)', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              {option.label}
+            </button>
+          );
+        })}
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {([
-                { id: 1 as const, label: '24H' },
-                { id: 7 as const, label: '7D' },
-              ]).map((option) => {
-                const active = days === option.id;
-                return (
-                  <button
-                    key={option.id}
-                    onClick={() => setDays(option.id)}
-                    style={{
-                      padding: '8px 12px',
-                      borderRadius: 999,
-                      border: `1px solid ${active ? 'var(--accent-blue)' : 'var(--border-default)'}`,
-                      background: active ? 'rgba(45, 107, 255, 0.14)' : 'var(--bg-elevated)',
-                      color: active ? 'var(--accent-blue-light)' : 'var(--text-secondary)',
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
+        <button
+          onClick={() => setShowAllScores((c) => !c)}
+          style={{ padding: '7px 12px', borderRadius: 999, border: `1px solid ${showAllScores ? 'rgba(247,147,26,0.4)' : 'var(--border-default)'}`, background: showAllScores ? 'rgba(247,147,26,0.12)' : 'var(--bg-elevated)', color: showAllScores ? '#F7931A' : 'var(--text-secondary)', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+        >
+          {showAllScores ? 'All scores' : '7+ only'}
+        </button>
 
-            <select
-              value={sectorFilter}
-              onChange={(event) => setSectorFilter(event.target.value)}
-              style={{
-                minWidth: 170,
-                padding: '8px 10px',
-                borderRadius: 999,
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border-default)',
-                color: 'var(--text-primary)',
-                fontSize: 12,
-                fontWeight: 600,
-              }}
-            >
-              {sectorOptions.map((sector) => (
-                <option key={sector} value={sector}>
-                  {sector}
-                </option>
-              ))}
-            </select>
-          </div>
+        <select
+          value={sectorFilter}
+          onChange={(e) => setSectorFilter(e.target.value)}
+          style={{ flex: '1 1 180px', minWidth: 160, maxWidth: 260, padding: '7px 10px', borderRadius: 999, background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', color: 'var(--text-primary)', fontSize: 12, fontWeight: 600 }}
+        >
+          {sectorOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
 
-          <button
-            onClick={() => setShowAllScores((current) => !current)}
-            style={{
-              padding: '8px 12px',
-              borderRadius: 999,
-              border: `1px solid ${showAllScores ? 'rgba(247, 147, 26, 0.4)' : 'var(--border-default)'}`,
-              background: showAllScores ? 'rgba(247, 147, 26, 0.12)' : 'var(--bg-elevated)',
-              color: showAllScores ? '#F7931A' : 'var(--text-secondary)',
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            {showAllScores ? 'Showing all scores' : 'Only 7+ impact'}
-          </button>
+      {/* Stats strip — compact on mobile, full cards on desktop */}
+      <div className="md:hidden" style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+        <div style={{ flex: 1, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 12, padding: '10px 12px' }}>
+          <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, color: 'var(--text-tertiary)' }}>Stories</p>
+          <p style={{ margin: '2px 0 0', fontSize: 20, fontWeight: 800, color: 'var(--text-primary)' }}>{filteredItems.length}</p>
+        </div>
+        <div style={{ flex: 1, background: 'var(--bg-surface)', border: '1px solid rgba(246,70,93,0.24)', borderRadius: 12, padding: '10px 12px' }}>
+          <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, color: 'var(--text-tertiary)' }}>9-10 Impact</p>
+          <p style={{ margin: '2px 0 0', fontSize: 20, fontWeight: 800, color: '#F6465D' }}>{highlightedCount}</p>
         </div>
       </div>
 
       <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: 10,
-          marginBottom: 18,
-        }}
+        className="hidden md:grid"
+        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 18 }}
       >
         <SummaryCard label="Stories in view" value={String(filteredItems.length)} tone="neutral" />
         <SummaryCard label="9-10 impact" value={String(highlightedCount)} tone="hot" />
@@ -426,138 +382,142 @@ export default function NewsImpactPage() {
             overflow: 'hidden',
           }}
         >
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1.8fr) 110px 150px 130px',
-              gap: 12,
-              padding: '12px 16px',
-              borderBottom: '1px solid var(--border-subtle)',
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: '0.05em',
-              textTransform: 'uppercase',
-              color: 'var(--text-tertiary)',
-            }}
-          >
-            <span>Headline</span>
-            <span>Impact</span>
-            <span>Sector</span>
-            <span>Time</span>
-          </div>
+          {/* Desktop table */}
+          <div className="hidden md:block">
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0, 1.8fr) 100px 140px 120px',
+                gap: 12,
+                padding: '12px 16px',
+                borderBottom: '1px solid var(--border-subtle)',
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: '0.05em',
+                textTransform: 'uppercase',
+                color: 'var(--text-tertiary)',
+              }}
+            >
+              <span>Headline</span>
+              <span>Impact</span>
+              <span>Sector</span>
+              <span>Time</span>
+            </div>
 
-          {filteredItems.map((item) => {
-            const tone = scoreTone(item.impactScore);
-            const sector = item.sector || (item.affectedTickers.length > 0 ? 'Unknown sector' : 'Market-wide');
-
-            return (
-              <article
-                key={item.id}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'minmax(0, 1.8fr) 110px 150px 130px',
-                  gap: 12,
-                  padding: '14px 16px',
-                  borderBottom: '1px solid var(--border-subtle)',
-                  alignItems: 'start',
-                }}
-              >
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 5 }}>
-                    {item.url ? (
-                      <a
-                        href={item.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          color: 'var(--text-primary)',
-                          textDecoration: 'none',
-                          fontSize: 14,
-                          fontWeight: 700,
-                          lineHeight: 1.45,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                        }}
-                      >
-                        <span>{item.headline}</span>
-                        <ExternalLink size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-                      </a>
-                    ) : (
-                      <span style={{ color: 'var(--text-primary)', fontSize: 14, fontWeight: 700, lineHeight: 1.45 }}>
-                        {item.headline}
-                      </span>
-                    )}
-                  </div>
-
-                  <p style={{ margin: '0 0 6px', fontSize: 12, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
-                    {item.summary}
-                  </p>
-
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{item.source}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>·</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{categoryLabel(item.category)}</span>
-                    {item.affectedTickers.length > 0 && (
-                      <>
-                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>·</span>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {filteredItems.map((item) => {
+              const tone = scoreTone(item.impactScore);
+              const sector = item.sector || (item.affectedTickers.length > 0 ? 'Unknown sector' : 'Market-wide');
+              return (
+                <article
+                  key={item.id}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1.8fr) 100px 140px 120px',
+                    gap: 12,
+                    padding: '14px 16px',
+                    borderBottom: '1px solid var(--border-subtle)',
+                    alignItems: 'start',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ marginBottom: 5 }}>
+                      {item.url ? (
+                        <a href={item.url} target="_blank" rel="noreferrer" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: 14, fontWeight: 700, lineHeight: 1.45, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span>{item.headline}</span>
+                          <ExternalLink size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                        </a>
+                      ) : (
+                        <span style={{ color: 'var(--text-primary)', fontSize: 14, fontWeight: 700, lineHeight: 1.45 }}>{item.headline}</span>
+                      )}
+                    </div>
+                    <p style={{ margin: '0 0 6px', fontSize: 12, lineHeight: 1.55, color: 'var(--text-secondary)' }}>{item.summary}</p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{item.source}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>·</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{categoryLabel(item.category)}</span>
+                      {item.affectedTickers.length > 0 && (
+                        <>
+                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>·</span>
                           {item.affectedTickers.map((ticker) => (
-                            <Link
-                              key={ticker}
-                              to={`/stock/${ticker}`}
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                padding: '4px 8px',
-                                borderRadius: 999,
-                                background: 'rgba(45, 107, 255, 0.10)',
-                                color: 'var(--accent-blue-light)',
-                                border: '1px solid rgba(45, 107, 255, 0.22)',
-                                textDecoration: 'none',
-                                fontSize: 11,
-                                fontWeight: 700,
-                              }}
-                            >
+                            <Link key={ticker} to={`/stock/${ticker}`} style={{ display: 'inline-flex', alignItems: 'center', padding: '3px 7px', borderRadius: 999, background: 'rgba(45, 107, 255, 0.10)', color: 'var(--accent-blue-light)', border: '1px solid rgba(45, 107, 255, 0.22)', textDecoration: 'none', fontSize: 11, fontWeight: 700 }}>
                               {ticker}
                             </Link>
                           ))}
-                        </div>
-                      </>
-                    )}
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
+                  <div>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 50, padding: '5px 9px', borderRadius: 999, background: tone.background, color: tone.color, border: `1px solid ${tone.border}`, fontSize: 12, fontWeight: 800 }}>
+                      {item.impactScore}/10
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>{sector}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.45 }}>{formatPublishedAt(item.publishedAt)}</div>
+                </article>
+              );
+            })}
+          </div>
 
-                <div>
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      minWidth: 54,
-                      padding: '6px 10px',
-                      borderRadius: 999,
-                      background: tone.background,
-                      color: tone.color,
-                      border: `1px solid ${tone.border}`,
-                      fontSize: 12,
-                      fontWeight: 800,
-                    }}
-                  >
-                    {item.impactScore}/10
-                  </span>
-                </div>
+          {/* Mobile cards */}
+          <div className="md:hidden">
+            {filteredItems.map((item) => {
+              const tone = scoreTone(item.impactScore);
+              const sector = item.sector || (item.affectedTickers.length > 0 ? 'Unknown sector' : 'Market-wide');
+              return (
+                <article key={item.id} style={{ padding: '13px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+                  {/* Score badge + headline */}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, minWidth: 0 }}>
+                    <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 44, padding: '4px 7px', borderRadius: 8, background: tone.background, color: tone.color, border: `1px solid ${tone.border}`, fontSize: 11, fontWeight: 800 }}>
+                      {item.impactScore}/10
+                    </span>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                      {item.source} · {formatPublishedAt(item.publishedAt)}
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0, display: 'none' }}>
+                      {item.url ? (
+                        <a href={item.url} target="_blank" rel="noreferrer" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: 13, fontWeight: 700, lineHeight: 1.4 }}>
+                          {item.headline} <ExternalLink size={10} style={{ color: 'var(--text-tertiary)', display: 'inline', verticalAlign: 'middle' }} />
+                        </a>
+                      ) : (
+                        <span style={{ color: 'var(--text-primary)', fontSize: 13, fontWeight: 700, lineHeight: 1.4 }}>{item.headline}</span>
+                      )}
+                    </div>
+                  </div>
 
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                  {sector}
-                </div>
+                  {/* Summary — capped at 2 lines */}
+                  {item.url ? (
+                    <a href={item.url} target="_blank" rel="noreferrer" style={{ color: 'var(--text-primary)', textDecoration: 'none', fontSize: 14, fontWeight: 750, lineHeight: 1.38, display: 'block' }}>
+                      {item.headline} <ExternalLink size={10} style={{ color: 'var(--text-tertiary)', display: 'inline', verticalAlign: 'middle' }} />
+                    </a>
+                  ) : (
+                    <span style={{ color: 'var(--text-primary)', fontSize: 14, fontWeight: 750, lineHeight: 1.38, display: 'block' }}>{item.headline}</span>
+                  )}
 
-                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.45 }}>
-                  {formatPublishedAt(item.publishedAt)}
-                </div>
-              </article>
-            );
-          })}
+                  {item.summary && (
+                    <p style={{ margin: '7px 0 8px', fontSize: 12, lineHeight: 1.45, color: 'var(--text-secondary)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                      {item.summary}
+                    </p>
+                  )}
+
+                  {/* Meta row */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px 6px', alignItems: 'center' }}>
+                    <span style={{ padding: '2px 7px', borderRadius: 999, background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                      {categoryLabel(item.category)}
+                    </span>
+                    <span style={{ padding: '2px 7px', borderRadius: 999, background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                      {sector}
+                    </span>
+                    {item.affectedTickers.slice(0, 4).map((ticker) => (
+                      <Link key={ticker} to={`/stock/${ticker}`} style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 7px', borderRadius: 999, background: 'rgba(45,107,255,0.10)', color: 'var(--accent-blue-light)', border: '1px solid rgba(45,107,255,0.22)', textDecoration: 'none', fontSize: 11, fontWeight: 700 }}>
+                        {ticker}
+                      </Link>
+                    ))}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

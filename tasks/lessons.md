@@ -524,3 +524,19 @@
 **Observation:** Stock-page Ask AI answers can feel generic when the model only sees whatever the browser happened to send.
 **Root cause:** The richer stock-intelligence object existed server-side, but the Ask AI prompt was not using it as the primary context source.
 **Rule:** Any analyst-style AI surface should be grounded in the canonical server-normalized intelligence payload first, then supplemented with client context and conversation history.
+
+---
+
+## Lesson: 2026-04-30 - Critical writes should leave the browser as fast as possible
+
+**Observation:** Trade submits could still feel stuck when Supabase was slow from the browser.
+**Root cause:** Even with a local pending queue, the first durable attempt still depended on multiple browser-side Supabase round trips.
+**Rule:** For user-critical writes, prefer a single server endpoint with idempotency markers, then let the browser queue only when that server request is unreachable or slow.
+
+---
+
+## Lesson: 2026-04-30 - Convergence beats isolated signal cards
+
+**Observation:** A filing, congress trade, watchlist name, or portfolio holding is useful alone, but much more useful when several collide.
+**Root cause:** Alerts showed separate feeds without highlighting overlap across ownership, congress, watchlist, and portfolio context.
+**Rule:** Build alert surfaces around intersections first. A smaller list of converged signals is often more actionable than a larger list of isolated events.

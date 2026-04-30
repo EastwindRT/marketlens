@@ -1,9 +1,10 @@
 import { Bell } from 'lucide-react';
 import { BriefingCard } from '../components/alerts/BriefingCard';
+import { ConvergenceCard } from '../components/alerts/ConvergenceCard';
 import { InsiderFilingsTable } from '../components/alerts/InsiderFilingsTable';
 import { MacroCalendarCard } from '../components/alerts/MacroCalendarCard';
 import { DataStatus } from '../components/ui/DataStatus';
-import { useAgentInsiderFilings, useAgentLatestAlert, useMacroCalendar } from '../hooks/useAgentAlerts';
+import { useAgentInsiderFilings, useAgentLatestAlert, useConvergenceSignals, useMacroCalendar } from '../hooks/useAgentAlerts';
 import { useLeagueStore } from '../store/leagueStore';
 import { useWatchlistStore } from '../store/watchlistStore';
 
@@ -67,15 +68,18 @@ export default function AgentAlertsPage() {
   const latestAlert = useAgentLatestAlert(playerId);
   const insiderFilings = useAgentInsiderFilings(7);
   const macroCalendar = useMacroCalendar(8);
+  const convergence = useConvergenceSignals(playerId, 14);
 
-  const isLoading = latestAlert.isLoading || insiderFilings.isLoading || macroCalendar.isLoading;
-  const hasError = latestAlert.error || insiderFilings.error || macroCalendar.error;
-  const updatedAt = Math.max(latestAlert.dataUpdatedAt || 0, insiderFilings.dataUpdatedAt || 0, macroCalendar.dataUpdatedAt || 0);
-  const note = latestAlert.data?.note ?? latestAlert.data?.error ?? insiderFilings.data?.error ?? macroCalendar.data?.error ?? null;
+  const isLoading = latestAlert.isLoading || insiderFilings.isLoading || macroCalendar.isLoading || convergence.isLoading;
+  const hasError = latestAlert.error || insiderFilings.error || macroCalendar.error || convergence.error;
+  const errorMessage = hasError instanceof Error ? hasError.message : 'Alert data could not be loaded.';
+  const updatedAt = Math.max(latestAlert.dataUpdatedAt || 0, insiderFilings.dataUpdatedAt || 0, macroCalendar.dataUpdatedAt || 0, convergence.dataUpdatedAt || 0);
+  const note = latestAlert.data?.note ?? latestAlert.data?.error ?? insiderFilings.data?.error ?? macroCalendar.data?.error ?? convergence.data?.error ?? null;
   const alert = latestAlert.data?.alert ?? null;
   const filings = insiderFilings.data?.filings ?? [];
   const macroEvents = macroCalendar.data?.events ?? [];
   const macroNote = macroCalendar.data?.note ?? null;
+  const convergenceSignals = convergence.data?.signals ?? [];
 
   return (
     <div className="px-4 md:px-8 pt-5 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
@@ -107,6 +111,7 @@ export default function AgentAlertsPage() {
         <SummaryCard label="Watchlist names" value={String(watchlistSymbols.length)} tone="neutral" />
         <SummaryCard label="Filings in view" value={String(filings.length)} tone="amber" />
         <SummaryCard label="Macro events" value={String(macroEvents.length)} tone="blue" />
+        <SummaryCard label="Convergence" value={String(convergenceSignals.length)} tone="amber" />
       </div>
 
       {note && !hasError && (
@@ -149,14 +154,15 @@ export default function AgentAlertsPage() {
             Alerts are wired, but the feed could not be loaded right now.
           </p>
           <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--text-tertiary)' }}>
-            Expected endpoints: <code>/api/alerts/latest</code> and <code>/api/alerts/insider-filings</code>
+            Expected endpoints: <code>/api/alerts/latest</code>, <code>/api/alerts/insider-filings</code>, and <code>/api/alerts/convergence</code>
           </p>
           <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--color-down)' }}>
-            {((latestAlert.error || insiderFilings.error) as Error).message}
+            {errorMessage}
           </p>
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
+          <ConvergenceCard signals={convergenceSignals} note={convergence.data?.note} />
           <MacroCalendarCard events={macroEvents} note={macroNote} />
           <BriefingCard alert={alert} />
           <InsiderFilingsTable filings={filings} watchlistSymbols={watchlistSymbols} />

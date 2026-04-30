@@ -29,7 +29,10 @@ export function isLikelyTransientTradeError(error?: string | null): boolean {
     message.includes('temporarily unavailable') ||
     message.includes('failed to fetch') ||
     message.includes('connection error') ||
-    message.includes('supabase')
+    message.includes('supabase') ||
+    message.includes('waking up') ||
+    message.includes('trade server returned 502') ||
+    message.includes('server trade execution is not configured')
   );
 }
 
@@ -37,6 +40,57 @@ export function buildTradeNote(note: string | null | undefined, clientTradeId: s
   const trimmed = String(note || '').trim();
   const marker = `[client-trade:${clientTradeId}]`;
   return trimmed ? `${trimmed} ${marker}` : marker;
+}
+
+function extractClientTradeId(note?: string | null): string | null {
+  const match = String(note || '').match(/\[client-trade:([^\]]+)\]/);
+  return match?.[1] ?? null;
+}
+
+async function postServerTrade(input: {
+  player: Player;
+  symbol: string;
+  exchange: string;
+  tradeType: 'BUY' | 'SELL';
+  shares: number;
+  price: number;
+  tradedAt?: string | null;
+  note?: string | null;
+}): Promise<{ success: boolean; error?: string }> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch('/api/trade-execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        playerId: input.player.id,
+        symbol: input.symbol,
+        exchange: input.exchange,
+        tradeType: input.tradeType,
+        shares: input.shares,
+        price: input.price,
+        tradedAt: input.tradedAt ?? null,
+        note: input.note ?? null,
+        clientTradeId: extractClientTradeId(input.note),
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json?.success === false) {
+      return { success: false, error: json?.error || `Trade server returned ${res.status}` };
+    }
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof DOMException && error.name === 'AbortError'
+        ? 'Trade server is still waking up; queued for background sync.'
+        : error instanceof Error ? error.message : 'Trade server request failed',
+    };
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 async function runDbStep<T>(label: string, factory: () => Promise<T>, retries = DB_STEP_RETRIES): Promise<T> {
@@ -380,6 +434,10 @@ export async function executeBuy(
     if (!(shares > 0) || !(price > 0)) {
       return { success: false, error: 'Shares and price must be greater than zero.' };
     }
+    const serverResult = await postServerTrade({ player, symbol, exchange, tradeType: 'BUY', shares, price, tradedAt, note });
+    if (serverResult.success || isLikelyTransientTradeError(serverResult.error)) {
+      return serverResult;
+    }
     const total = shares * price;
 
     const { data: existing, error: existingError } = await runDbStep<any>(
@@ -447,6 +505,10 @@ export async function executeSell(
   try {
     if (!(shares > 0) || !(price > 0)) {
       return { success: false, error: 'Shares and price must be greater than zero.' };
+    }
+    const serverResult = await postServerTrade({ player, symbol, exchange, tradeType: 'SELL', shares, price, tradedAt, note });
+    if (serverResult.success || isLikelyTransientTradeError(serverResult.error) || /not enough shares/i.test(serverResult.error || '')) {
+      return serverResult;
     }
 
     const { data: existing, error: existingError } = await runDbStep<any>(

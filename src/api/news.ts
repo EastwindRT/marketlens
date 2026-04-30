@@ -86,6 +86,26 @@ export interface MacroCalendarResponse {
   error?: string;
 }
 
+export interface ConvergenceSignal {
+  symbol: string;
+  score: number;
+  reasons: string[];
+  inPortfolio: boolean;
+  inWatchlist: boolean;
+  insiders: unknown[];
+  congress: unknown[];
+  ownershipFilings: unknown[];
+}
+
+export interface ConvergenceResponse {
+  schemaVersion: number;
+  signals: ConvergenceSignal[];
+  generatedAt: string;
+  days?: number;
+  note?: string;
+  error?: string;
+}
+
 // ── Query params ──────────────────────────────────────────────────────────────
 
 export interface NewsImpactParams {
@@ -125,5 +145,14 @@ export async function fetchInsiderFilings(days = 7): Promise<InsiderFilingsRespo
 export async function fetchMacroCalendar(limit = 8): Promise<MacroCalendarResponse> {
   const res = await fetch(`/api/alerts/macro-calendar?limit=${limit}`);
   if (!res.ok) throw new Error(`Macro calendar fetch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchConvergenceSignals(playerId?: string, days = 14): Promise<ConvergenceResponse> {
+  const qs = new URLSearchParams();
+  if (playerId) qs.set('playerId', playerId);
+  qs.set('days', String(days));
+  const res = await fetch(`/api/alerts/convergence?${qs.toString()}`);
+  if (!res.ok) throw new Error(`Convergence fetch failed: ${res.status}`);
   return res.json();
 }
