@@ -5223,11 +5223,192 @@ function scheduleRepeatingTask(label, intervalMs, task) {
 
 const NEWS_AGENT_ENABLED = process.env.NEWS_AGENT_ENABLED !== '0';
 const NEWS_SCHEMA_VERSION = 1;
+const REDDIT_TRENDS_SCHEMA_VERSION = 1;
+const REDDIT_TRENDS_TTL = 10 * 60 * 1000;
+const REDDIT_SUPPORTED_FILTERS = new Set([
+  'all',
+  'all-stocks',
+  'all-crypto',
+  '4chan',
+  'CryptoCurrency',
+  'CryptoCurrencies',
+  'Bitcoin',
+  'SatoshiStreetBets',
+  'CryptoMoonShots',
+  'CryptoMarkets',
+  'stocks',
+  'wallstreetbets',
+  'options',
+  'WallStreetbetsELITE',
+  'Wallstreetbetsnew',
+  'SPACs',
+  'investing',
+  'Daytrading',
+]);
+const redditTrendCache = new Map();
 
 // ── Supabase helpers ─────────────────────────────────────────────────────────
 
 function hasNewsDb() {
   return Boolean(serverSupabase);
+}
+
+function normalizeApeNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeApeTrend(item) {
+  const ticker = String(item?.ticker || '').trim().toUpperCase();
+  const mentions = normalizeApeNumber(item?.mentions);
+  const upvotes = normalizeApeNumber(item?.upvotes);
+  const mentions24hAgo = item?.mentions_24h_ago == null ? null : normalizeApeNumber(item.mentions_24h_ago);
+  const rank24hAgo = item?.rank_24h_ago == null ? null : normalizeApeNumber(item.rank_24h_ago);
+  const mentionChange = mentions24hAgo == null ? null : mentions - mentions24hAgo;
+  const mentionChangePct = mentions24hAgo && mentions24hAgo > 0 ? (mentionChange / mentions24hAgo) * 100 : null;
+  const velocityScore = Math.max(0, Math.min(100, Math.round(
+    Math.log10(Math.max(mentions, 1)) * 24
+    + Math.log10(Math.max(upvotes, 1)) * 10
+    + Math.max(0, Math.min(60, mentionChangePct ?? 0)) * 0.55
+  )));
+
+  return {
+    rank: normalizeApeNumber(item?.rank),
+    ticker,
+    name: String(item?.name || ticker),
+    mentions,
+    upvotes,
+    rank24hAgo,
+    mentions24hAgo,
+    mentionChange,
+    mentionChangePct,
+    velocityScore,
+  };
+}
+
+async function fetchYahooQuoteBatch(symbols) {
+  const unique = [...new Set((symbols || []).map((symbol) => normalizeSymbol(symbol)).filter(Boolean))].slice(0, 50);
+  if (unique.length === 0) return new Map();
+  try {
+    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(unique.join(','))}`;
+    // Do not use the retry wrapper here: Yahoo quote throttling should fail
+    // fast so Reddit trends still load from ApeWisdom/social data.
+    const raw = await httpsGetOnce(url, { Accept: 'application/json' });
+    const json = JSON.parse(raw);
+    const quotes = Array.isArray(json?.quoteResponse?.result) ? json.quoteResponse.result : [];
+    const map = new Map();
+    for (const quote of quotes) {
+      const symbol = normalizeSymbol(quote?.symbol || '');
+      if (!symbol) continue;
+      map.set(symbol, {
+        last: finiteNumber(quote.regularMarketPrice),
+        changePct1d: finiteNumber(quote.regularMarketChangePercent),
+        changePct5d: null,
+      });
+    }
+    return map;
+  } catch (err) {
+    console.warn('[reddit-trends/yahoo-batch]', err.message);
+    return new Map();
+  }
+}
+
+async function fetchTickerNewsCatalyst(symbol) {
+  if (!hasNewsDb()) return null;
+  try {
+    const { data, error } = await serverSupabase
+      .from('news_items')
+      .select('headline, source, published_at, impact_score, url')
+      .contains('affected_tickers', [symbol])
+      .order('impact_score', { ascending: false })
+      .order('published_at', { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : null;
+    if (!row) return null;
+    return {
+      headline: row.headline,
+      source: row.source,
+      publishedAt: row.published_at,
+      impactScore: finiteNumber(row.impact_score),
+      url: row.url || null,
+    };
+  } catch (err) {
+    console.warn('[reddit-trends/news]', symbol, err.message);
+    return null;
+  }
+}
+
+function buildBuyPressureMap() {
+  const map = new Map();
+  const trades = Array.isArray(insiderActivityCaches?.[7]) ? insiderActivityCaches[7] : [];
+  for (const trade of trades) {
+    const symbol = normalizeSymbol(trade.symbol || '');
+    if (!symbol) continue;
+    const current = map.get(symbol) || { buyValue: 0, sellValue: 0, tradeCount: 0 };
+    const value = finiteNumber(trade.totalValue) || 0;
+    if (trade.type === 'BUY') current.buyValue += value;
+    if (trade.type === 'SELL') current.sellValue += value;
+    if (trade.type === 'BUY' || trade.type === 'SELL') current.tradeCount += 1;
+    map.set(symbol, current);
+  }
+  return map;
+}
+
+function classifyBuyPressure(summary) {
+  if (!summary || summary.tradeCount === 0) return { net: 'none', buyValue: 0, sellValue: 0, tradeCount: 0 };
+  const buyValue = Math.round(summary.buyValue || 0);
+  const sellValue = Math.round(summary.sellValue || 0);
+  let net = 'mixed';
+  if (buyValue > sellValue * 1.25) net = 'buy';
+  else if (sellValue > buyValue * 1.25) net = 'sell';
+  return { net, buyValue, sellValue, tradeCount: summary.tradeCount || 0 };
+}
+
+async function buildRedditTrendsPayload(filter, page, limit) {
+  const safeFilter = REDDIT_SUPPORTED_FILTERS.has(filter) ? filter : 'all-stocks';
+  const safePage = Math.min(20, Math.max(1, page));
+  const safeLimit = Math.min(100, Math.max(10, limit));
+  const url = `https://apewisdom.io/api/v1.0/filter/${encodeURIComponent(safeFilter)}/page/${safePage}`;
+  const raw = await httpsGet(url, { Accept: 'application/json' });
+  const json = JSON.parse(raw);
+  const baseResults = (Array.isArray(json?.results) ? json.results : [])
+    .map(normalizeApeTrend)
+    .filter((item) => item.ticker && /^[A-Z][A-Z0-9.-]{0,9}$/.test(item.ticker))
+    .slice(0, safeLimit);
+
+  const topForContext = baseResults.slice(0, Math.min(25, safeLimit));
+  const buyPressureMap = buildBuyPressureMap();
+  const priceMap = await fetchYahooQuoteBatch(topForContext.map((item) => item.ticker));
+  const enrichedTop = await Promise.all(topForContext.map(async (item) => {
+    const latestNews = await fetchTickerNewsCatalyst(item.ticker);
+    return {
+      ...item,
+      price: priceMap.get(item.ticker) || { last: null, changePct1d: null, changePct5d: null },
+      latestNews,
+      buyPressure: classifyBuyPressure(buyPressureMap.get(item.ticker)),
+    };
+  }));
+
+  const enrichedMap = new Map(enrichedTop.map((item) => [item.ticker, item]));
+  const results = baseResults.map((item) => enrichedMap.get(item.ticker) || {
+    ...item,
+    price: { last: null, changePct1d: null, changePct5d: null },
+    latestNews: null,
+    buyPressure: classifyBuyPressure(buyPressureMap.get(item.ticker)),
+  });
+
+  return {
+    schemaVersion: REDDIT_TRENDS_SCHEMA_VERSION,
+    filter: safeFilter,
+    count: normalizeApeNumber(json?.count),
+    pages: normalizeApeNumber(json?.pages),
+    currentPage: normalizeApeNumber(json?.current_page) || safePage,
+    generatedAt: new Date().toISOString(),
+    source: 'ApeWisdom',
+    results,
+    note: 'Velocity score blends mention count, upvotes, and 24h mention acceleration. Price context is Yahoo Finance; news catalyst is the TARS scored news DB.',
+  };
 }
 
 async function insertNewsItem(item) {
@@ -5997,6 +6178,40 @@ app.post('/api/news/run-now', async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/reddit-trends', async (req, res) => {
+  try {
+    const filter = String(req.query.filter || 'all-stocks');
+    const page = parseInt(req.query.page || '1', 10);
+    const limit = parseInt(req.query.limit || '50', 10);
+    const cacheKey = `${filter}:${page}:${limit}`;
+    const cached = redditTrendCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < REDDIT_TRENDS_TTL) {
+      return res.json(cached.payload);
+    }
+
+    const payload = await buildRedditTrendsPayload(filter, page, limit);
+    redditTrendCache.set(cacheKey, { ts: Date.now(), payload });
+    if (redditTrendCache.size > 25) {
+      const firstKey = redditTrendCache.keys().next().value;
+      redditTrendCache.delete(firstKey);
+    }
+    res.json(payload);
+  } catch (err) {
+    console.error('[api/reddit-trends]', err.message);
+    res.status(502).json({
+      schemaVersion: REDDIT_TRENDS_SCHEMA_VERSION,
+      filter: String(req.query.filter || 'all-stocks'),
+      count: 0,
+      pages: 0,
+      currentPage: 1,
+      generatedAt: new Date().toISOString(),
+      source: 'ApeWisdom',
+      results: [],
+      error: err.message,
+    });
   }
 });
 

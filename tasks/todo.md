@@ -1060,3 +1060,19 @@ Stop browser-side Supabase stalls from blocking trade UX, make the phone News pa
 
 ### Follow-up
 - Live filing freshness could not be verified from this environment because the Render hostname did not resolve here; recheck the live endpoints after deploy.
+
+## Plan: Reddit trend intelligence tab (2026-04-30)
+
+### Goal
+Add a Reddit/social tape that helps users see which tickers are gaining attention, whether price is confirming the attention, and whether there is any matched news or insider buy/sell context.
+
+### Shipped
+- [x] `server.cjs` - added `/api/reddit-trends` as a cached ApeWisdom proxy with supported subreddit filters.
+- [x] `server.cjs` - enriches top Reddit names with Yahoo price reaction, TARS scored news catalyst matches, and recent SEC insider buy/sell pressure when available.
+- [x] `src/api/reddit.ts` and `src/hooks/useRedditTrends.ts` - added typed client access and React Query caching.
+- [x] `src/pages/RedditTrends.tsx` - added a dense Reddit Trends tape with velocity score, mentions/upvotes, price move, catalyst, and buy/sell context.
+- [x] `src/App.tsx` and `src/components/layout/Sidebar.tsx` - added the `/reddit-trends` route and sidebar tab.
+
+### Expected user-facing outcome
+- Users can quickly scan social attention versus price/news confirmation rather than just seeing raw Reddit mentions.
+- The tab can later feed Ask AI and agent-facing summaries as another source of alpha/crowd-pressure context.

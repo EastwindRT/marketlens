@@ -540,3 +540,11 @@
 **Observation:** A filing, congress trade, watchlist name, or portfolio holding is useful alone, but much more useful when several collide.
 **Root cause:** Alerts showed separate feeds without highlighting overlap across ownership, congress, watchlist, and portfolio context.
 **Rule:** Build alert surfaces around intersections first. A smaller list of converged signals is often more actionable than a larger list of isolated events.
+
+---
+
+## Lesson: 2026-04-30 - Social trend data needs confirmation columns to become useful
+
+**Observation:** Raw Reddit mention counts are interesting, but they can be noisy without knowing whether price, news, or insider activity agrees with the attention spike.
+**Root cause:** Social feeds are often ranked by conversation volume alone, which makes them good at detecting chatter but weak at separating catalyst-driven attention from memes or stale crowding.
+**Rule:** Show social velocity beside price reaction and independent catalysts. Treat Reddit as an input layer, not a standalone buy/sell signal.
