@@ -17,6 +17,8 @@ Preferred account source:
 
 - Insert curated accounts into `public.x_accounts`.
 - Use `enabled=true` and higher `priority` for the most important accounts.
+- The migration seeds analyst/trader-only accounts. News feeds and headline/data accounts are intentionally excluded.
+- Admins can manage the list in the app at `/admin` under "X Analyst Accounts".
 
 ## Supabase
 Run `supabase_migration_x_social.sql` in the Supabase SQL editor. It includes:
@@ -34,6 +36,22 @@ Returns symbol mention counts, previous-window comparison, mention change %, uni
 `POST /api/x-social/run-now?force=1`
 
 Admin-only endpoint to manually trigger a poll. Requires `x-admin-email` header matching `VITE_ADMIN_EMAILS`. `force=1` bypasses the `twitter_enabled` flag but still requires `X_BEARER_TOKEN`.
+
+`GET /api/x-social/accounts`
+
+Admin-only endpoint for the account manager.
+
+`POST /api/x-social/accounts`
+
+Admin-only endpoint to add or update an analyst account. Accepts `username`, optional `displayName`, `priority`, `notes`, and `enabled`.
+
+`PATCH /api/x-social/accounts/:username`
+
+Admin-only endpoint to toggle or update an analyst account.
+
+`DELETE /api/x-social/accounts/:username`
+
+Admin-only endpoint to remove an analyst account.
 
 ## Poll Cadence
 The server schedules `x-social` every 8 hours through the existing background scheduler.

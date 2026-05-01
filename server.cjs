@@ -5671,6 +5671,48 @@ const X_SOCIAL_SCHEMA_VERSION = 1;
 const X_POST_LOOKBACK_HOURS = 72;
 const X_MAX_POSTS_PER_ACCOUNT = 10;
 const X_MAX_ACCOUNTS_PER_POLL = 300;
+const DEFAULT_X_ANALYST_ACCOUNTS = [
+  { username: 'lizannsonders', displayName: 'Liz Ann Sonders', priority: 98, notes: 'seed: market strategist' },
+  { username: '10kdiver', displayName: '10-K Diver', priority: 96, notes: 'seed: investing analysis' },
+  { username: 'aswathdamodaran', displayName: 'Aswath Damodaran', priority: 95, notes: 'seed: valuation analysis' },
+  { username: 'brianferoldi', displayName: 'Brian Feroldi', priority: 93, notes: 'seed: stock analysis' },
+  { username: 'investorslive', displayName: 'InvestorsLive', priority: 92, notes: 'seed: trading analysis' },
+  { username: 'reddogt3', displayName: 'Scott Redler', priority: 92, notes: 'seed: technical trading' },
+  { username: 'optionshawk', displayName: 'OptionsHawk', priority: 90, notes: 'seed: options analysis' },
+  { username: 'peterlbrandt', displayName: 'Peter Brandt', priority: 90, notes: 'seed: chart analysis' },
+  { username: 'sjosephburns', displayName: 'Steve Burns', priority: 88, notes: 'seed: trading education' },
+  { username: 'harmongreg', displayName: 'Greg Harmon', priority: 88, notes: 'seed: technical analysis' },
+  { username: 'lynaldencontact', displayName: 'Lyn Alden', priority: 88, notes: 'seed: macro analysis' },
+  { username: 'macroalf', displayName: 'Macro Alf', priority: 86, notes: 'seed: macro trading analysis' },
+  { username: 'northmantrader', displayName: 'Sven Henrich', priority: 86, notes: 'seed: market technicals' },
+  { username: 'mebfaber', displayName: 'Meb Faber', priority: 85, notes: 'seed: investing analysis' },
+  { username: 'michaelbatnick', displayName: 'Michael Batnick', priority: 84, notes: 'seed: market analysis' },
+  { username: 'awealthofcs', displayName: 'Ben Carlson', priority: 84, notes: 'seed: market analysis' },
+  { username: 'reformedbroker', displayName: 'Josh Brown', priority: 84, notes: 'seed: market analysis' },
+  { username: 'doombergt', displayName: 'Doomberg', priority: 83, notes: 'seed: energy and macro analysis' },
+  { username: 'raoulgmi', displayName: 'Raoul Pal', priority: 83, notes: 'seed: macro analysis' },
+  { username: 'dividendgrowth', displayName: 'Dividend Growth Investor', priority: 82, notes: 'seed: dividend analysis' },
+  { username: 'chrisbloomstran', displayName: 'Chris Bloomstran', priority: 82, notes: 'seed: value analysis' },
+  { username: 'cullenroche', displayName: 'Cullen Roche', priority: 81, notes: 'seed: macro analysis' },
+  { username: 'callieabost', displayName: 'Callie Cox', priority: 80, notes: 'seed: market analysis' },
+  { username: 'samro', displayName: 'Sam Ro', priority: 80, notes: 'seed: market analysis' },
+  { username: 'claudia_sahm', displayName: 'Claudia Sahm', priority: 78, notes: 'seed: macro analysis' },
+  { username: 'ericbalchunas', displayName: 'Eric Balchunas', priority: 78, notes: 'seed: ETF analysis' },
+  { username: 'nategeraci', displayName: 'Nate Geraci', priority: 77, notes: 'seed: ETF analysis' },
+  { username: 'danniles', displayName: 'Dan Niles', priority: 77, notes: 'seed: tech and market analysis' },
+  { username: 'mohnishpabrai', displayName: 'Mohnish Pabrai', priority: 76, notes: 'seed: value investing' },
+  { username: 'raydalio', displayName: 'Ray Dalio', priority: 76, notes: 'seed: macro investing' },
+  { username: 'patrickboyle', displayName: 'Patrick Boyle', priority: 74, notes: 'seed: market analysis' },
+  { username: 'jesse_livermore', displayName: 'Jesse Livermore', priority: 74, notes: 'seed: investing analysis' },
+  { username: 'kashflowtrades', displayName: 'KashFlowTrades', priority: 72, notes: 'seed: trading analysis' },
+  { username: 'traderstewie', displayName: 'Trader Stewie', priority: 72, notes: 'seed: swing trading' },
+  { username: 'ivanhoff2', displayName: 'Ivanhoff', priority: 72, notes: 'seed: momentum trading' },
+  { username: 'markflowchatter', displayName: 'Mark Flowchatter', priority: 70, notes: 'seed: market flow analysis' },
+  { username: 'the_real_fly', displayName: 'The Fly', priority: 70, notes: 'seed: trader commentary' },
+  { username: 'wifeyalpha', displayName: 'Wifey Alpha', priority: 70, notes: 'seed: market analysis' },
+  { username: 'wallstjesus', displayName: 'Wall Street Jesus', priority: 68, notes: 'seed: trader commentary' },
+  { username: 'peterschiff', displayName: 'Peter Schiff', priority: 66, notes: 'seed: macro and market commentary' },
+].map((account) => ({ ...account, username: account.username.toLowerCase(), userId: null }));
 
 const NEWS_QUERIES = [
   {
@@ -6508,6 +6550,25 @@ function isXEnabledValue(value) {
   return value === true || value === 'true' || value === 1 || value === '1';
 }
 
+function normalizeXUsername(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^https?:\/\/(www\.)?(x|twitter)\.com\//i, '')
+    .replace(/^@/, '')
+    .split(/[/?#\s]/)[0]
+    .toLowerCase();
+}
+
+function adminEmails() {
+  return (process.env.VITE_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+}
+
+function isAdminRequest(req) {
+  const emails = adminEmails();
+  const callerEmail = (req.headers['x-admin-email'] || '').toLowerCase().trim();
+  return emails.length === 0 || emails.includes(callerEmail);
+}
+
 function xApiGet(path, params = {}) {
   if (!X_BEARER_TOKEN) throw new Error('X_BEARER_TOKEN is not configured');
   const url = new URL(`https://api.x.com/2${path}`);
@@ -6540,6 +6601,7 @@ function engagementScore(metrics = {}) {
 }
 
 async function readXAccounts() {
+  const defaultAccounts = DEFAULT_X_ANALYST_ACCOUNTS.map((account) => ({ ...account }));
   const envAccounts = X_ACCOUNT_USERNAMES.map((username) => ({
     username,
     userId: null,
@@ -6547,13 +6609,17 @@ async function readXAccounts() {
     priority: 50,
   }));
 
-  if (!hasNewsDb()) return envAccounts.slice(0, X_MAX_ACCOUNTS_PER_POLL);
+  if (!hasNewsDb()) {
+    const merged = [...envAccounts, ...defaultAccounts];
+    const byUsername = new Map();
+    for (const account of merged) byUsername.set(account.username, { ...byUsername.get(account.username), ...account });
+    return [...byUsername.values()].slice(0, X_MAX_ACCOUNTS_PER_POLL);
+  }
 
   try {
     const { data, error } = await serverSupabase
       .from('x_accounts')
-      .select('username,user_id,display_name,priority')
-      .eq('enabled', true)
+      .select('username,user_id,display_name,enabled,priority')
       .order('priority', { ascending: false })
       .limit(X_MAX_ACCOUNTS_PER_POLL);
     if (error) throw error;
@@ -6562,14 +6628,16 @@ async function readXAccounts() {
       username: String(row.username || '').toLowerCase(),
       userId: row.user_id || null,
       displayName: row.display_name || '',
+      enabled: row.enabled !== false,
       priority: finiteNumber(row.priority) || 50,
     })).filter((row) => row.username);
 
+    const activeRows = rows.filter((row) => row.enabled);
     const seen = new Set(rows.map((row) => row.username));
-    for (const account of envAccounts) {
-      if (!seen.has(account.username)) rows.push(account);
+    for (const account of [...envAccounts, ...defaultAccounts]) {
+      if (!seen.has(account.username)) activeRows.push(account);
     }
-    return rows.slice(0, X_MAX_ACCOUNTS_PER_POLL);
+    return activeRows.slice(0, X_MAX_ACCOUNTS_PER_POLL);
   } catch (err) {
     console.warn('[x-social/accounts]', err.message);
     return envAccounts.slice(0, X_MAX_ACCOUNTS_PER_POLL);
@@ -6803,6 +6871,122 @@ async function getXSocialTrends({ hours = 24, limit = 100 } = {}) {
   };
 }
 
+app.get('/api/x-social/accounts', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  try {
+    if (!hasNewsDb()) {
+      return res.json({ accounts: DEFAULT_X_ANALYST_ACCOUNTS, source: 'default-seed' });
+    }
+    const { data, error } = await serverSupabase
+      .from('x_accounts')
+      .select('username,user_id,display_name,enabled,priority,notes,last_polled_at,updated_at')
+      .order('priority', { ascending: false })
+      .order('username', { ascending: true });
+    if (error) throw error;
+    const byUsername = new Map();
+    for (const account of DEFAULT_X_ANALYST_ACCOUNTS) {
+      byUsername.set(account.username, {
+        username: account.username,
+        user_id: null,
+        display_name: account.displayName,
+        enabled: true,
+        priority: account.priority,
+        notes: account.notes,
+        last_polled_at: null,
+        updated_at: null,
+      });
+    }
+    for (const row of data || []) byUsername.set(String(row.username || '').toLowerCase(), row);
+    const accounts = [...byUsername.values()].sort((a, b) =>
+      (Number(b.priority || 0) - Number(a.priority || 0)) || String(a.username).localeCompare(String(b.username))
+    );
+    res.json({ accounts, source: 'database' });
+  } catch (err) {
+    console.error('[api/x-social/accounts]', err.message);
+    res.status(502).json({ accounts: [], error: err.message });
+  }
+});
+
+app.post('/api/x-social/accounts', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  if (!hasNewsDb()) return res.status(503).json({ error: 'Supabase service DB is not configured' });
+  try {
+    const username = normalizeXUsername(req.body?.username);
+    if (!/^[a-z0-9_]{2,15}$/.test(username)) {
+      return res.status(400).json({ error: 'Enter a valid X username' });
+    }
+    const row = {
+      username,
+      display_name: String(req.body?.displayName || '').trim() || username,
+      enabled: req.body?.enabled !== false,
+      priority: Math.min(100, Math.max(1, Number.parseInt(req.body?.priority || '60', 10) || 60)),
+      notes: String(req.body?.notes || 'manual analyst account').trim(),
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await serverSupabase
+      .from('x_accounts')
+      .upsert(row, { onConflict: 'username' })
+      .select('username,user_id,display_name,enabled,priority,notes,last_polled_at,updated_at')
+      .single();
+    if (error) throw error;
+    res.json({ account: data });
+  } catch (err) {
+    console.error('[api/x-social/accounts:add]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.patch('/api/x-social/accounts/:username', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  if (!hasNewsDb()) return res.status(503).json({ error: 'Supabase service DB is not configured' });
+  try {
+    const username = normalizeXUsername(req.params.username);
+    const patch = { updated_at: new Date().toISOString() };
+    if (typeof req.body?.enabled === 'boolean') patch.enabled = req.body.enabled;
+    if (req.body?.priority != null) patch.priority = Math.min(100, Math.max(1, Number.parseInt(req.body.priority, 10) || 50));
+    if (req.body?.displayName != null) patch.display_name = String(req.body.displayName || '').trim();
+    if (req.body?.notes != null) patch.notes = String(req.body.notes || '').trim();
+    const { data, error } = await serverSupabase
+      .from('x_accounts')
+      .update(patch)
+      .eq('username', username)
+      .select('username,user_id,display_name,enabled,priority,notes,last_polled_at,updated_at')
+      .single();
+    if (error) throw error;
+    res.json({ account: data });
+  } catch (err) {
+    console.error('[api/x-social/accounts:update]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.delete('/api/x-social/accounts/:username', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  if (!hasNewsDb()) return res.status(503).json({ error: 'Supabase service DB is not configured' });
+  try {
+    const username = normalizeXUsername(req.params.username);
+    const seedAccount = DEFAULT_X_ANALYST_ACCOUNTS.find((account) => account.username === username);
+    if (seedAccount) {
+      const { error } = await serverSupabase.from('x_accounts').upsert({
+        username,
+        display_name: seedAccount.displayName,
+        enabled: false,
+        priority: seedAccount.priority,
+        notes: `${seedAccount.notes}; removed from active analyst list`,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'username' });
+      if (error) throw error;
+      return res.json({ ok: true, disabled: true });
+    }
+    const { error } = await serverSupabase.from('x_accounts').delete().eq('username', username);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[api/x-social/accounts:delete]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 async function fetchTwitterHeadlines() {
   const result = await runXSocialPoll().catch((err) => ({ ok: false, error: err.message }));
   if (!result.ok && result.error) console.warn('[x-social]', result.error);
@@ -6821,9 +7005,7 @@ app.get('/api/x-social/trends', async (req, res) => {
 });
 
 app.post('/api/x-social/run-now', async (req, res) => {
-  const adminEmails = (process.env.VITE_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-  const callerEmail = (req.headers['x-admin-email'] || '').toLowerCase().trim();
-  if (adminEmails.length > 0 && !adminEmails.includes(callerEmail)) {
+  if (!isAdminRequest(req)) {
     return res.status(403).json({ error: 'Admin access required' });
   }
   try {

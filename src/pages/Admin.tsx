@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trash2, RotateCcw, LogOut, Shield, Activity, Search as SearchIcon } from 'lucide-react';
+import { Trash2, RotateCcw, LogOut, Shield, Activity, Search as SearchIcon, Plus, RefreshCw } from 'lucide-react';
 import {
   getAllPlayers,
   getPlayerTrades,
@@ -230,6 +230,215 @@ function SearchLogTable({ logs }: { logs: SearchLog[] }) {
   );
 }
 
+interface XAccount {
+  username: string;
+  user_id?: string | null;
+  display_name?: string | null;
+  enabled?: boolean;
+  priority?: number;
+  notes?: string | null;
+  last_polled_at?: string | null;
+  updated_at?: string | null;
+}
+
+function normalizeXInput(value: string) {
+  return value
+    .trim()
+    .replace(/^https?:\/\/(www\.)?(x|twitter)\.com\//i, '')
+    .replace(/^@/, '')
+    .split(/[/?#\s]/)[0]
+    .toLowerCase();
+}
+
+function XAccountsPanel({ adminEmail }: { adminEmail?: string | null }) {
+  const [accounts, setAccounts] = useState<XAccount[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [username, setUsername] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const adminHeaders: Record<string, string> = adminEmail ? { 'x-admin-email': adminEmail } : {};
+
+  const loadAccounts = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/x-social/accounts', { headers: adminHeaders });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Account fetch failed');
+      setAccounts(json.accounts || []);
+      setMessage(json.source === 'default-seed' ? 'Showing built-in analyst seed list until Supabase is connected.' : '');
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [adminEmail]);
+
+  useEffect(() => { void loadAccounts(); }, [loadAccounts]);
+
+  async function addAccount(event: FormEvent) {
+    event.preventDefault();
+    const cleanUsername = normalizeXInput(username);
+    if (!cleanUsername) return;
+    setSaving(true);
+    setMessage('');
+    try {
+      const res = await fetch('/api/x-social/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...adminHeaders },
+        body: JSON.stringify({ username: cleanUsername, displayName, priority: 60, notes: 'manual analyst account' }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Account save failed');
+      setUsername('');
+      setDisplayName('');
+      await loadAccounts();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleAccount(account: XAccount) {
+    try {
+      const res = await fetch(`/api/x-social/accounts/${account.username}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...adminHeaders },
+        body: JSON.stringify({ enabled: account.enabled === false }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Account update failed');
+      await loadAccounts();
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  }
+
+  async function deleteAccount(account: XAccount) {
+    try {
+      const res = await fetch(`/api/x-social/accounts/${account.username}`, {
+        method: 'DELETE',
+        headers: adminHeaders,
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Account delete failed');
+      await loadAccounts();
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  }
+
+  async function runPollNow() {
+    setRunning(true);
+    setMessage('');
+    try {
+      const res = await fetch('/api/x-social/run-now?force=1', {
+        method: 'POST',
+        headers: adminHeaders,
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Poll failed');
+      setMessage(`Poll complete: ${json.accounts || 0} accounts, ${json.postsFetched || 0} posts, ${json.mentionsWritten || 0} ticker mentions.`);
+      await loadAccounts();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <div>
+          <h2 style={{ fontSize: 14, color: 'var(--text-secondary)', margin: 0 }}>X Analyst Accounts</h2>
+          <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-tertiary)' }}>
+            Trader and analyst handles used by the X trend poller.
+          </p>
+        </div>
+        <button onClick={runPollNow} disabled={running} title="Run X poll now" style={{
+          padding: '8px 12px', background: 'transparent', border: '1px solid var(--border)',
+          borderRadius: 6, color: 'var(--text-secondary)', display: 'flex', gap: 6, alignItems: 'center',
+          cursor: running ? 'default' : 'pointer', opacity: running ? 0.7 : 1,
+        }}>
+          <RefreshCw size={14} /> {running ? 'Running' : 'Run poll'}
+        </button>
+      </div>
+
+      <form onSubmit={addAccount} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2" style={{ marginBottom: 10 }}>
+        <input
+          value={username}
+          onChange={(event) => setUsername(event.target.value)}
+          placeholder="@username or X profile URL"
+          style={{ height: 38, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-panel)', color: 'var(--text-primary)', padding: '0 10px', fontSize: 13 }}
+        />
+        <input
+          value={displayName}
+          onChange={(event) => setDisplayName(event.target.value)}
+          placeholder="Display name"
+          style={{ height: 38, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-panel)', color: 'var(--text-primary)', padding: '0 10px', fontSize: 13 }}
+        />
+        <button type="submit" disabled={saving} style={{
+          height: 38, padding: '0 12px', background: 'var(--accent)', color: '#fff',
+          border: 'none', borderRadius: 8, display: 'inline-flex', gap: 6, alignItems: 'center', justifyContent: 'center',
+          cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.75 : 1,
+        }}>
+          <Plus size={14} /> Add
+        </button>
+      </form>
+
+      {message && (
+        <div style={{ padding: 10, marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-secondary)', fontSize: 12, background: 'var(--bg-panel)' }}>
+          {message}
+        </div>
+      )}
+
+      <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-panel)' }}>
+        {loading ? (
+          <div style={{ padding: 14, color: 'var(--text-tertiary)', fontSize: 13 }}>Loading X accounts...</div>
+        ) : accounts.length === 0 ? (
+          <div style={{ padding: 14, color: 'var(--text-tertiary)', fontSize: 13 }}>No X analyst accounts yet.</div>
+        ) : accounts.map((account, index) => (
+          <div key={account.username} className="grid grid-cols-[minmax(0,1fr)_76px_120px_auto] gap-2" style={{
+            padding: '10px 12px',
+            borderBottom: index < accounts.length - 1 ? '1px solid var(--border)' : 'none',
+            alignItems: 'center',
+            fontSize: 12,
+          }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ color: 'var(--text-primary)', fontWeight: 700 }}>
+                @{account.username}
+                {account.display_name && <span style={{ marginLeft: 8, color: 'var(--text-tertiary)', fontWeight: 500 }}>{account.display_name}</span>}
+              </div>
+              <div style={{ color: 'var(--text-tertiary)', marginTop: 3 }}>
+                {account.notes || 'analyst account'} {account.last_polled_at ? `· polled ${formatRelativeTime(account.last_polled_at)}` : ''}
+              </div>
+            </div>
+            <div style={{ color: 'var(--text-tertiary)' }}>P{account.priority ?? 50}</div>
+            <button onClick={() => toggleAccount(account)} style={{
+              padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6,
+              background: account.enabled === false ? 'transparent' : 'rgba(14,203,129,0.10)',
+              color: account.enabled === false ? 'var(--text-tertiary)' : 'var(--success)',
+              cursor: 'pointer',
+            }}>
+              {account.enabled === false ? 'Disabled' : 'Enabled'}
+            </button>
+            <button onClick={() => deleteAccount(account)} title="Delete account" style={{
+              padding: '6px 10px', background: 'transparent',
+              border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer',
+            }}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Admin() {
   const navigate = useNavigate();
   const sessionPlayer = useLeagueStore((s) => s.player);
@@ -358,6 +567,8 @@ export default function Admin() {
           <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Latest terms captured in-app</div>
         </div>
       </div>
+
+      <XAccountsPanel adminEmail={sessionPlayer.google_email} />
 
       <h2 style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 10 }}>
         Players ({players.length})
