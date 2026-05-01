@@ -5668,9 +5668,10 @@ const NEWS_SCORING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h — same headline sco
 const FINNHUB_NEWS_CATEGORIES = ['general'];
 const MACRO_SCHEMA_VERSION = 1;
 const X_SOCIAL_SCHEMA_VERSION = 1;
-const X_POST_LOOKBACK_HOURS = 72;
-const X_MAX_POSTS_PER_ACCOUNT = 10;
-const X_MAX_ACCOUNTS_PER_POLL = 300;
+const X_POST_LOOKBACK_HOURS = Math.min(168, Math.max(1, parseInt(process.env.X_POST_LOOKBACK_HOURS || '72', 10) || 72));
+const X_MAX_POSTS_PER_ACCOUNT = Math.min(10, Math.max(5, parseInt(process.env.X_MAX_POSTS_PER_ACCOUNT || '5', 10) || 5));
+const X_MAX_ACCOUNTS_PER_POLL = Math.min(300, Math.max(1, parseInt(process.env.X_MAX_ACCOUNTS_PER_POLL || '4', 10) || 4));
+const X_RESOLVE_USERS_ON_POLL = isXEnabledValue(process.env.X_RESOLVE_USERS_ON_POLL ?? 'false');
 const DEFAULT_X_ANALYST_ACCOUNTS = [
   { username: 'lizannsonders', displayName: 'Liz Ann Sonders', priority: 98, notes: 'seed: market strategist' },
   { username: '10kdiver', displayName: '10-K Diver', priority: 96, notes: 'seed: investing analysis' },
@@ -6648,6 +6649,9 @@ async function resolveXUsers(accounts) {
   const unresolved = accounts.filter((account) => !account.userId).map((account) => account.username);
   const byUsername = new Map(accounts.map((account) => [account.username, { ...account }]));
   if (unresolved.length === 0) return [...byUsername.values()].filter((account) => account.userId);
+  if (!X_RESOLVE_USERS_ON_POLL) {
+    return [...byUsername.values()].filter((account) => account.userId);
+  }
 
   for (let i = 0; i < unresolved.length; i += 100) {
     const batch = unresolved.slice(i, i + 100);
@@ -7019,7 +7023,8 @@ app.post('/api/x-social/run-now', async (req, res) => {
 // ── Phase 4: Wire news + briefing jobs into background scheduler ──────────────
 
 const NEWS_BACKGROUND_SYNC_MS = 60 * 60 * 1000; // 1 hour
-const X_SOCIAL_BACKGROUND_SYNC_MS = 8 * 60 * 60 * 1000; // 8 hours
+const X_SOCIAL_BACKGROUND_SYNC_MS =
+  Math.min(168, Math.max(1, parseInt(process.env.X_SOCIAL_BACKGROUND_SYNC_HOURS || '24', 10) || 24)) * 60 * 60 * 1000;
 
 function startBackgroundSync() {
   if (!BACKGROUND_SYNC_ENABLED) {

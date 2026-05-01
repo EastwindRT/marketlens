@@ -35,3 +35,11 @@ services:
         value: "1"
       - key: TWITTER_ENABLED
         value: "0"
+      - key: X_MAX_ACCOUNTS_PER_POLL
+        value: "4"
+      - key: X_MAX_POSTS_PER_ACCOUNT
+        value: "5"
+      - key: X_SOCIAL_BACKGROUND_SYNC_HOURS
+        value: "24"
+      - key: X_RESOLVE_USERS_ON_POLL
+        value: "0"
