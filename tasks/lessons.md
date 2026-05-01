@@ -564,3 +564,11 @@
 **Observation:** Reddit rank is less useful than whether mentions are accelerating versus the prior period.
 **Root cause:** Rank tells where a ticker sits in a crowd leaderboard, but acceleration shows what changed and is more likely to identify a developing setup.
 **Rule:** In social trend tables, prioritize mention spike, velocity, and change from baseline over static rank.
+
+---
+
+## Lesson: 2026-04-30 - Expensive social APIs need curated polling and durable history
+
+**Observation:** X can be useful for market chatter, but broad search is noisy and can become expensive quickly.
+**Root cause:** Public social APIs charge or throttle around reads, and real signal requires comparing current mentions against prior windows.
+**Rule:** Start with curated accounts, poll on a slow predictable cadence, store raw posts/mentions, and derive 24h/7d trends from the database rather than repeatedly re-querying the provider.

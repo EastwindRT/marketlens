@@ -1082,3 +1082,23 @@ Add a Reddit/social tape that helps users see which tickers are gaining attentio
 - [x] `src/pages/RedditTrends.tsx` - added a Convergence column and summary count so social names can be screened for filing/congress/portfolio confirmation.
 - [x] `src/api/reddit.ts` and `src/hooks/useRedditTrends.ts` - added typed confirmation payload and optional `playerId` query support.
 - [x] `src/pages/RedditTrends.tsx` - replaced the rank column with mention-change stats, removed 5D price from the row, and made 24h mention spike more prominent.
+
+## Plan: X curated-account social trend backend (2026-04-30)
+
+### Goal
+Add the backend foundation for low-cost X/Twitter market trend polling on an 8-hour cadence from a curated account basket.
+
+### Shipped
+- [x] `supabase_migration_x_social.sql` - added `x_accounts`, `x_posts`, `x_symbol_mentions`, and `twitter_poll_interval_hours`.
+- [x] `server.cjs` - added X API v2 username resolution, recent post polling, cashtag extraction, post/mention persistence, and engagement scoring.
+- [x] `server.cjs` - added `GET /api/x-social/trends` for 24h/7d-style trend windows from stored mentions.
+- [x] `server.cjs` - added admin-only `POST /api/x-social/run-now?force=1` for manual verification.
+- [x] `server.cjs` - scheduled the X poller every 8 hours, gated by `app_settings.twitter_enabled` and `X_BEARER_TOKEN`.
+- [x] `docs/x-social-backend.md` - added activation/runbook notes.
+
+### Remaining
+- [ ] Add curated X account list to `x_accounts` or `X_ACCOUNT_USERNAMES`.
+- [ ] Set `X_BEARER_TOKEN` in Render.
+- [ ] Run `supabase_migration_x_social.sql` in Supabase.
+- [ ] Flip `app_settings.twitter_enabled` to `true` after the key/account list is ready.
+- [ ] Merge X trend metrics into the Social/Reddit Trends UI.

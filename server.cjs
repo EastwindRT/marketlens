@@ -5659,9 +5659,18 @@ async function getAppSetting(key) {
 // ── Phase 2: Headline fetchers + dedup + Claude scoring + job ────────────────
 
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY || '';
+const X_BEARER_TOKEN = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN || '';
+const X_ACCOUNT_USERNAMES = (process.env.X_ACCOUNT_USERNAMES || process.env.TWITTER_ACCOUNT_USERNAMES || '')
+  .split(',')
+  .map((username) => username.trim().replace(/^@/, '').toLowerCase())
+  .filter(Boolean);
 const NEWS_SCORING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h — same headline scored at most once/day
 const FINNHUB_NEWS_CATEGORIES = ['general'];
 const MACRO_SCHEMA_VERSION = 1;
+const X_SOCIAL_SCHEMA_VERSION = 1;
+const X_POST_LOOKBACK_HOURS = 72;
+const X_MAX_POSTS_PER_ACCOUNT = 10;
+const X_MAX_ACCOUNTS_PER_POLL = 300;
 
 const NEWS_QUERIES = [
   {
@@ -6491,26 +6500,344 @@ app.post('/api/alerts/run-now', async (req, res) => {
   }
 });
 
-// ── Phase 4: Twitter/X scaffold ───────────────────────────────────────────────
-// Controlled by app_settings.twitter_enabled (default false).
-// No real Twitter API calls yet — stub returns [] and logs.
+// ── X / Twitter social trend poller ──────────────────────────────────────────
+// Controlled by app_settings.twitter_enabled (default false). Polls a curated
+// account basket every 8 hours and stores cashtag/ticker mentions for trend UI.
+
+function isXEnabledValue(value) {
+  return value === true || value === 'true' || value === 1 || value === '1';
+}
+
+function xApiGet(path, params = {}) {
+  if (!X_BEARER_TOKEN) throw new Error('X_BEARER_TOKEN is not configured');
+  const url = new URL(`https://api.x.com/2${path}`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value != null && value !== '') url.searchParams.set(key, String(value));
+  }
+  return httpsGet(url.toString(), {
+    Accept: 'application/json',
+    Authorization: `Bearer ${X_BEARER_TOKEN}`,
+  }).then((raw) => JSON.parse(raw));
+}
+
+function extractCashtags(text) {
+  const tags = new Set();
+  const re = /(^|[^A-Z0-9_])\$([A-Z][A-Z0-9]{0,9}(?:\.[A-Z]{1,3})?)(?![A-Z0-9_])/gi;
+  let match;
+  while ((match = re.exec(text || '')) !== null) {
+    const symbol = normalizeSymbol(match[2]);
+    if (symbol && /^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol)) tags.add(symbol);
+  }
+  return [...tags];
+}
+
+function engagementScore(metrics = {}) {
+  const likes = finiteNumber(metrics.like_count) || 0;
+  const reposts = finiteNumber(metrics.retweet_count) || 0;
+  const replies = finiteNumber(metrics.reply_count) || 0;
+  const quotes = finiteNumber(metrics.quote_count) || 0;
+  return Math.round(likes + reposts * 2 + replies * 1.5 + quotes * 2);
+}
+
+async function readXAccounts() {
+  const envAccounts = X_ACCOUNT_USERNAMES.map((username) => ({
+    username,
+    userId: null,
+    displayName: '',
+    priority: 50,
+  }));
+
+  if (!hasNewsDb()) return envAccounts.slice(0, X_MAX_ACCOUNTS_PER_POLL);
+
+  try {
+    const { data, error } = await serverSupabase
+      .from('x_accounts')
+      .select('username,user_id,display_name,priority')
+      .eq('enabled', true)
+      .order('priority', { ascending: false })
+      .limit(X_MAX_ACCOUNTS_PER_POLL);
+    if (error) throw error;
+
+    const rows = (data || []).map((row) => ({
+      username: String(row.username || '').toLowerCase(),
+      userId: row.user_id || null,
+      displayName: row.display_name || '',
+      priority: finiteNumber(row.priority) || 50,
+    })).filter((row) => row.username);
+
+    const seen = new Set(rows.map((row) => row.username));
+    for (const account of envAccounts) {
+      if (!seen.has(account.username)) rows.push(account);
+    }
+    return rows.slice(0, X_MAX_ACCOUNTS_PER_POLL);
+  } catch (err) {
+    console.warn('[x-social/accounts]', err.message);
+    return envAccounts.slice(0, X_MAX_ACCOUNTS_PER_POLL);
+  }
+}
+
+async function resolveXUsers(accounts) {
+  const unresolved = accounts.filter((account) => !account.userId).map((account) => account.username);
+  const byUsername = new Map(accounts.map((account) => [account.username, { ...account }]));
+  if (unresolved.length === 0) return [...byUsername.values()].filter((account) => account.userId);
+
+  for (let i = 0; i < unresolved.length; i += 100) {
+    const batch = unresolved.slice(i, i + 100);
+    const json = await xApiGet('/users/by', {
+      usernames: batch.join(','),
+      'user.fields': 'id,name,username,verified,public_metrics',
+    });
+    for (const user of json?.data || []) {
+      const username = String(user.username || '').toLowerCase();
+      const current = byUsername.get(username) || { username };
+      byUsername.set(username, {
+        ...current,
+        userId: user.id,
+        displayName: user.name || current.displayName || username,
+      });
+    }
+  }
+
+  if (hasNewsDb()) {
+    const rows = [...byUsername.values()]
+      .filter((account) => account.username && account.userId)
+      .map((account) => ({
+        username: account.username,
+        user_id: account.userId,
+        display_name: account.displayName || account.username,
+        enabled: true,
+        priority: account.priority || 50,
+        updated_at: new Date().toISOString(),
+      }));
+    if (rows.length) {
+      await serverSupabase.from('x_accounts').upsert(rows, { onConflict: 'username' });
+    }
+  }
+
+  return [...byUsername.values()].filter((account) => account.userId);
+}
+
+async function fetchXUserPosts(account) {
+  const json = await xApiGet(`/users/${encodeURIComponent(account.userId)}/tweets`, {
+    max_results: X_MAX_POSTS_PER_ACCOUNT,
+    exclude: 'retweets,replies',
+    'tweet.fields': 'created_at,public_metrics,entities,lang',
+  });
+  return (json?.data || []).map((post) => ({
+    ...post,
+    accountUsername: account.username,
+    accountDisplayName: account.displayName || account.username,
+    authorId: account.userId,
+  }));
+}
+
+async function writeXPostsAndMentions(posts) {
+  if (!hasNewsDb() || !Array.isArray(posts) || posts.length === 0) {
+    return { postsWritten: 0, mentionsWritten: 0 };
+  }
+
+  const nowIso = new Date().toISOString();
+  const postRows = [];
+  const mentionRows = [];
+  const accountPollRows = new Map();
+
+  for (const post of posts) {
+    const postedAt = post.created_at || nowIso;
+    const metrics = post.public_metrics || {};
+    const score = engagementScore(metrics);
+    const username = String(post.accountUsername || '').toLowerCase();
+    const symbols = extractCashtags(post.text);
+    postRows.push({
+      id: String(post.id),
+      author_id: post.authorId || null,
+      account_username: username || null,
+      text: post.text || '',
+      posted_at: postedAt,
+      url: username && post.id ? `https://x.com/${username}/status/${post.id}` : null,
+      public_metrics: metrics,
+      raw: post,
+      fetched_at: nowIso,
+    });
+    if (username) accountPollRows.set(username, { username, last_polled_at: nowIso, updated_at: nowIso });
+    for (const symbol of symbols) {
+      mentionRows.push({
+        post_id: String(post.id),
+        symbol,
+        cashtag: `$${symbol}`,
+        account_username: username || null,
+        posted_at: postedAt,
+        engagement_score: score,
+      });
+    }
+  }
+
+  if (postRows.length) {
+    const { error } = await serverSupabase.from('x_posts').upsert(postRows, { onConflict: 'id' });
+    if (error) throw error;
+  }
+  if (mentionRows.length) {
+    const { error } = await serverSupabase.from('x_symbol_mentions').upsert(mentionRows, { onConflict: 'post_id,symbol' });
+    if (error) throw error;
+  }
+  if (accountPollRows.size) {
+    await serverSupabase.from('x_accounts').upsert([...accountPollRows.values()], { onConflict: 'username' });
+  }
+
+  return { postsWritten: postRows.length, mentionsWritten: mentionRows.length };
+}
+
+async function runXSocialPoll({ force = false } = {}) {
+  const startMs = Date.now();
+  const enabled = isXEnabledValue(await getAppSetting('twitter_enabled').catch(() => false));
+  if (!enabled && !force) {
+    console.log('[x-social] disabled by app_settings.twitter_enabled');
+    return { ok: true, enabled: false, postsFetched: 0, mentionsWritten: 0, msElapsed: Date.now() - startMs };
+  }
+  if (!X_BEARER_TOKEN) {
+    return { ok: false, enabled, error: 'X_BEARER_TOKEN is not configured', postsFetched: 0, mentionsWritten: 0, msElapsed: Date.now() - startMs };
+  }
+  if (!hasNewsDb()) {
+    return { ok: false, enabled, error: 'Supabase service DB is not configured', postsFetched: 0, mentionsWritten: 0, msElapsed: Date.now() - startMs };
+  }
+
+  const accounts = await resolveXUsers(await readXAccounts());
+  const posts = [];
+  for (const account of accounts) {
+    try {
+      posts.push(...await fetchXUserPosts(account));
+    } catch (err) {
+      console.warn(`[x-social/posts:${account.username}]`, err.message);
+    }
+  }
+
+  const cutoff = Date.now() - X_POST_LOOKBACK_HOURS * 60 * 60 * 1000;
+  const freshPosts = posts.filter((post) => {
+    const ts = new Date(post.created_at || 0).getTime();
+    return Number.isFinite(ts) && ts >= cutoff;
+  });
+  const writeResult = await writeXPostsAndMentions(freshPosts);
+  const msElapsed = Date.now() - startMs;
+  await logAgentRun({ job: 'x-social', itemsProcessed: freshPosts.length, tokensUsed: 0, msElapsed, error: null });
+  return {
+    ok: true,
+    enabled,
+    accounts: accounts.length,
+    postsFetched: freshPosts.length,
+    ...writeResult,
+    msElapsed,
+  };
+}
+
+function summarizeMentionRows(rows, hours) {
+  const now = Date.now();
+  const currentCutoff = now - hours * 60 * 60 * 1000;
+  const previousCutoff = now - hours * 2 * 60 * 60 * 1000;
+  const bySymbol = new Map();
+
+  for (const row of rows || []) {
+    const symbol = normalizeSymbol(row.symbol || '');
+    if (!symbol) continue;
+    const ts = new Date(row.posted_at).getTime();
+    if (!Number.isFinite(ts)) continue;
+    const bucket = bySymbol.get(symbol) || {
+      symbol,
+      mentions: 0,
+      previousMentions: 0,
+      uniqueAccounts: new Set(),
+      engagementScore: 0,
+      latestPostAt: null,
+    };
+    if (ts >= currentCutoff) {
+      bucket.mentions += 1;
+      if (row.account_username) bucket.uniqueAccounts.add(row.account_username);
+      bucket.engagementScore += Number(row.engagement_score || 0);
+      if (!bucket.latestPostAt || row.posted_at > bucket.latestPostAt) bucket.latestPostAt = row.posted_at;
+    } else if (ts >= previousCutoff) {
+      bucket.previousMentions += 1;
+    }
+    bySymbol.set(symbol, bucket);
+  }
+
+  return [...bySymbol.values()]
+    .filter((row) => row.mentions > 0)
+    .map((row) => {
+      const mentionChange = row.mentions - row.previousMentions;
+      const mentionChangePct = row.previousMentions > 0 ? (mentionChange / row.previousMentions) * 100 : null;
+      return {
+        symbol: row.symbol,
+        mentions: row.mentions,
+        previousMentions: row.previousMentions,
+        mentionChange,
+        mentionChangePct,
+        uniqueAccounts: row.uniqueAccounts.size,
+        engagementScore: Math.round(row.engagementScore),
+        latestPostAt: row.latestPostAt,
+      };
+    })
+    .sort((a, b) =>
+      b.mentions - a.mentions
+      || b.uniqueAccounts - a.uniqueAccounts
+      || b.engagementScore - a.engagementScore
+    );
+}
+
+async function getXSocialTrends({ hours = 24, limit = 100 } = {}) {
+  if (!hasNewsDb()) {
+    return { schemaVersion: X_SOCIAL_SCHEMA_VERSION, generatedAt: new Date().toISOString(), hours, results: [], note: 'Database not configured' };
+  }
+  const safeHours = Math.min(168, Math.max(1, hours));
+  const since = new Date(Date.now() - safeHours * 2 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await serverSupabase
+    .from('x_symbol_mentions')
+    .select('symbol,account_username,posted_at,engagement_score')
+    .gte('posted_at', since)
+    .order('posted_at', { ascending: false })
+    .limit(5000);
+  if (error) throw error;
+  return {
+    schemaVersion: X_SOCIAL_SCHEMA_VERSION,
+    generatedAt: new Date().toISOString(),
+    hours: safeHours,
+    source: 'X curated accounts',
+    results: summarizeMentionRows(data || [], safeHours).slice(0, limit),
+  };
+}
 
 async function fetchTwitterHeadlines() {
-  const enabled = await getAppSetting('twitter_enabled').catch(() => false);
-  if (!enabled) {
-    console.log('[twitter] disabled by app_settings.twitter_enabled');
-    return [];
-  }
-  // Phase 2 placeholder: fetch from curated financial account list via Twitter API v2
-  // Filter for ticker mentions matching user watchlist tickers
-  // Feed into the same scoreHeadlineWithClaude pipeline
-  console.log('[twitter] twitter_enabled=true but Twitter API not yet implemented');
+  const result = await runXSocialPoll().catch((err) => ({ ok: false, error: err.message }));
+  if (!result.ok && result.error) console.warn('[x-social]', result.error);
   return [];
 }
+
+app.get('/api/x-social/trends', async (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours || '24', 10);
+    const limit = Math.min(250, Math.max(10, parseInt(req.query.limit || '100', 10)));
+    res.json(await getXSocialTrends({ hours, limit }));
+  } catch (err) {
+    console.error('[api/x-social/trends]', err.message);
+    res.status(502).json({ schemaVersion: X_SOCIAL_SCHEMA_VERSION, generatedAt: new Date().toISOString(), results: [], error: err.message });
+  }
+});
+
+app.post('/api/x-social/run-now', async (req, res) => {
+  const adminEmails = (process.env.VITE_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  const callerEmail = (req.headers['x-admin-email'] || '').toLowerCase().trim();
+  if (adminEmails.length > 0 && !adminEmails.includes(callerEmail)) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  try {
+    res.json(await runXSocialPoll({ force: req.query.force === '1' }));
+  } catch (err) {
+    console.error('[api/x-social/run-now]', err.message);
+    res.status(502).json({ ok: false, error: err.message });
+  }
+});
 
 // ── Phase 4: Wire news + briefing jobs into background scheduler ──────────────
 
 const NEWS_BACKGROUND_SYNC_MS = 60 * 60 * 1000; // 1 hour
+const X_SOCIAL_BACKGROUND_SYNC_MS = 8 * 60 * 60 * 1000; // 8 hours
 
 function startBackgroundSync() {
   if (!BACKGROUND_SYNC_ENABLED) {
@@ -6534,13 +6861,15 @@ function startBackgroundSync() {
     );
   });
 
+  scheduleRepeatingTask('x-social', X_SOCIAL_BACKGROUND_SYNC_MS, async () => {
+    const result = await runXSocialPoll();
+    if (result?.enabled) {
+      console.log(`[x-social sync] accounts=${result.accounts || 0} posts=${result.postsFetched || 0} mentions=${result.mentionsWritten || 0}`);
+    }
+  });
+
   if (NEWS_AGENT_ENABLED) {
     scheduleRepeatingTask('news-impact', NEWS_BACKGROUND_SYNC_MS, async () => {
-      // Also pull Twitter headlines (stub for now) and merge before scoring
-      const twitterHeadlines = await fetchTwitterHeadlines();
-      if (twitterHeadlines.length > 0) {
-        console.log(`[news-impact sync] ${twitterHeadlines.length} twitter headlines merged`);
-      }
       await runNewsImpactJob();
       // Chain: run briefing job after news ingest completes
       await runAgentBriefingJob();
