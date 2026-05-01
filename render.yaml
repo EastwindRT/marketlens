@@ -36,7 +36,7 @@ services:
       - key: TWITTER_ENABLED
         value: "0"
       - key: X_MAX_ACCOUNTS_PER_POLL
-        value: "4"
+        value: "300"
       - key: X_MAX_POSTS_PER_ACCOUNT
         value: "5"
       - key: X_SOCIAL_BACKGROUND_SYNC_HOURS

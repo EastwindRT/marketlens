@@ -5670,7 +5670,7 @@ const MACRO_SCHEMA_VERSION = 1;
 const X_SOCIAL_SCHEMA_VERSION = 1;
 const X_POST_LOOKBACK_HOURS = Math.min(168, Math.max(1, parseInt(process.env.X_POST_LOOKBACK_HOURS || '72', 10) || 72));
 const X_MAX_POSTS_PER_ACCOUNT = Math.min(10, Math.max(5, parseInt(process.env.X_MAX_POSTS_PER_ACCOUNT || '5', 10) || 5));
-const X_MAX_ACCOUNTS_PER_POLL = Math.min(300, Math.max(1, parseInt(process.env.X_MAX_ACCOUNTS_PER_POLL || '4', 10) || 4));
+const X_MAX_ACCOUNTS_PER_POLL = Math.min(300, Math.max(1, parseInt(process.env.X_MAX_ACCOUNTS_PER_POLL || '300', 10) || 300));
 const X_RESOLVE_USERS_ON_POLL = isXEnabledValue(process.env.X_RESOLVE_USERS_ON_POLL ?? 'false');
 const DEFAULT_X_ANALYST_ACCOUNTS = [
   { username: 'lizannsonders', displayName: 'Liz Ann Sonders', priority: 98, notes: 'seed: market strategist' },
