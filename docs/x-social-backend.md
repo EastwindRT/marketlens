@@ -13,6 +13,13 @@ Optional account seed:
 
 - `X_ACCOUNT_USERNAMES=account1,account2,account3`
 
+Efficient list mode:
+
+- `X_LIST_ID=1234567890`
+- `X_LIST_MAX_POSTS=25`
+- When `X_LIST_ID` is set, the poller reads recent posts from that X List instead of calling each user timeline.
+- The poller stores `x_list_since_id_<listId>` in `app_settings`, so later runs request only posts newer than the last successful list read.
+
 Preferred account source:
 
 - Insert curated accounts into `public.x_accounts`.

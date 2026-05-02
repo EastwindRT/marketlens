@@ -5653,6 +5653,14 @@ async function getAppSetting(key) {
   return data?.value ?? null;
 }
 
+async function setAppSetting(key, value) {
+  if (!hasNewsDb()) return;
+  const { error } = await serverSupabase
+    .from('app_settings')
+    .upsert({ key, value }, { onConflict: 'key' });
+  if (error) throw error;
+}
+
 // ── Stub endpoints (Phase 1) — return correct shape, empty data ───────────────
 // Real ingestion wired in Phase 2. Codex can build against these immediately.
 
@@ -5671,6 +5679,9 @@ const X_SOCIAL_SCHEMA_VERSION = 1;
 const X_POST_LOOKBACK_HOURS = Math.min(168, Math.max(1, parseInt(process.env.X_POST_LOOKBACK_HOURS || '72', 10) || 72));
 const X_MAX_POSTS_PER_ACCOUNT = Math.min(10, Math.max(5, parseInt(process.env.X_MAX_POSTS_PER_ACCOUNT || '5', 10) || 5));
 const X_MAX_ACCOUNTS_PER_POLL = Math.min(300, Math.max(1, parseInt(process.env.X_MAX_ACCOUNTS_PER_POLL || '300', 10) || 300));
+const X_LIST_ID = String(process.env.X_LIST_ID || process.env.TWITTER_LIST_ID || '').trim();
+const X_LIST_MAX_POSTS = Math.min(100, Math.max(5, parseInt(process.env.X_LIST_MAX_POSTS || '25', 10) || 25));
+const X_LIST_SINCE_SETTING_KEY = X_LIST_ID ? `x_list_since_id_${X_LIST_ID}` : 'x_list_since_id';
 const X_RESOLVE_USERS_ON_POLL = isXEnabledValue(process.env.X_RESOLVE_USERS_ON_POLL ?? 'false');
 const DEFAULT_X_ANALYST_ACCOUNTS = [
   { username: 'lizannsonders', displayName: 'Liz Ann Sonders', priority: 98, notes: 'seed: market strategist' },
@@ -6703,6 +6714,44 @@ async function fetchXUserPosts(account) {
   }));
 }
 
+function newestXPostId(posts) {
+  let newest = null;
+  for (const post of posts || []) {
+    const id = String(post?.id || '');
+    if (!/^\d+$/.test(id)) continue;
+    if (!newest || BigInt(id) > BigInt(newest)) newest = id;
+  }
+  return newest;
+}
+
+async function fetchXListPosts() {
+  if (!X_LIST_ID) return { posts: [], newestId: null };
+  const sinceId = await getAppSetting(X_LIST_SINCE_SETTING_KEY).catch(() => null);
+  const params = {
+    max_results: X_LIST_MAX_POSTS,
+    exclude: 'retweets,replies',
+    'tweet.fields': 'created_at,public_metrics,entities,lang,author_id',
+    expansions: 'author_id',
+    'user.fields': 'id,name,username',
+  };
+  if (sinceId && /^\d+$/.test(String(sinceId))) params.since_id = String(sinceId);
+
+  const json = await xApiGet(`/lists/${encodeURIComponent(X_LIST_ID)}/tweets`, params);
+  const usersById = new Map((json?.includes?.users || []).map((user) => [String(user.id), user]));
+  const posts = (json?.data || []).map((post) => {
+    const user = usersById.get(String(post.author_id)) || {};
+    const username = String(user.username || '').toLowerCase();
+    return {
+      ...post,
+      accountUsername: username || null,
+      accountDisplayName: user.name || username || '',
+      authorId: post.author_id || user.id || null,
+    };
+  });
+
+  return { posts, newestId: newestXPostId(posts) };
+}
+
 async function writeXPostsAndMentions(posts) {
   if (!hasNewsDb() || !Array.isArray(posts) || posts.length === 0) {
     return { postsWritten: 0, mentionsWritten: 0 };
@@ -6772,13 +6821,32 @@ async function runXSocialPoll({ force = false } = {}) {
     return { ok: false, enabled, error: 'Supabase service DB is not configured', postsFetched: 0, mentionsWritten: 0, msElapsed: Date.now() - startMs };
   }
 
-  const accounts = await resolveXUsers(await readXAccounts());
+  let source = 'accounts';
+  let accounts = [];
   const posts = [];
-  for (const account of accounts) {
+
+  if (X_LIST_ID) {
     try {
-      posts.push(...await fetchXUserPosts(account));
+      const listResult = await fetchXListPosts();
+      posts.push(...listResult.posts);
+      source = 'list';
+      if (listResult.newestId) {
+        await setAppSetting(X_LIST_SINCE_SETTING_KEY, listResult.newestId).catch((err) => {
+          console.warn('[x-social/list-since]', err.message);
+        });
+      }
     } catch (err) {
-      console.warn(`[x-social/posts:${account.username}]`, err.message);
+      console.warn(`[x-social/list:${X_LIST_ID}]`, err.message);
+      return { ok: false, enabled, source, listId: X_LIST_ID, error: err.message, postsFetched: 0, mentionsWritten: 0, msElapsed: Date.now() - startMs };
+    }
+  } else {
+    accounts = await resolveXUsers(await readXAccounts());
+    for (const account of accounts) {
+      try {
+        posts.push(...await fetchXUserPosts(account));
+      } catch (err) {
+        console.warn(`[x-social/posts:${account.username}]`, err.message);
+      }
     }
   }
 
@@ -6793,6 +6861,8 @@ async function runXSocialPoll({ force = false } = {}) {
   return {
     ok: true,
     enabled,
+    source,
+    listId: X_LIST_ID || null,
     accounts: accounts.length,
     postsFetched: freshPosts.length,
     ...writeResult,
@@ -7051,7 +7121,7 @@ function startBackgroundSync() {
   scheduleRepeatingTask('x-social', X_SOCIAL_BACKGROUND_SYNC_MS, async () => {
     const result = await runXSocialPoll();
     if (result?.enabled) {
-      console.log(`[x-social sync] accounts=${result.accounts || 0} posts=${result.postsFetched || 0} mentions=${result.mentionsWritten || 0}`);
+      console.log(`[x-social sync] source=${result.source || 'accounts'} accounts=${result.accounts || 0} posts=${result.postsFetched || 0} mentions=${result.mentionsWritten || 0}`);
     }
   });
 

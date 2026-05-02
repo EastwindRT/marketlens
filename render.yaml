@@ -39,6 +39,10 @@ services:
         value: "300"
       - key: X_MAX_POSTS_PER_ACCOUNT
         value: "5"
+      - key: X_LIST_ID
+        sync: false
+      - key: X_LIST_MAX_POSTS
+        value: "25"
       - key: X_SOCIAL_BACKGROUND_SYNC_HOURS
         value: "24"
       - key: X_RESOLVE_USERS_ON_POLL

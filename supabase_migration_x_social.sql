@@ -45,7 +45,8 @@ create index if not exists x_symbol_mentions_posted_idx on public.x_symbol_menti
 insert into public.app_settings (key, value)
 values
   ('twitter_enabled', 'false'::jsonb),
-  ('twitter_poll_interval_hours', '8'::jsonb)
+  ('twitter_poll_interval_hours', '8'::jsonb),
+  ('x_list_since_id', 'null'::jsonb)
 on conflict (key) do nothing;
 
 insert into public.x_accounts (username, display_name, enabled, priority, notes)
