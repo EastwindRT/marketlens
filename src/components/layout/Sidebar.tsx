@@ -318,7 +318,7 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
       <NavLink to="/news"     icon={<Newspaper size={14} />}  label="Market Signals" onClose={onClose} />
       <NavLink to="/insiders" icon={<CircleDollarSign size={14} />} label="Insider $" onClose={onClose} />
       <NavLink to="/congress" icon={<Building2 size={14} />}  label="Congress Trades" onClose={onClose} />
-      <NavLink to="/funds"    icon={<Briefcase size={14} />}  label="Fund Holdings" onClose={onClose} />
+      <NavLink to="/funds"    icon={<Briefcase size={14} />}  label="Fund Changes" onClose={onClose} />
 
       {/* ── Watchlist ── */}
       <SectionHeader

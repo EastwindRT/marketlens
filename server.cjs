@@ -4590,6 +4590,9 @@ const fundHoldingsCache = new Map();
 const fundHoldingsInFlight = new Map();
 const fundOwnershipByStockCache = new Map();
 const fundOwnershipByStockInFlight = new Map();
+let bigFundChangesCache = null;
+let bigFundChangesFetch = 0;
+let bigFundChangesInFlight = null;
 
 function normalizeIssuerName(value) {
   if (!value) return '';
@@ -4886,6 +4889,141 @@ async function ensureRecent13FCache(daysBack, force = false) {
   return recent13FInFlight[daysBack];
 }
 
+function compare13FHoldings(current, previous, latestFiling) {
+  const totalValue = current.reduce((s, h) => s + (finiteNumber(h.value) || 0), 0);
+  const prevMap = new Map();
+  for (const h of (previous ?? [])) {
+    if (h.cusip) prevMap.set(h.cusip, h);
+    if (h.name) prevMap.set(h.name.toUpperCase(), h);
+  }
+
+  const currentWithFlags = current.map((h) => {
+    const key = h.cusip || h.name.toUpperCase();
+    const prev = prevMap.get(key);
+    let changeType = 'unchanged';
+    let changePct = 0;
+    if (!previous) {
+      changeType = 'unknown';
+    } else if (!prev) {
+      changeType = 'new';
+    } else {
+      changePct = prev.shares > 0 ? ((h.shares - prev.shares) / prev.shares) * 100 : 0;
+      if (changePct > 1) changeType = 'increased';
+      else if (changePct < -1) changeType = 'decreased';
+    }
+    return {
+      ...h,
+      isNew: changeType === 'new',
+      changeType,
+      changePct,
+      pctOfPortfolio: totalValue > 0 ? ((finiteNumber(h.value) || 0) / totalValue) * 100 : 0,
+    };
+  });
+
+  const currentKeys = new Set(current.flatMap(h => [h.cusip, h.name?.toUpperCase()].filter(Boolean)));
+  const exited = (previous ?? [])
+    .filter(h => !currentKeys.has(h.cusip) && !currentKeys.has(h.name?.toUpperCase()))
+    .map(h => ({ ...h, changeType: 'exited', changePct: -100, isNew: false, pctOfPortfolio: 0 }));
+
+  return {
+    filingDate: latestFiling.filingDate,
+    period: latestFiling.period,
+    totalValue,
+    positionCount: current.length,
+    newCount: currentWithFlags.filter(h => h.changeType === 'new').length,
+    increasedCount: currentWithFlags.filter(h => h.changeType === 'increased').length,
+    decreasedCount: currentWithFlags.filter(h => h.changeType === 'decreased').length,
+    exitedCount: exited.length,
+    currentWithFlags,
+    exited,
+  };
+}
+
+async function buildBigFundChanges(limit = 18) {
+  const selectedFunds = KNOWN_FUNDS.slice(0, Math.min(limit, KNOWN_FUNDS.length));
+  const results = [];
+  const batchSize = 2;
+
+  for (let i = 0; i < selectedFunds.length; i += batchSize) {
+    const batch = selectedFunds.slice(i, i + batchSize);
+    const settled = await Promise.allSettled(batch.map(async (fund) => {
+      const { results: filings } = await get13FFilings(fund.cik);
+      if (!filings.length) return null;
+      const [latestFiling, prevFiling] = filings;
+      const [current, previous] = await Promise.all([
+        fetchHoldings(fund.cik, latestFiling.accession),
+        prevFiling ? fetchHoldings(fund.cik, prevFiling.accession) : Promise.resolve(null),
+      ]);
+      const compared = compare13FHoldings(current, previous, latestFiling);
+      const topChanged = [
+        ...compared.currentWithFlags.filter(h => h.changeType === 'new'),
+        ...compared.currentWithFlags.filter(h => h.changeType === 'increased'),
+        ...compared.currentWithFlags.filter(h => h.changeType === 'decreased'),
+        ...compared.exited,
+      ]
+        .filter(h => (finiteNumber(h.value) || 0) > 0)
+        .sort((a, b) => (finiteNumber(b.value) || 0) - (finiteNumber(a.value) || 0))
+        .slice(0, 8)
+        .map(h => ({
+          name: h.name,
+          cusip: h.cusip,
+          value: finiteNumber(h.value) || 0,
+          shares: finiteNumber(h.shares) || 0,
+          changeType: h.changeType,
+          changePct: finiteNumber(h.changePct) || 0,
+          putCall: h.putCall || null,
+          sector: h.sector || null,
+        }));
+
+      return {
+        cik: fund.cik,
+        fund: fund.name,
+        filingDate: compared.filingDate,
+        period: compared.period,
+        totalValue: compared.totalValue,
+        positionCount: compared.positionCount,
+        newCount: compared.newCount,
+        increasedCount: compared.increasedCount,
+        decreasedCount: compared.decreasedCount,
+        exitedCount: compared.exitedCount,
+        topChanged,
+      };
+    }));
+
+    for (const item of settled) {
+      if (item.status === 'fulfilled' && item.value) results.push(item.value);
+    }
+  }
+
+  results.sort((a, b) => String(b.filingDate || '').localeCompare(String(a.filingDate || '')));
+  return {
+    funds: results,
+    trackedFundUniverse: KNOWN_FUNDS.length,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function ensureBigFundChangesCache(limit, force = false) {
+  if (!force && bigFundChangesCache && isCacheFresh(bigFundChangesFetch, FUND_HOLDINGS_TTL)) {
+    return Promise.resolve(bigFundChangesCache);
+  }
+  if (bigFundChangesInFlight) return bigFundChangesInFlight;
+  bigFundChangesInFlight = buildBigFundChanges(limit)
+    .then((payload) => {
+      bigFundChangesCache = payload;
+      bigFundChangesFetch = Date.now();
+      return payload;
+    })
+    .catch((err) => {
+      if (bigFundChangesCache) return bigFundChangesCache;
+      throw err;
+    })
+    .finally(() => {
+      bigFundChangesInFlight = null;
+    });
+  return bigFundChangesInFlight;
+}
+
 app.get('/api/13f/recent-filings', async (req, res) => {
   const daysBack = Math.min(60, Math.max(7, Number(req.query.days) || 14));
   try {
@@ -4900,6 +5038,23 @@ app.get('/api/13f/recent-filings', async (req, res) => {
   } catch (err) {
     console.error('[13f/recent-filings]', err.message);
     res.status(502).json({ error: err.message, filings: [] });
+  }
+});
+
+app.get('/api/13f/big-fund-changes', async (req, res) => {
+  const limit = Math.min(KNOWN_FUNDS.length, Math.max(6, Number(req.query.limit) || 18));
+  try {
+    if (bigFundChangesCache && isCacheFresh(bigFundChangesFetch, FUND_HOLDINGS_TTL)) {
+      return res.json(bigFundChangesCache);
+    }
+    if (bigFundChangesCache) {
+      void ensureBigFundChangesCache(limit, true);
+      return res.json(bigFundChangesCache);
+    }
+    res.json(await ensureBigFundChangesCache(limit, true));
+  } catch (err) {
+    console.error('[13f/big-fund-changes]', err.message);
+    res.status(502).json({ error: err.message, funds: [] });
   }
 });
 
@@ -5008,63 +5163,22 @@ app.get('/api/13f/holdings', async (req, res) => {
       prevFiling ? fetchHoldings(cik, prevFiling.accession) : Promise.resolve(null),
     ]);
 
-    const totalValue = current.reduce((s, h) => s + h.value, 0);
-
-    // Build a lookup from previous quarter by CUSIP (primary) or name (fallback)
-    const prevMap = new Map();
-    for (const h of (previous ?? [])) {
-      if (h.cusip) prevMap.set(h.cusip, h);
-      prevMap.set(h.name.toUpperCase(), h);
-    }
-
-    const withFlags = current.map(h => {
-      const key = h.cusip || h.name.toUpperCase();
-      const prev = prevMap.get(key);
-      let changeType = 'unchanged';
-      let changePct = 0;
-      if (!previous) {
-        changeType = 'unknown';
-      } else if (!prev) {
-        changeType = 'new';
-      } else {
-        changePct = prev.shares > 0 ? ((h.shares - prev.shares) / prev.shares) * 100 : 0;
-        if (changePct > 1)       changeType = 'increased';
-        else if (changePct < -1) changeType = 'decreased';
-        else                     changeType = 'unchanged';
-      }
-      return {
-        ...h,
-        isNew: changeType === 'new',
-        changeType,
-        changePct,
-        pctOfPortfolio: totalValue > 0 ? (h.value / totalValue) * 100 : 0,
-      };
-    });
-
-    // Positions held last quarter but gone this quarter (fully exited)
-    const currentKeys = new Set(current.flatMap(h => [h.cusip, h.name.toUpperCase()].filter(Boolean)));
-    const exited = (previous ?? [])
-      .filter(h => !currentKeys.has(h.cusip) && !currentKeys.has(h.name.toUpperCase()))
-      .map(h => ({ ...h, changeType: 'exited', changePct: -100, isNew: false, pctOfPortfolio: 0 }));
-
-    const newCount       = withFlags.filter(h => h.changeType === 'new').length;
-    const increasedCount = withFlags.filter(h => h.changeType === 'increased').length;
-    const decreasedCount = withFlags.filter(h => h.changeType === 'decreased').length;
+    const compared = compare13FHoldings(current, previous, latestFiling);
 
     res.json({
       fund: name,
       meta: {
-        filingDate: latestFiling.filingDate,
-        period: latestFiling.period,
-        totalValue,
-        positionCount: current.length,
-        newCount,
-        increasedCount,
-        decreasedCount,
-        exitedCount: exited.length,
+        filingDate: compared.filingDate,
+        period: compared.period,
+        totalValue: compared.totalValue,
+        positionCount: compared.positionCount,
+        newCount: compared.newCount,
+        increasedCount: compared.increasedCount,
+        decreasedCount: compared.decreasedCount,
+        exitedCount: compared.exitedCount,
       },
-      current: withFlags,
-      exited,
+      current: compared.currentWithFlags,
+      exited: compared.exited,
       previous: previous ? previous.map(h => ({ name: h.name, cusip: h.cusip, shares: h.shares, value: h.value })) : null,
     });
   } catch (err) {

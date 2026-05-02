@@ -41,6 +41,31 @@ interface HoldingsResponse {
   previous: { name: string; cusip: string; shares: number; value: number }[] | null;
 }
 
+interface FundChangeItem {
+  name: string;
+  cusip: string;
+  value: number;
+  shares: number;
+  changeType: Holding['changeType'];
+  changePct: number;
+  putCall: string | null;
+  sector: string | null;
+}
+
+interface BigFundChange {
+  cik: string;
+  fund: string;
+  filingDate: string;
+  period: string;
+  totalValue: number;
+  positionCount: number;
+  newCount: number;
+  increasedCount: number;
+  decreasedCount: number;
+  exitedCount: number;
+  topChanged: FundChangeItem[];
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmt(n: number): string {
@@ -392,16 +417,15 @@ export default function FundsPage() {
   const [tab, setTab] = useState<'all' | 'long' | 'options' | 'new' | 'exited'>('all');
   const [navigatingIdx, setNavigatingIdx] = useState<number | null>(null);
   const [largeOnly, setLargeOnly] = useState(false);
-  const [filingDays, setFilingDays] = useState(14);
   const navigate = useNavigate();
 
-  const { data: recentFilingsData } = useQuery({
-    queryKey: ['13f-recent-filings', filingDays],
+  const { data: bigFundChangesData } = useQuery({
+    queryKey: ['13f-big-fund-changes'],
     queryFn: async () => {
-      const res = await fetch(`/api/13f/recent-filings?days=${filingDays}`);
-      return res.json() as Promise<{ filings: { name: string; cik: string; filedDate: string }[] }>;
+      const res = await fetch('/api/13f/big-fund-changes?limit=18');
+      return res.json() as Promise<{ funds: BigFundChange[]; trackedFundUniverse: number; generatedAt: string }>;
     },
-    staleTime: 6 * 60 * 60 * 1000, // 6h — same as server TTL
+    staleTime: 24 * 60 * 60 * 1000,
   });
 
   useEffect(() => {
@@ -475,11 +499,11 @@ export default function FundsPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
             <Briefcase size={20} color="var(--accent-blue-light)" />
             <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.02em' }}>
-              13F Fund Holdings
+              Big Fund Filing Changes
             </h1>
           </div>
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-            Search any institutional fund · SEC EDGAR 13F-HR filings · latest positions
+            Track 13F changes from major managers. Search any filer for detail.
           </p>
         </div>
 
@@ -653,86 +677,95 @@ export default function FundsPage() {
           </>
         )}
 
-        {/* Recent 13F filings — landing page (no fund selected, no query) */}
+        {/* Big fund filing changes landing page */}
         {!selectedFund && !debouncedQuery && (
           <div style={{ marginTop: 24 }}>
             <div style={{ marginBottom: 14 }}>
               <p style={{ margin: '0 0 2px', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.01em' }}>
-                Recent 13F Filings
+                Big Fund Filing Changes
               </p>
               <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-                Latest institutional disclosures · SEC EDGAR · click any fund to load holdings
+                Latest 13F changes from major managers. New, added, reduced, and exited positions only.
               </p>
             </div>
 
-            {/* Skeleton while loading */}
-            {!recentFilingsData && (
+            {!bigFundChangesData && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {Array.from({ length: 8 }).map((_, i) => (
-                  <div key={i} className="animate-pulse" style={{ height: 44, borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', opacity: 0.8 - i * 0.08 }} />
+                  <div key={i} className="animate-pulse" style={{ height: 88, borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', opacity: 0.8 - i * 0.08 }} />
                 ))}
               </div>
             )}
 
-            {recentFilingsData && recentFilingsData.filings.length === 0 && (
+            {bigFundChangesData && bigFundChangesData.funds.length === 0 && (
               <div style={{ padding: '20px 0' }}>
                 <p style={{ fontSize: 13, color: 'var(--text-tertiary)', marginBottom: 8 }}>
-                  No 13F filings found in the last {filingDays} days.
+                  No big fund filing changes are available right now.
                 </p>
-                {filingDays < 60 && (
-                  <button
-                    onClick={() => setFilingDays(60)}
-                    style={{ fontSize: 13, color: 'var(--accent-blue-light)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                  >
-                    Search last 60 days →
-                  </button>
-                )}
               </div>
             )}
 
-            {recentFilingsData && recentFilingsData.filings.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                {recentFilingsData.filings.map(f => (
+            {bigFundChangesData && bigFundChangesData.funds.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {bigFundChangesData.funds.map(f => (
                   <button
                     key={f.cik}
-                    onClick={() => { setSelectedFund({ cik: f.cik, name: f.name, lastFiled: f.filedDate }); setQuery(f.name); setTab('all'); }}
+                    onClick={() => { setSelectedFund({ cik: f.cik, name: f.fund, lastFiled: f.filingDate }); setQuery(f.fund); setTab('new'); }}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: 12,
-                      padding: '10px 14px', borderRadius: 10, textAlign: 'left', cursor: 'pointer',
+                      display: 'block', padding: '12px 14px', borderRadius: 10, textAlign: 'left', cursor: 'pointer',
                       background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
                       transition: 'border-color 120ms', width: '100%',
                     }}
                     onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-default)')}
                     onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
                   >
-                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {f.name}
-                    </span>
-                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0 }}>
-                      {f.filedDate}
-                    </span>
-                    <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0, opacity: 0.6 }}>
-                      CIK {f.cik}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>
+                      <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {f.fund}
+                      </span>
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: "'Roboto Mono', monospace", flexShrink: 0 }}>
+                        {f.filingDate}
+                      </span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6, marginBottom: f.topChanged.length ? 9 : 0 }}>
+                      {[
+                        { label: 'New', value: f.newCount, color: '#05B169' },
+                        { label: 'Added', value: f.increasedCount, color: '#05B169' },
+                        { label: 'Reduced', value: f.decreasedCount, color: '#F6465D' },
+                        { label: 'Exited', value: f.exitedCount, color: '#F6465D' },
+                      ].map(stat => (
+                        <div key={stat.label} style={{ minWidth: 0 }}>
+                          <span style={{ display: 'block', fontSize: 9, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>{stat.label}</span>
+                          <span style={{ display: 'block', fontSize: 13, color: stat.color, fontFamily: "'Roboto Mono', monospace", fontWeight: 800 }}>{stat.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {f.topChanged.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                        {f.topChanged.slice(0, 4).map((item, i) => {
+                          const color = item.changeType === 'new' || item.changeType === 'increased' ? '#05B169' : '#F6465D';
+                          let label = 'EXIT';
+                          if (item.changeType === 'new') label = 'NEW';
+                          else if (item.changeType === 'increased') label = '+' + Math.abs(item.changePct).toFixed(0) + '%';
+                          else if (item.changeType === 'decreased') label = '-' + Math.abs(item.changePct).toFixed(0) + '%';
+                          return (
+                            <span key={item.cusip + '-' + i} style={{ maxWidth: '100%', fontSize: 10, color: 'var(--text-secondary)', background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', borderRadius: 6, padding: '4px 6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              <strong style={{ color, marginRight: 4 }}>{label}</strong>{item.name} {fmt(item.value)}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                   </button>
                 ))}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
-                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: 0 }}>
-                    {recentFilingsData.filings.length} filers · last {filingDays} days · holdings load on demand
-                  </p>
-                  {filingDays < 60 && (
-                    <button
-                      onClick={() => setFilingDays(60)}
-                      style={{ fontSize: 11, color: 'var(--accent-blue-light)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                    >
-                      Show 60 days
-                    </button>
-                  )}
-                </div>
+                <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '4px 0 0' }}>
+                  {bigFundChangesData.funds.length} major managers shown. Tap one for filing detail.
+                </p>
               </div>
             )}
           </div>
         )}
+
       </div>
     </div>
   );
