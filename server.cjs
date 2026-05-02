@@ -4593,6 +4593,7 @@ const fundOwnershipByStockInFlight = new Map();
 let bigFundChangesCache = null;
 let bigFundChangesFetch = 0;
 let bigFundChangesInFlight = null;
+let bigFundChangesCacheLimit = 0;
 
 function normalizeIssuerName(value) {
   if (!value) return '';
@@ -5004,7 +5005,7 @@ async function buildBigFundChanges(limit = 18) {
 }
 
 function ensureBigFundChangesCache(limit, force = false) {
-  if (!force && bigFundChangesCache && isCacheFresh(bigFundChangesFetch, FUND_HOLDINGS_TTL)) {
+  if (!force && bigFundChangesCache && bigFundChangesCacheLimit >= limit && isCacheFresh(bigFundChangesFetch, FUND_HOLDINGS_TTL)) {
     return Promise.resolve(bigFundChangesCache);
   }
   if (bigFundChangesInFlight) return bigFundChangesInFlight;
@@ -5012,6 +5013,7 @@ function ensureBigFundChangesCache(limit, force = false) {
     .then((payload) => {
       bigFundChangesCache = payload;
       bigFundChangesFetch = Date.now();
+      bigFundChangesCacheLimit = limit;
       return payload;
     })
     .catch((err) => {
@@ -5044,10 +5046,10 @@ app.get('/api/13f/recent-filings', async (req, res) => {
 app.get('/api/13f/big-fund-changes', async (req, res) => {
   const limit = Math.min(KNOWN_FUNDS.length, Math.max(6, Number(req.query.limit) || 18));
   try {
-    if (bigFundChangesCache && isCacheFresh(bigFundChangesFetch, FUND_HOLDINGS_TTL)) {
+    if (bigFundChangesCache && bigFundChangesCacheLimit >= limit && isCacheFresh(bigFundChangesFetch, FUND_HOLDINGS_TTL)) {
       return res.json(bigFundChangesCache);
     }
-    if (bigFundChangesCache) {
+    if (bigFundChangesCache && bigFundChangesCacheLimit >= limit) {
       void ensureBigFundChangesCache(limit, true);
       return res.json(bigFundChangesCache);
     }
