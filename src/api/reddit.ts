@@ -19,6 +19,9 @@ export interface RedditTrendItem {
   mentions24hAgo: number | null;
   mentionChange: number | null;
   mentionChangePct: number | null;
+  mentions48hAgo: number | null;
+  mentionChange48h: number | null;
+  mentionChange48hPct: number | null;
   mentionChange7dPct: number | null;
   velocityScore: number;
   price: {

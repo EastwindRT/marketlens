@@ -5339,8 +5339,10 @@ function scheduleRepeatingTask(label, intervalMs, task) {
 
 const NEWS_AGENT_ENABLED = process.env.NEWS_AGENT_ENABLED !== '0';
 const NEWS_SCHEMA_VERSION = 1;
-const REDDIT_TRENDS_SCHEMA_VERSION = 1;
+const REDDIT_TRENDS_SCHEMA_VERSION = 2;
 const REDDIT_TRENDS_TTL = 10 * 60 * 1000;
+const REDDIT_SNAPSHOT_MIN_GAP_MS = 30 * 60 * 1000;
+const REDDIT_SNAPSHOT_RETENTION_MS = 72 * 60 * 60 * 1000;
 const REDDIT_SUPPORTED_FILTERS = new Set([
   'all',
   'all-stocks',
@@ -5382,6 +5384,9 @@ function normalizeApeTrend(item) {
   const rank24hAgo = item?.rank_24h_ago == null ? null : normalizeApeNumber(item.rank_24h_ago);
   const mentionChange = mentions24hAgo == null ? null : mentions - mentions24hAgo;
   const mentionChangePct = mentions24hAgo && mentions24hAgo > 0 ? (mentionChange / mentions24hAgo) * 100 : null;
+  const mentions48hAgo = null;
+  const mentionChange48h = null;
+  const mentionChange48hPct = null;
   const mentionChange7dPct = null;
   const velocityScore = Math.max(0, Math.min(100, Math.round(
     Math.log10(Math.max(mentions, 1)) * 24
@@ -5399,6 +5404,9 @@ function normalizeApeTrend(item) {
     mentions24hAgo,
     mentionChange,
     mentionChangePct,
+    mentions48hAgo,
+    mentionChange48h,
+    mentionChange48hPct,
     mentionChange7dPct,
     velocityScore,
   };
@@ -5635,6 +5643,57 @@ async function buildRedditConfirmationMap(symbols, playerId) {
   return map;
 }
 
+async function addReddit48hSpikeData(filter, items) {
+  if (!hasNewsDb() || !items.length) return items;
+
+  const key = `reddit_trend_snapshots_${filter}`;
+  const now = Date.now();
+  try {
+    const existing = await getAppSetting(key);
+    const snapshots = Array.isArray(existing?.snapshots)
+      ? existing.snapshots.filter((snapshot) => Number.isFinite(Number(snapshot?.ts)))
+      : [];
+
+    const targetTs = now - (48 * 60 * 60 * 1000);
+    const baseline = snapshots
+      .filter((snapshot) => Number(snapshot.ts) <= now - (36 * 60 * 60 * 1000))
+      .sort((a, b) => Math.abs(Number(a.ts) - targetTs) - Math.abs(Number(b.ts) - targetTs))[0] || null;
+    const baselineItems = baseline?.items && typeof baseline.items === 'object' ? baseline.items : null;
+
+    const enriched = items.map((item) => {
+      const baselineMentions = baselineItems?.[item.ticker];
+      const mentions48hAgo = Number.isFinite(Number(baselineMentions)) ? Number(baselineMentions) : null;
+      const mentionChange48h = mentions48hAgo == null ? null : item.mentions - mentions48hAgo;
+      const mentionChange48hPct = mentions48hAgo && mentions48hAgo > 0 ? (mentionChange48h / mentions48hAgo) * 100 : null;
+      return {
+        ...item,
+        mentions48hAgo,
+        mentionChange48h,
+        mentionChange48hPct,
+      };
+    });
+
+    const latestSnapshot = snapshots[snapshots.length - 1];
+    const shouldSave = !latestSnapshot || now - Number(latestSnapshot.ts) >= REDDIT_SNAPSHOT_MIN_GAP_MS;
+    if (shouldSave) {
+      const currentItems = {};
+      for (const item of items) currentItems[item.ticker] = item.mentions;
+      const nextSnapshots = [
+        ...snapshots.filter((snapshot) => now - Number(snapshot.ts) <= REDDIT_SNAPSHOT_RETENTION_MS),
+        { ts: now, items: currentItems },
+      ].slice(-96);
+      setAppSetting(key, { snapshots: nextSnapshots }).catch((err) => {
+        console.warn('[reddit-trends/snapshot-save]', err.message);
+      });
+    }
+
+    return enriched;
+  } catch (err) {
+    console.warn('[reddit-trends/48h-snapshot]', err.message);
+    return items;
+  }
+}
+
 async function buildRedditTrendsPayload(filter, page, limit, playerId = '') {
   const safeFilter = REDDIT_SUPPORTED_FILTERS.has(filter) ? filter : 'all-stocks';
   const safePage = Math.min(20, Math.max(1, page));
@@ -5663,13 +5722,14 @@ async function buildRedditTrendsPayload(filter, page, limit, playerId = '') {
   }));
 
   const enrichedMap = new Map(enrichedTop.map((item) => [item.ticker, item]));
-  const results = baseResults.map((item) => enrichedMap.get(item.ticker) || {
+  const resultsWithout48h = baseResults.map((item) => enrichedMap.get(item.ticker) || {
     ...item,
     price: { last: null, changePct1d: null },
     latestNews: null,
     buyPressure: classifyBuyPressure(buyPressureMap.get(item.ticker)),
     confirmation: emptyRedditConfirmation(),
   });
+  const results = await addReddit48hSpikeData(safeFilter, resultsWithout48h);
 
   return {
     schemaVersion: REDDIT_TRENDS_SCHEMA_VERSION,
@@ -5680,7 +5740,7 @@ async function buildRedditTrendsPayload(filter, page, limit, playerId = '') {
     generatedAt: new Date().toISOString(),
     source: 'ApeWisdom',
     results,
-    note: 'Velocity score blends mention count, upvotes, and 24h mention acceleration. Confirmation uses TARS news, insider, 13D/13G, congress, portfolio, and watchlist data.',
+    note: 'Velocity score blends mention count, upvotes, and 24h mention acceleration. 48h spike uses TARS snapshots and appears after enough history is collected.',
   };
 }
 

@@ -18,6 +18,8 @@ const FILTERS: Array<{ id: RedditTrendFilter; label: string }> = [
   { id: 'SPACs', label: 'SPACs' },
 ];
 
+type SpikeWindow = '24h' | '48h';
+
 function formatNumber(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '-';
   return new Intl.NumberFormat([], { maximumFractionDigits: 0 }).format(value);
@@ -80,8 +82,10 @@ function SignalPill({ label, tone = 'neutral' }: { label: string; tone?: 'hot' |
   );
 }
 
-function TrendRow({ item, quote }: { item: RedditTrendItem; quote?: Quote }) {
-  const mentionTone = (item.mentionChangePct ?? 0) >= 50 || item.velocityScore >= 70 ? 'hot' : 'neutral';
+function TrendRow({ item, quote, spikeWindow }: { item: RedditTrendItem; quote?: Quote; spikeWindow: SpikeWindow }) {
+  const spikePct = spikeWindow === '48h' ? item.mentionChange48hPct : item.mentionChangePct;
+  const spikeChange = spikeWindow === '48h' ? item.mentionChange48h : item.mentionChange;
+  const mentionTone = (spikePct ?? 0) >= 50 || item.velocityScore >= 70 ? 'hot' : 'neutral';
   const buyTone = item.buyPressure.net === 'buy' ? 'good' : item.buyPressure.net === 'sell' ? 'bad' : 'neutral';
   const price = quote
     ? { last: quote.c, changePct1d: quote.dp }
@@ -91,11 +95,11 @@ function TrendRow({ item, quote }: { item: RedditTrendItem; quote?: Quote }) {
     <article className="grid md:grid-cols-[112px_minmax(0,1.2fr)_120px_150px_minmax(190px,0.95fr)_minmax(210px,1fr)] gap-3 md:gap-4" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)', alignItems: 'start' }}>
       <div>
         <p style={{ margin: '0 0 5px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 800, color: 'var(--text-tertiary)' }}>Mention Spike</p>
-        <p style={{ margin: 0, fontSize: 18, fontWeight: 900, color: pctTone(item.mentionChangePct) }}>
-          {formatSpikePct(item.mentionChangePct)}
+        <p style={{ margin: 0, fontSize: 18, fontWeight: 900, color: pctTone(spikePct) }}>
+          {formatSpikePct(spikePct)}
         </p>
         <p style={{ margin: '3px 0 0', fontSize: 12, fontWeight: 700, color: pctTone(item.mentionChange7dPct) }}>
-          7D {formatSpikePct(item.mentionChange7dPct)}
+          {spikeWindow.toUpperCase()} window
         </p>
         <p style={{ margin: '5px 0 0', fontSize: 11, color: 'var(--text-tertiary)' }}>
           velocity {item.velocityScore}/100
@@ -112,7 +116,7 @@ function TrendRow({ item, quote }: { item: RedditTrendItem; quote?: Quote }) {
         <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 8 }}>
           <SignalPill label={`${formatNumber(item.mentions)} mentions`} tone={mentionTone} />
           <SignalPill label={`${formatNumber(item.upvotes)} upvotes`} />
-          <SignalPill label={item.mentionChange == null ? 'No 24h base' : `${item.mentionChange > 0 ? '+' : ''}${formatNumber(item.mentionChange)} vs 24h`} tone={mentionTone} />
+          <SignalPill label={spikeChange == null ? `${spikeWindow} base building` : `${spikeChange > 0 ? '+' : ''}${formatNumber(spikeChange)} vs ${spikeWindow}`} tone={mentionTone} />
         </div>
       </div>
 
@@ -168,6 +172,7 @@ function TrendRow({ item, quote }: { item: RedditTrendItem; quote?: Quote }) {
 export default function RedditTrendsPage() {
   const player = useLeagueStore((state) => state.player);
   const [filter, setFilter] = useState<RedditTrendFilter>('all-stocks');
+  const [spikeWindow, setSpikeWindow] = useState<SpikeWindow>('24h');
   const [query, setQuery] = useState('');
   const { data, error, isLoading, isFetching, dataUpdatedAt } = useRedditTrends({ filter, limit: 60, playerId: player?.id });
 
@@ -201,15 +206,27 @@ export default function RedditTrendsPage() {
         <DataStatus updatedAt={generatedAt} refreshing={isFetching} />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 12 }}>
-        {FILTERS.map((option) => {
-          const active = filter === option.id;
-          return (
-            <button key={option.id} onClick={() => setFilter(option.id)} style={{ padding: '7px 11px', borderRadius: 999, border: `1px solid ${active ? 'rgba(247,147,26,0.45)' : 'var(--border-default)'}`, background: active ? 'rgba(247,147,26,0.13)' : 'var(--bg-elevated)', color: active ? '#F7931A' : 'var(--text-secondary)', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
-              {option.label}
-            </button>
-          );
-        })}
+      <div className="flex flex-wrap items-center justify-between gap-2" style={{ marginBottom: 12 }}>
+        <div className="flex flex-wrap items-center gap-2">
+          {FILTERS.map((option) => {
+            const active = filter === option.id;
+            return (
+              <button key={option.id} onClick={() => setFilter(option.id)} style={{ padding: '7px 11px', borderRadius: 999, border: `1px solid ${active ? 'rgba(247,147,26,0.45)' : 'var(--border-default)'}`, background: active ? 'rgba(247,147,26,0.13)' : 'var(--bg-elevated)', color: active ? '#F7931A' : 'var(--text-secondary)', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-1" style={{ padding: 3, borderRadius: 999, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+          {(['24h', '48h'] as const).map((window) => {
+            const active = spikeWindow === window;
+            return (
+              <button key={window} onClick={() => setSpikeWindow(window)} style={{ padding: '6px 11px', borderRadius: 999, border: 'none', background: active ? '#F7931A' : 'transparent', color: active ? '#fff' : 'var(--text-secondary)', fontSize: 12, fontWeight: 900, cursor: 'pointer' }}>
+                {window} Spike
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-[1fr_160px_160px_160px_160px] gap-2" style={{ marginBottom: 14 }}>
@@ -267,7 +284,7 @@ export default function RedditTrendsPage() {
             <span>Convergence</span>
             <span>News Catalyst</span>
           </div>
-          {filteredResults.map((item) => <TrendRow key={`${item.rank}-${item.ticker}`} item={item} quote={quoteMap[item.ticker]} />)}
+          {filteredResults.map((item) => <TrendRow key={`${item.rank}-${item.ticker}`} item={item} quote={quoteMap[item.ticker]} spikeWindow={spikeWindow} />)}
         </div>
       )}
 
