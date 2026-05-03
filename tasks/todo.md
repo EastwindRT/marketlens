@@ -1167,3 +1167,10 @@ Make MarketLens/TARS feel fast, clean, mobile-friendly, and agent-friendly by ce
 - [x] `src/pages/InsiderActivity.tsx`, `src/pages/Congress.tsx`, and `src/pages/Funds.tsx` - added route, controls, list, and row landmarks for agent traversal.
 - [x] `src/hooks/useStockData.ts` - memoized the deduped quote-symbol set and quote map in `useStockQuotes`.
 - [x] `npm run build` passed cleanly after the full pass.
+
+### Shipped slice 3 (2026-05-02)
+- [x] `server.cjs` - rebalanced convergence dashboard scoring so News is supporting confirmation instead of the dominant rank driver.
+- [x] `server.cjs` - increased ranking weight for Reddit/social acceleration, X curated-account trends, insider activity, and 13D/G ownership filings.
+- [x] `server.cjs` - added cached 13D/G ownership-filing contribution to the dashboard's `ownershipFilings` signal bucket.
+- [x] `server.cjs` - reordered signal processing so trend/insider/ownership reasons are more likely to lead the row summary, with news behind them.
+- [x] `node --check server.cjs` and `npm run build` passed cleanly.

@@ -7271,7 +7271,7 @@ app.get('/api/x-social/trends', async (req, res) => {
   }
 });
 
-const CONVERGENCE_DASHBOARD_SCHEMA_VERSION = 1;
+const CONVERGENCE_DASHBOARD_SCHEMA_VERSION = 2;
 const CONVERGENCE_DASHBOARD_TTL = 3 * 60 * 1000;
 let convergenceDashboardCache = null;
 let convergenceDashboardFetch = 0;
@@ -7371,26 +7371,21 @@ async function buildConvergenceDashboardPayload({ limit = 80 } = {}) {
     }),
   ]);
 
-  for (const item of newsItems) {
-    const tickers = Array.isArray(item.affected_tickers) ? item.affected_tickers.slice(0, 6) : [];
-    for (const ticker of tickers) {
-      const row = convergenceRow(rowMap, ticker);
-      const score = Math.min(24, Math.max(6, Number(item.impact_score || 0) * 2));
-      bumpConvergence(
-        row,
-        'news',
-        score,
-        `${item.impact_score || 0}/10`,
-        `${item.impact_score || 0}/10 news: ${item.summary || item.headline}`,
-        { type: 'news', title: item.headline, source: item.source, url: item.url, publishedAt: item.published_at, score: item.impact_score }
-      );
-    }
-  }
+  const ownershipCandidateSymbols = [
+    ...(redditPayload.results || []).slice(0, 40).map((item) => item.ticker),
+    ...(xPayload.results || []).slice(0, 40).map((item) => item.symbol),
+    ...(insiderRows || []).slice(0, 80).map((item) => item.symbol || item.ticker),
+    ...newsItems.flatMap((item) => Array.isArray(item.affected_tickers) ? item.affected_tickers.slice(0, 4) : []),
+  ];
+  const ownershipBySymbol = await buildCachedOwnershipMapForSymbols(ownershipCandidateSymbols).catch((err) => {
+    notes.push(`13D/G unavailable: ${err.message}`);
+    return new Map();
+  });
 
   for (const item of redditPayload.results || []) {
     const row = convergenceRow(rowMap, item.ticker);
     const pct = Number(item.mentionChangePct);
-    const score = Math.min(22, Math.max(4, Math.round((Number(item.velocityScore || 0) / 100) * 14 + Math.max(0, Math.min(200, pct || 0)) / 25)));
+    const score = Math.min(30, Math.max(6, Math.round((Number(item.velocityScore || 0) / 100) * 18 + Math.max(0, Math.min(240, pct || 0)) / 20)));
     bumpConvergence(
       row,
       'reddit',
@@ -7405,7 +7400,7 @@ async function buildConvergenceDashboardPayload({ limit = 80 } = {}) {
   for (const item of xPayload.results || []) {
     const row = convergenceRow(rowMap, item.symbol);
     const pct = Number(item.mentionChangePct);
-    const score = Math.min(20, Math.max(5, Math.round((item.uniqueAccounts || 0) * 3 + Math.min(8, item.mentions || 0))));
+    const score = Math.min(24, Math.max(6, Math.round((item.uniqueAccounts || 0) * 4 + Math.min(10, item.mentions || 0))));
     bumpConvergence(
       row,
       'x',
@@ -7421,7 +7416,7 @@ async function buildConvergenceDashboardPayload({ limit = 80 } = {}) {
     const row = convergenceRow(rowMap, symbol);
     const amount = Number(filing.totalValue || filing.amount || 0);
     const isBuy = String(filing.type || filing.transactionCode || '').toUpperCase().includes('BUY') || String(filing.type || '').toUpperCase() === 'P';
-    const score = Math.min(18, Math.max(5, Math.round(amount / 150000))) + (isBuy ? 3 : 0);
+    const score = Math.min(30, Math.max(8, Math.round(amount / 100000))) + (isBuy ? 6 : 2);
     bumpConvergence(
       row,
       'insider',
@@ -7430,6 +7425,37 @@ async function buildConvergenceDashboardPayload({ limit = 80 } = {}) {
       `Insider ${isBuy ? 'buy' : 'sell'}: ${filing.insiderName || filing.insider_name || 'insider'} about $${Math.round(amount / 1000)}K`,
       { type: 'insider', title: `${filing.insiderName || filing.insider_name || 'Insider'} ${symbol}`, url: '/insiders', filedDate: filing.filingDate || filing.filedDate, amount }
     );
+  }
+
+  for (const [symbol, filings] of ownershipBySymbol.entries()) {
+    const row = convergenceRow(rowMap, symbol);
+    const activistCount = filings.filter((filing) => /13D/i.test(filing.formType || '')).length;
+    const latest = filings[0] || {};
+    const score = Math.min(32, (activistCount > 0 ? 26 : 18) + Math.min(6, filings.length * 2));
+    bumpConvergence(
+      row,
+      'ownershipFilings',
+      score,
+      activistCount > 0 ? `${activistCount} 13D` : `${filings.length} 13G`,
+      `${activistCount > 0 ? 'Activist' : 'Ownership'} filing: ${filings.length} recent 13D/G disclosure${filings.length === 1 ? '' : 's'}`,
+      { type: 'ownershipFilings', title: `${symbol} 13D/G ownership filing`, url: '/funds', filedDate: latest.filedDate, score }
+    );
+  }
+
+  for (const item of newsItems) {
+    const tickers = Array.isArray(item.affected_tickers) ? item.affected_tickers.slice(0, 6) : [];
+    for (const ticker of tickers) {
+      const row = convergenceRow(rowMap, ticker);
+      const score = Math.min(14, Math.max(3, Math.round(Number(item.impact_score || 0) * 1.2)));
+      bumpConvergence(
+        row,
+        'news',
+        score,
+        `${item.impact_score || 0}/10`,
+        `Supporting news: ${item.summary || item.headline}`,
+        { type: 'news', title: item.headline, source: item.source, url: item.url, publishedAt: item.published_at, score: item.impact_score }
+      );
+    }
   }
 
   const rows = [...rowMap.values()]

@@ -596,3 +596,11 @@
 **Observation:** The supporting pages were already visually close to the desired direction, but list surfaces still had opportunities to do unnecessary repeated work, especially quote batches and sector enrichment.
 **Root cause:** A clean interface can still feel slow if each row or filter creates extra request/render churn. The fastest-looking design is undermined by fragmented fetch topology.
 **Rule:** In convergence-heavy screens, preserve the ranked layout but cap enrichment fanout, memoize deduped symbol batches, and keep route-level data fresh without forcing every row to behave like its own mini app.
+
+---
+
+## Lesson: 2026-05-02 - Convergence ranking should treat news as confirmation, not the default lead
+
+**Observation:** News can dominate a convergence score because it is frequent and already impact-scored, but that makes the dashboard feel like a news ranking instead of a cross-source alpha surface.
+**Root cause:** The score weights were too similar across news, trend, social, insider, and ownership signals, and news was processed first, so it often became both the highest contributor and the summary lead.
+**Rule:** Rank convergence around scarce/behavioral signals first: social acceleration, insider activity, and 13D/G ownership filings. Let news confirm or explain those moves, but cap its standalone contribution so it lands as the third or fourth signal rather than the default driver.
