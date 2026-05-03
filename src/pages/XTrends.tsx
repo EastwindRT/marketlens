@@ -62,6 +62,8 @@ function Pill({ label, accent = false }: { label: string; accent?: boolean }) {
 function TrendRow({ item, quote }: { item: XTrendItem; quote?: { c?: number; dp?: number } }) {
   return (
     <article
+      data-agent-section="x-trend-row"
+      data-symbol={item.symbol}
       className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_130px_120px_140px] gap-2 md:gap-4"
       style={{
         padding: '10px 11px',
@@ -142,7 +144,7 @@ export default function XTrendsPage() {
   const mentionCount = filteredResults.reduce((sum, item) => sum + item.mentions, 0);
 
   return (
-    <div className="px-2.5 sm:px-4 md:px-8 pt-3 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
+    <div data-agent-section="x-trends-page" className="px-2.5 sm:px-4 md:px-8 pt-3 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
       <div className="flex items-start justify-between gap-3" style={{ marginBottom: 10 }}>
         <div>
           <div className="flex items-center gap-2">
@@ -156,7 +158,7 @@ export default function XTrendsPage() {
         <DataStatus updatedAt={generatedAt} refreshing={isFetching} />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 8 }}>
+      <div data-agent-section="x-trends-window-controls" className="flex flex-wrap items-center gap-2" style={{ marginBottom: 8 }}>
         {WINDOWS.map((option) => {
           const active = hours === option.hours;
           return (
@@ -180,7 +182,7 @@ export default function XTrendsPage() {
         })}
       </div>
 
-      <div className="grid grid-cols-[1fr_92px_92px] md:grid-cols-[1fr_150px_150px] gap-2" style={{ marginBottom: 10 }}>
+      <div data-agent-section="x-trends-summary" className="grid grid-cols-[1fr_92px_92px] md:grid-cols-[1fr_150px_150px] gap-2" style={{ marginBottom: 10 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, padding: '0 12px' }}>
           <Search size={15} style={{ color: 'var(--text-tertiary)' }} />
           <input
@@ -221,7 +223,7 @@ export default function XTrendsPage() {
           <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--text-tertiary)' }}>Run the X poll from admin or widen the time window.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-1 gap-2" style={{ alignItems: 'stretch' }}>
+        <div data-agent-section="x-trends-list" className="grid grid-cols-2 md:grid-cols-1 gap-2" style={{ alignItems: 'stretch' }}>
           <div className="hidden md:grid" style={{ gridTemplateColumns: 'minmax(0,1fr) 130px 120px 140px', gap: 16, padding: '0 16px 8px', color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 900, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
             <span>Ticker</span>
             <span>Price</span>

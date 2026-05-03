@@ -118,10 +118,10 @@ export default function StockDetail() {
   ];
 
   return (
-    <div className="flex flex-col" style={{ minHeight: '100%', background: 'var(--bg-primary)' }}>
+    <div data-agent-section="stock-detail-page" data-symbol={symbol} className="flex flex-col" style={{ minHeight: '100%', background: 'var(--bg-primary)' }}>
 
       {/* ── Price Header ── */}
-      <div className="px-4 md:px-8 pt-5 md:pt-8 pb-4 md:pb-6" style={{ background: 'var(--bg-primary)' }}>
+      <div data-agent-section="stock-price-header" className="px-4 md:px-8 pt-5 md:pt-8 pb-4 md:pb-6" style={{ background: 'var(--bg-primary)' }}>
         {quoteLoading || profileLoading ? (
           <PriceHeaderSkeleton />
         ) : (
@@ -189,6 +189,7 @@ export default function StockDetail() {
 
       {/* ── Chart Controls ── */}
       <div
+        data-agent-section="stock-chart-controls"
         style={{ borderTop: '1px solid var(--border-subtle)' }}
       >
         {/* Scrollable row on mobile, flex-wrap on desktop */}
@@ -272,7 +273,7 @@ export default function StockDetail() {
       </div>
 
       {/* ── Chart ── */}
-      <div style={{ background: 'var(--bg-primary)' }}>
+      <div data-agent-section="stock-chart" style={{ background: 'var(--bg-primary)' }}>
         <ChartWithResponsiveHeight
           key={symbol}
           data={candles || []}
@@ -289,6 +290,7 @@ export default function StockDetail() {
 
       {/* ── Stats Cards ── */}
       <div
+        data-agent-section="stock-market-stats"
         className="px-4 md:px-8 py-4 md:py-6"
         style={{ borderTop: '1px solid var(--border-subtle)' }}
       >
@@ -300,7 +302,7 @@ export default function StockDetail() {
         </div>
       </div>
 
-      <div className="px-4 md:px-8 pb-4">
+      <div data-agent-section="stock-signal-summary" className="px-4 md:px-8 pb-4">
         <SignalSummaryPanel
           symbol={symbol}
           currency={currency}
@@ -321,7 +323,7 @@ export default function StockDetail() {
       </div>
 
       {/* ── Insider Panel ── */}
-      <div className="px-4 md:px-8 pb-4">
+      <div data-agent-section="stock-insider-panel" className="px-4 md:px-8 pb-4">
         <InsiderPanel
           symbol={symbol}
           transactions={insiders || []}
@@ -333,7 +335,7 @@ export default function StockDetail() {
         />
       </div>
 
-      <div className="px-4 md:px-8 pb-4">
+      <div data-agent-section="stock-filings-panel" className="px-4 md:px-8 pb-4">
         <RecentFilingsPanel
           symbol={symbol}
           isCanadian={isCanadian}
@@ -344,7 +346,7 @@ export default function StockDetail() {
       </div>
 
       {/* ── Ask AI Chat ── */}
-      <div className="px-4 md:px-8 pb-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+      <div data-agent-section="stock-ai-analysis" className="px-4 md:px-8 pb-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
         <StockAIChat
           symbol={symbol}
           context={{
@@ -383,13 +385,13 @@ export default function StockDetail() {
 
       {/* ── Peer Comparison ── */}
       {!isCanadian && (
-        <div className="px-4 md:px-8 pb-2">
+        <div data-agent-section="stock-peer-comparison" className="px-4 md:px-8 pb-2">
           <PeerComparison symbol={symbol} />
         </div>
       )}
 
       {/* ── Market Signals (News / Analyst / 13D Filings) ── */}
-      <div className="px-4 md:px-8 pb-10">
+      <div data-agent-section="stock-market-signals" className="px-4 md:px-8 pb-10">
         <NewsSection
           symbol={symbol}
           isCanadian={isCanadian}

@@ -5,10 +5,11 @@ import type { ConvergenceSignal } from '../../api/news';
 export function ConvergenceCard({ signals, note }: { signals: ConvergenceSignal[]; note?: string | null }) {
   return (
     <section
+      data-agent-section="alerts-convergence"
       style={{
         background: 'var(--bg-surface)',
         border: '1px solid var(--border-subtle)',
-        borderRadius: 18,
+        borderRadius: 8,
         padding: 18,
       }}
     >
@@ -32,6 +33,8 @@ export function ConvergenceCard({ signals, note }: { signals: ConvergenceSignal[
         <div style={{ display: 'grid', gap: 10 }}>
           {signals.map((signal) => (
             <div
+              data-agent-section="alerts-convergence-signal"
+              data-symbol={signal.symbol}
               key={signal.symbol}
               style={{
                 border: '1px solid var(--border-subtle)',

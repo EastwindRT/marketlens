@@ -2,16 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "tars-dev",
+      "name": "marketlens",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 5173
-    },
-    {
-      "name": "tars-prod",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["server.cjs"],
-      "port": 3000
     }
   ]
 }

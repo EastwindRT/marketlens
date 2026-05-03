@@ -9,6 +9,8 @@ import { FilterChips } from '../components/news/FilterChips';
 import { DataStatus } from '../components/ui/DataStatus';
 import { useNewsImpact } from '../hooks/useNewsImpact';
 
+const MAX_SECTOR_PROFILE_LOOKUPS = 30;
+
 function ShellCard({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div
@@ -178,7 +180,7 @@ export default function NewsImpactPage() {
   const items = data?.items ?? [];
 
   const primaryTickers = useMemo(
-    () => [...new Set(items.map((item) => item.affectedTickers[0]).filter(Boolean))] as string[],
+    () => ([...new Set(items.map((item) => item.affectedTickers[0]).filter(Boolean))] as string[]).slice(0, MAX_SECTOR_PROFILE_LOOKUPS),
     [items]
   );
 
@@ -241,7 +243,7 @@ export default function NewsImpactPage() {
   );
 
   return (
-    <div className="px-3 sm:px-4 md:px-8 pt-4 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
+    <div data-agent-section="news-impact-page" className="px-3 sm:px-4 md:px-8 pt-4 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
 
       {/* Header */}
       <div className="flex items-start justify-between gap-3" style={{ marginBottom: 14 }}>
@@ -258,12 +260,12 @@ export default function NewsImpactPage() {
       </p>
 
       {/* Filter chips */}
-      <div style={{ marginBottom: 10 }}>
+      <div data-agent-section="news-category-filters" style={{ marginBottom: 10 }}>
         <FilterChips value={category} onChange={setCategory} />
       </div>
 
       {/* Controls row */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+      <div data-agent-section="news-controls" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         {([{ id: 1 as const, label: '24H' }, { id: 7 as const, label: '7D' }]).map((option) => {
           const active = days === option.id;
           return (
@@ -302,6 +304,7 @@ export default function NewsImpactPage() {
       </div>
 
       <div
+        data-agent-section="news-summary-metrics"
         className="hidden md:grid"
         style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 18 }}
       >
@@ -375,10 +378,11 @@ export default function NewsImpactPage() {
         </div>
       ) : (
         <div
+          data-agent-section="news-impact-list"
           style={{
             background: 'var(--bg-surface)',
             border: '1px solid var(--border-subtle)',
-            borderRadius: 18,
+            borderRadius: 8,
             overflow: 'hidden',
           }}
         >
@@ -410,6 +414,8 @@ export default function NewsImpactPage() {
               return (
                 <article
                   key={item.id}
+                  data-agent-section="news-impact-row"
+                  data-symbols={item.affectedTickers.join(',')}
                   style={{
                     display: 'grid',
                     gridTemplateColumns: 'minmax(0, 1.8fr) 100px 140px 120px',
@@ -465,7 +471,7 @@ export default function NewsImpactPage() {
               const tone = scoreTone(item.impactScore);
               const sector = item.sector || (item.affectedTickers.length > 0 ? 'Unknown sector' : 'Market-wide');
               return (
-                <article key={item.id} style={{ padding: '13px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+                <article key={item.id} data-agent-section="news-impact-card" data-symbols={item.affectedTickers.join(',')} style={{ padding: '13px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
                   {/* Score badge + headline */}
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, minWidth: 0 }}>
                     <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 44, padding: '4px 7px', borderRadius: 8, background: tone.background, color: tone.color, border: `1px solid ${tone.border}`, fontSize: 11, fontWeight: 800 }}>

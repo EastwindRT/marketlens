@@ -82,7 +82,7 @@ export default function AgentAlertsPage() {
   const convergenceSignals = convergence.data?.signals ?? [];
 
   return (
-    <div className="px-4 md:px-8 pt-5 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
+    <div data-agent-section="agent-alerts-page" className="px-4 md:px-8 pt-5 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
       <div className="flex items-start justify-between gap-4" style={{ marginBottom: 18 }}>
         <div>
           <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
@@ -100,6 +100,7 @@ export default function AgentAlertsPage() {
       </div>
 
       <div
+        data-agent-section="alerts-summary-metrics"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
@@ -161,7 +162,7 @@ export default function AgentAlertsPage() {
           </p>
         </div>
       ) : (
-        <div style={{ display: 'grid', gap: 16 }}>
+        <div data-agent-section="alerts-evidence-stack" style={{ display: 'grid', gap: 12 }}>
           <ConvergenceCard signals={convergenceSignals} note={convergence.data?.note} />
           <MacroCalendarCard events={macroEvents} note={macroNote} />
           <BriefingCard alert={alert} />

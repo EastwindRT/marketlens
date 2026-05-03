@@ -1,0 +1,24 @@
+# MarketLens / TARS agent guide
+
+MarketLens is a stock-research terminal centered on convergence: where news, social attention, insider activity, congress disclosures, fund/ownership filings, macro events, portfolio context, and watchlists overlap.
+
+Primary routes:
+- `/dashboard`: convergence command center. Start here for ranked ticker setups.
+- `/stock/:symbol`: stock detail for a ticker.
+- `/news-impact`: scored market-moving headlines and source evidence.
+- `/alerts`: personalized briefing, macro events, convergence alerts, and material filings.
+- `/reddit-trends`: Reddit attention with price/news/filing confirmation.
+- `/x-trends`: curated X/social ticker trends when enabled.
+- `/insiders`: insider activity.
+- `/congress`: congressional trading disclosures.
+- `/funds`: fund and ownership changes.
+
+How to inspect:
+- Use `/dashboard` first, then open `/stock/:symbol` for detail.
+- Ticker links use predictable `/stock/:symbol` anchors.
+- Key UI regions may expose `data-agent-section` attributes.
+- Freshness appears through the `DataStatus` label near page headers.
+- Treat color as supporting context only; read labels, scores, source counts, and summaries.
+
+Core decision question:
+What changed, why does it matter, and which ticker should be inspected next?

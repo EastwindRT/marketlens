@@ -356,9 +356,9 @@ export default function Portfolio() {
         <div className="flex items-center gap-3">
           <div
             className="w-10 h-10 rounded-2xl flex items-center justify-center text-base font-bold"
-            style={{ background: player.avatar_color, color: '#fff' }}
+            style={{ background: player.avatar_color || 'var(--accent-blue)', color: '#fff' }}
           >
-            {player.name[0].toUpperCase()}
+            {(player.display_name || player.name || '?')[0].toUpperCase()}
           </div>
           <div>
             <h1 className="font-bold text-lg" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>

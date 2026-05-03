@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { finnhub } from '../api/finnhub';
 import { tmx, fetchYahooCandles } from '../api/tmx';
@@ -138,16 +139,22 @@ function getStockQuoteQueryOptions(symbol: string) {
 }
 
 export function useStockQuotes(symbols: string[]) {
-  const uniqueSymbols = [...new Set(symbols.filter(Boolean).map((symbol) => symbol.toUpperCase()))];
+  const uniqueSymbols = useMemo(
+    () => [...new Set(symbols.filter(Boolean).map((symbol) => symbol.toUpperCase()))],
+    [symbols],
+  );
 
   const results = useQueries({
     queries: uniqueSymbols.map((symbol) => getStockQuoteQueryOptions(symbol)),
   });
 
-  const quoteMap = uniqueSymbols.reduce<Record<string, Quote | undefined>>((acc, symbol, index) => {
-    acc[symbol] = results[index]?.data ?? undefined;
-    return acc;
-  }, {});
+  const quoteMap = useMemo(
+    () => uniqueSymbols.reduce<Record<string, Quote | undefined>>((acc, symbol, index) => {
+      acc[symbol] = results[index]?.data ?? undefined;
+      return acc;
+    }, {}),
+    [results, uniqueSymbols],
+  );
 
   return {
     quoteMap,

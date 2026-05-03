@@ -1102,3 +1102,68 @@ Add the backend foundation for low-cost X/Twitter market trend polling on an 8-h
 - [ ] Run `supabase_migration_x_social.sql` in Supabase.
 - [ ] Flip `app_settings.twitter_enabled` to `true` after the key/account list is ready.
 - [ ] Merge X trend metrics into the Social/Reddit Trends UI.
+
+---
+
+## Plan: Convergence-first fast design and agent-friendly UX (2026-05-02)
+
+### Goal
+Make MarketLens/TARS feel fast, clean, mobile-friendly, and agent-friendly by centering the product around data convergence rather than separate feed browsing.
+
+### Product direction
+- "Bloomberg-like" means fast to scan and decision-oriented, not visually crammed or heavy.
+- The alpha is the interaction of all the data: news, Reddit/X, insiders, congress, funds, ownership filings, macro, portfolio, and watchlist context colliding into ranked convergence signals.
+- The main user question should be: what changed, why does it matter, and which ticker should I inspect next?
+
+### Design principles
+- Keep the UI clean and calm: fewer oversized cards, less decorative copy, tighter but readable spacing, and consistent surfaces.
+- Use density only where comparison matters, especially ranked convergence rows and market/event tapes.
+- Keep color semantic: urgency, confidence, up/down, and source type. Avoid decorative color themes that distract from signal reading.
+- Make mobile a first-class research surface: compact cards, horizontal filter chips, readable metadata, and clear ticker actions.
+- Preserve speed by avoiding unnecessary per-row fetches, huge first payloads, and heavy initial bundles.
+
+### Agent-friendly requirements
+- Add or maintain `public/llms.txt` with route purposes and agent navigation guidance.
+- Add stable `data-agent-section` attributes to core page regions.
+- Keep ticker links predictable as `/stock/:symbol`.
+- Make freshness visible through `DataStatus`.
+- Do not hide important meaning behind color-only labels or unlabeled icons.
+- Prefer normalized convergence payloads and stable route structure over making agents infer meaning from visual layout.
+
+### Proposed build order
+- [ ] Define the convergence row/card contract: `Ticker`, `Score`, `Why now`, `Sources`, `Recency`, `Watchlist/portfolio relevance`, and primary action.
+- [ ] Redesign `/dashboard` first as the core convergence command center.
+- [ ] Make `/news-impact`, `/alerts`, `/reddit-trends`, `/x-trends`, `/insiders`, `/congress`, and `/funds` supporting drill-down surfaces, not competing homepages.
+- [ ] Add agent metadata: `llms.txt`, `data-agent-section` markers, and clear route descriptions.
+- [ ] Run a mobile pass after dashboard changes: no squeezed rows, no oversized headers, touch targets remain usable.
+- [ ] Run a performance pass: inspect query fanout, refresh cadence, lazy loading, and list rendering.
+- [ ] Update docs/status after each slice and run `npm run build` before marking implementation shipped.
+
+### Expected user-facing outcome
+- Users land on a fast command center that ranks the most actionable ticker setups by cross-source confirmation.
+- Supporting pages help explain the source evidence without forcing users to manually combine every feed.
+- Agents can navigate, summarize, and reason over the app structure more reliably.
+
+### Shipped slice 1 (2026-05-02)
+- [x] `src/pages/Dashboard.tsx` - added a top convergence signal strip so the strongest setup is visible before the full table.
+- [x] `src/pages/Dashboard.tsx` - added quick filters for all rows, 70+ score, multi-source, and fresh 24H signals.
+- [x] `src/pages/Dashboard.tsx` - made desktop/mobile rows show source count, recency, and top contributing signal labels more directly.
+- [x] `src/pages/Dashboard.tsx` - added stable `data-agent-section` markers on the dashboard, controls, top signal, table, and row surfaces.
+- [x] `public/llms.txt` - added an agent guide with route purposes, inspection guidance, and the core convergence decision question.
+- [x] `npm run build` passed cleanly.
+
+### Next slice
+- [x] Add the same agent section markers to `/news-impact`, `/alerts`, `/reddit-trends`, and stock detail.
+- [x] Extend agent markers to `/x-trends`, `/insiders`, `/congress`, and `/funds`.
+- [x] Run a performance-safe pass on quote batching and News sector enrichment.
+- [x] Review app routing in browser on desktop and mobile. Note: local Supabase config forces the login wall, so authenticated dashboard layout still needs an interactive signed-in visual review.
+- [ ] Consider moving more convergence context into the backend payload if the UI still has to infer too much from source labels.
+
+### Shipped slice 2 (2026-05-02)
+- [x] `src/pages/NewsImpact.tsx` - added agent landmarks for page, controls, metrics, list, desktop rows, and mobile cards; capped sector profile enrichment to 30 symbols to avoid list-level fanout.
+- [x] `src/pages/AgentAlerts.tsx` and alert components - added landmarks for summary metrics, convergence, macro calendar, briefing, and insider filing evidence.
+- [x] `src/pages/RedditTrends.tsx` and `src/pages/XTrends.tsx` - added landmarks for controls, summaries, lists, and row-level ticker records.
+- [x] `src/pages/StockDetail.tsx` - added section landmarks for price header, chart, stats, signal summary, filings, AI analysis, peers, and market signals.
+- [x] `src/pages/InsiderActivity.tsx`, `src/pages/Congress.tsx`, and `src/pages/Funds.tsx` - added route, controls, list, and row landmarks for agent traversal.
+- [x] `src/hooks/useStockData.ts` - memoized the deduped quote-symbol set and quote map in `useStockQuotes`.
+- [x] `npm run build` passed cleanly after the full pass.

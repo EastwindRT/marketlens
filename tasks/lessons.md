@@ -572,3 +572,27 @@
 **Observation:** X can be useful for market chatter, but broad search is noisy and can become expensive quickly.
 **Root cause:** Public social APIs charge or throttle around reads, and real signal requires comparing current mentions against prior windows.
 **Rule:** Start with curated accounts, poll on a slow predictable cadence, store raw posts/mentions, and derive 24h/7d trends from the database rather than repeatedly re-querying the provider.
+
+---
+
+## Lesson: 2026-05-02 - Bloomberg-like means faster convergence, not heavier density
+
+**Observation:** The desired design direction is not a crowded terminal clone; it is a clean, fast surface where the interaction of data sources becomes obvious.
+**Root cause:** Separate feeds make users and agents do the hard work manually. The alpha comes from convergence across news, social, filings, congress, funds, macro, portfolio, and watchlist context.
+**Rule:** Design the main experience around ranked convergence first. Keep supporting feeds as drill-down evidence, make mobile layouts readable, and expose stable agent-friendly structure so both humans and agents can answer: what changed, why does it matter, and which ticker should I inspect next?
+
+---
+
+## Lesson: 2026-05-02 - Agent-friendly UI starts with stable landmarks
+
+**Observation:** The dashboard already linked to an agent guide, but without a real `llms.txt` and stable section markers, agents still had to infer the app structure from visual layout.
+**Root cause:** Human-readable pages are not automatically machine-navigable. Agents need predictable routes, region labels, ticker links, and freshness cues.
+**Rule:** When improving an agent-facing product, add lightweight structural landmarks as part of the UI pass. `llms.txt`, `data-agent-section`, stable ticker routes, and visible freshness make the same page easier for humans and agents without adding visual clutter.
+
+---
+
+## Lesson: 2026-05-02 - UI performance work should reduce fanout before changing visuals
+
+**Observation:** The supporting pages were already visually close to the desired direction, but list surfaces still had opportunities to do unnecessary repeated work, especially quote batches and sector enrichment.
+**Root cause:** A clean interface can still feel slow if each row or filter creates extra request/render churn. The fastest-looking design is undermined by fragmented fetch topology.
+**Rule:** In convergence-heavy screens, preserve the ranked layout but cap enrichment fanout, memoize deduped symbol batches, and keep route-level data fresh without forcing every row to behave like its own mini app.

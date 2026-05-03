@@ -149,7 +149,7 @@ export default function InsiderActivityPage() {
   }[marketTab];
 
   return (
-    <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 40px' }}>
+    <div data-agent-section="insider-activity-page" style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 40px' }}>
       <div style={{ maxWidth: 860, margin: '0 auto' }}>
         <div style={{ marginBottom: 20 }}>
           <h1 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -161,7 +161,7 @@ export default function InsiderActivityPage() {
           <DataStatus refreshing={isFetching} updatedAt={updatedAt} />
         </div>
 
-        <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+        <div data-agent-section="insider-activity-tabs" style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
           {([
             { id: 'us', label: 'US Insiders' },
             { id: 'ca-insiders', label: 'CA Insiders' },
@@ -185,7 +185,7 @@ export default function InsiderActivityPage() {
           ))}
         </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+        <div data-agent-section="insider-activity-controls" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
           <SegmentedControl<PeriodMode>
             value={periodMode}
             onChange={setPeriodMode}
@@ -237,7 +237,7 @@ export default function InsiderActivityPage() {
         </div>
 
         {overview && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, marginBottom: 16 }}>
+          <div data-agent-section="insider-activity-summary" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, marginBottom: 16 }}>
             <OverviewCard label="Market Read" value={formatSignalLabel(overview.market.signal)} tone={overview.market.signal} />
             <OverviewCard label="Net Flow" value={formatLargeNumber(overview.market.netValue)} tone={overview.market.netValue >= 0 ? 'net_buy' : 'net_sell'} />
             <OverviewCard label="Buy Value" value={formatLargeNumber(overview.market.buyValue)} tone="net_buy" />
@@ -313,7 +313,7 @@ export default function InsiderActivityPage() {
               <DataStatus refreshing={isFetching} updatedAt={updatedAt} />
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div data-agent-section="insider-activity-list" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {trades.map((trade) => {
                 const isBuy = trade.type === 'BUY';
                 const isOther = trade.type === 'OTHER';
@@ -323,6 +323,8 @@ export default function InsiderActivityPage() {
 
                 return (
                   <button
+                    data-agent-section="insider-activity-row"
+                    data-symbol={trade.symbol}
                     key={trade.id}
                     onClick={() => navigate(`/stock/${trade.symbol}`)}
                     style={{

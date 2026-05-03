@@ -32,6 +32,7 @@ export function InsiderFilingsTable({ filings, watchlistSymbols }: InsiderFiling
   if (filings.length === 0) {
     return (
       <div
+        data-agent-section="insider-filings-empty"
         style={{
           background: 'var(--bg-surface)',
           border: '1px solid var(--border-subtle)',
@@ -51,10 +52,11 @@ export function InsiderFilingsTable({ filings, watchlistSymbols }: InsiderFiling
 
   return (
     <div
+      data-agent-section="insider-filings"
       style={{
         background: 'var(--bg-surface)',
         border: '1px solid var(--border-subtle)',
-        borderRadius: 18,
+        borderRadius: 8,
         overflow: 'hidden',
       }}
     >
@@ -94,7 +96,7 @@ export function InsiderFilingsTable({ filings, watchlistSymbols }: InsiderFiling
               const highlighted = watchlistSymbols.includes(filing.ticker.toUpperCase());
               const tone = filingTone(filing.type);
               return (
-                <tr key={filing.accessionNo} style={{ borderTop: '1px solid var(--border-subtle)', background: highlighted ? 'rgba(45, 107, 255, 0.06)' : 'transparent' }}>
+                <tr key={filing.accessionNo} data-agent-section="insider-filing-row" data-symbol={filing.ticker} style={{ borderTop: '1px solid var(--border-subtle)', background: highlighted ? 'rgba(45, 107, 255, 0.06)' : 'transparent' }}>
                   <td style={{ padding: '14px 18px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <Link to={`/stock/${filing.ticker}`} style={{ color: 'var(--text-primary)', fontSize: 13, fontWeight: 700, textDecoration: 'none' }}>
@@ -144,6 +146,8 @@ export function InsiderFilingsTable({ filings, watchlistSymbols }: InsiderFiling
           return (
             <div
               key={filing.accessionNo}
+              data-agent-section="insider-filing-card"
+              data-symbol={filing.ticker}
               style={{
                 border: `1px solid ${highlighted ? 'rgba(45, 107, 255, 0.24)' : 'var(--border-subtle)'}`,
                 background: highlighted ? 'rgba(45, 107, 255, 0.06)' : 'var(--bg-elevated)',

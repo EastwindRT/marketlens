@@ -340,7 +340,7 @@ function HoldingsTable({ holdings, navigateToStock, navigatingIdx }: {
   }
 
   return (
-    <div style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', overflow: 'hidden', marginBottom: 8 }}>
+    <div data-agent-section="fund-holdings-list" style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', overflow: 'hidden', marginBottom: 8 }}>
       {/* Header */}
       <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 90px 90px 70px 70px', padding: '9px 14px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)' }}>
         {['#', 'Company', 'Value', 'Shares', '% Port', 'Change'].map(h => (
@@ -353,6 +353,7 @@ function HoldingsTable({ holdings, navigateToStock, navigatingIdx }: {
         const isNavigating = navigatingIdx === i;
         return (
           <div
+            data-agent-section="fund-holding-row"
             key={`${h.cusip}-${i}`}
             onClick={() => navigateToStock(h, i)}
             style={{
@@ -491,7 +492,7 @@ export default function FundsPage() {
   }
 
   return (
-    <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 80px' }}>
+    <div data-agent-section="funds-page" style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 80px' }}>
       <div style={{ maxWidth: 860, margin: '0 auto' }}>
 
         {/* Header */}
@@ -508,7 +509,7 @@ export default function FundsPage() {
         </div>
 
         {/* Search */}
-        <div style={{ position: 'relative', marginBottom: selectedFund ? 0 : 8 }}>
+        <div data-agent-section="fund-search" style={{ position: 'relative', marginBottom: selectedFund ? 0 : 8 }}>
           <Search size={14} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
           <input
             value={query}
@@ -529,7 +530,7 @@ export default function FundsPage() {
 
         {/* Search results */}
         {!selectedFund && debouncedQuery.length >= 2 && (searchData?.funds ?? []).length > 0 && (
-          <div style={{ marginBottom: 24, borderRadius: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', overflow: 'hidden' }}>
+          <div data-agent-section="fund-search-results" style={{ marginBottom: 24, borderRadius: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', overflow: 'hidden' }}>
             {(searchData?.funds ?? []).map((f, i) => (
               <button
                 key={f.cik}
@@ -599,7 +600,7 @@ export default function FundsPage() {
             {!holdingsLoading && holdingsData && holdingsData.current.length > 0 && (
               <>
                 {/* Stat cards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10, margin: '20px 0 24px' }}>
+                  <div data-agent-section="fund-summary-metrics" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10, margin: '20px 0 24px' }}>
                   {[
                     { label: 'Total Value',  value: fmt(meta?.totalValue ?? 0),                        color: 'var(--text-primary)' },
                     { label: 'Positions',    value: (meta?.positionCount ?? 0).toLocaleString(),        color: 'var(--text-primary)' },
@@ -619,7 +620,7 @@ export default function FundsPage() {
                 <SectorBreakdown holdings={holdingsData.current} />
 
                 {/* Tabs */}
-                <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+                  <div data-agent-section="fund-holdings-controls" style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
                   {([
                     { key: 'all',     label: `All (${holdingsData.current.length})` },
                     { key: 'long',    label: `Long (${longCount})` },

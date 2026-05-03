@@ -92,7 +92,7 @@ function TrendRow({ item, quote, spikeWindow }: { item: RedditTrendItem; quote?:
     : item.price;
 
   return (
-    <article className="grid md:grid-cols-[112px_minmax(0,1.2fr)_120px_150px_minmax(190px,0.95fr)_minmax(210px,1fr)] gap-3 md:gap-4" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)', alignItems: 'start' }}>
+    <article data-agent-section="reddit-trend-row" data-symbol={item.ticker} className="grid md:grid-cols-[112px_minmax(0,1.2fr)_120px_150px_minmax(190px,0.95fr)_minmax(210px,1fr)] gap-3 md:gap-4" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)', alignItems: 'start' }}>
       <div>
         <p style={{ margin: '0 0 5px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 800, color: 'var(--text-tertiary)' }}>Mention Spike</p>
         <p style={{ margin: 0, fontSize: 18, fontWeight: 900, color: pctTone(spikePct) }}>
@@ -192,7 +192,7 @@ export default function RedditTrendsPage() {
   const convergenceCount = filteredResults.filter((item) => item.confirmation.score >= 40).length;
 
   return (
-    <div className="px-3 sm:px-4 md:px-8 pt-4 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
+    <div data-agent-section="reddit-trends-page" className="px-3 sm:px-4 md:px-8 pt-4 md:pt-8 pb-8" style={{ background: 'var(--bg-primary)', minHeight: '100%' }}>
       <div className="flex items-start justify-between gap-3" style={{ marginBottom: 14 }}>
         <div>
           <div className="flex items-center gap-2">
@@ -206,7 +206,7 @@ export default function RedditTrendsPage() {
         <DataStatus updatedAt={generatedAt} refreshing={isFetching} />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2" style={{ marginBottom: 12 }}>
+      <div data-agent-section="reddit-trends-controls" className="flex flex-wrap items-center justify-between gap-2" style={{ marginBottom: 12 }}>
         <div className="flex flex-wrap items-center gap-2">
           {FILTERS.map((option) => {
             const active = filter === option.id;
@@ -229,7 +229,7 @@ export default function RedditTrendsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_160px_160px_160px_160px] gap-2" style={{ marginBottom: 14 }}>
+      <div data-agent-section="reddit-trends-summary" className="grid grid-cols-1 md:grid-cols-[1fr_160px_160px_160px_160px] gap-2" style={{ marginBottom: 14 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, padding: '0 12px' }}>
           <Search size={15} style={{ color: 'var(--text-tertiary)' }} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by ticker or company" style={{ flex: 1, minWidth: 0, height: 42, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: 13 }} />
@@ -275,7 +275,7 @@ export default function RedditTrendsPage() {
           <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--text-tertiary)' }}>Try a broader subreddit filter or clear the ticker search.</p>
         </div>
       ) : (
-        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 18, overflow: 'hidden' }}>
+        <div data-agent-section="reddit-trends-list" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 8, overflow: 'hidden' }}>
           <div className="hidden md:grid" style={{ gridTemplateColumns: '112px minmax(0,1.2fr) 120px 150px minmax(190px,0.95fr) minmax(210px,1fr)', gap: 16, padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 900, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
             <span>Change</span>
             <span>Reddit Flow</span>

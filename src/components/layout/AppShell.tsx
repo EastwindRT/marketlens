@@ -1,8 +1,9 @@
 import { ReactNode, useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Newspaper, Building2, Menu, CircleDollarSign, Bell } from 'lucide-react';
+import { Newspaper, Building2, Menu, CircleDollarSign, Bell, User } from 'lucide-react';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
+import { useLeagueStore } from '../../store/leagueStore';
 
 interface AppShellProps {
   children: ReactNode;
@@ -81,12 +82,14 @@ export default function AppShell({ children }: AppShellProps) {
 
 function MobileBottomNav({ onMenuClick }: { onMenuClick: () => void }) {
   const location = useLocation();
+  const player = useLeagueStore((state) => state.player);
 
   const navItems = [
     { to: '/news-impact', icon: <Newspaper size={20} />, label: 'News'     },
     { to: '/alerts',      icon: <Bell size={20} />, label: 'Alerts'        },
     { to: '/insiders',    icon: <CircleDollarSign size={20} />, label: 'Insider' },
     { to: '/congress',    icon: <Building2 size={20} />, label: 'Congress' },
+    ...(player ? [{ to: '/portfolio', icon: <User size={20} />, label: 'Portfolio' }] : []),
   ];
 
   return (

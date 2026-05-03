@@ -50,10 +50,11 @@ export function MacroCalendarCard({
 }) {
   return (
     <section
+      data-agent-section="macro-calendar"
       style={{
         background: 'var(--bg-surface)',
         border: '1px solid var(--border-subtle)',
-        borderRadius: 20,
+        borderRadius: 8,
         padding: 18,
       }}
     >
@@ -104,6 +105,7 @@ export function MacroCalendarCard({
             const tone = importanceTone(event.importance);
             return (
               <article
+                data-agent-section="macro-calendar-event"
                 key={event.id}
                 style={{
                   background: 'var(--bg-primary)',

@@ -117,7 +117,7 @@ export default function CongressPage() {
   }, [rankedMembers, selectedMemberId]);
 
   return (
-    <div style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 80px' }}>
+    <div data-agent-section="congress-page" style={{ minHeight: '100%', background: 'var(--bg-primary)', padding: '28px 16px 80px' }}>
       <div style={{ maxWidth: 860, margin: '0 auto' }}>
         <div style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
@@ -131,7 +131,7 @@ export default function CongressPage() {
           </p>
         </div>
 
-        <div style={{ marginBottom: 28 }}>
+        <div data-agent-section="congress-member-rankings" style={{ marginBottom: 28 }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
             <div>
               <p style={{ margin: '0 0 4px', fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
@@ -168,7 +168,7 @@ export default function CongressPage() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div data-agent-section="congress-controls" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
             <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 360 }}>
               <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
               <input
@@ -504,7 +504,7 @@ export default function CongressPage() {
           </div>
 
           {isLoading && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div data-agent-section="congress-trades-list" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {Array.from({ length: 8 }).map((_, index) => (
                 <div key={index} style={{ height: 60, borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', opacity: 0.6 }} />
               ))}
@@ -537,6 +537,8 @@ export default function CongressPage() {
 
                 return (
                   <div
+                    data-agent-section="congress-trade-row"
+                    data-symbol={trade.ticker}
                     key={`${trade.member}-${trade.ticker}-${trade.transactionDate}-${index}`}
                     style={{
                       display: 'flex',

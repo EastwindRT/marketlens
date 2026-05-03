@@ -20,6 +20,7 @@ export function BriefingCard({ alert }: BriefingCardProps) {
   if (!alert) {
     return (
       <div
+        data-agent-section="watchlist-briefing-empty"
         style={{
           background: 'var(--bg-surface)',
           border: '1px solid var(--border-subtle)',
@@ -39,10 +40,11 @@ export function BriefingCard({ alert }: BriefingCardProps) {
 
   return (
     <div
+      data-agent-section="watchlist-briefing"
       style={{
         background: 'var(--bg-surface)',
         border: '1px solid var(--border-subtle)',
-        borderRadius: 18,
+        borderRadius: 8,
         padding: 20,
       }}
     >

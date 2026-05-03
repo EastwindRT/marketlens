@@ -29,7 +29,17 @@ export function FilterChips({
   options = defaultOptions,
 }: FilterChipsProps) {
   return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+    <div
+      style={{
+        display: 'flex',
+        gap: 8,
+        overflowX: 'auto',
+        WebkitOverflowScrolling: 'touch',
+        scrollbarWidth: 'none',
+        msOverflowStyle: 'none',
+        paddingBottom: 2,
+      }}
+    >
       {options.map((option) => {
         const active = value === option.id;
         return (
@@ -37,6 +47,7 @@ export function FilterChips({
             key={option.id}
             onClick={() => onChange(option.id)}
             style={{
+              flexShrink: 0,
               padding: '8px 14px',
               borderRadius: 999,
               border: `1px solid ${active ? 'var(--accent-blue)' : 'var(--border-default)'}`,
@@ -46,6 +57,7 @@ export function FilterChips({
               fontWeight: 700,
               cursor: 'pointer',
               transition: 'all 140ms ease',
+              whiteSpace: 'nowrap',
             }}
           >
             {option.label}
