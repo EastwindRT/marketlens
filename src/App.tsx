@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import { useEffect, useState, Suspense, lazy } from 'react'
 import type { ComponentType } from 'react'
 import type { Session } from '@supabase/supabase-js'
@@ -298,7 +298,7 @@ export default function App() {
           </div>
         }>
           <Routes>
-            <Route path="/" element={<Navigate to="/news-impact" replace />} />
+            <Route path="/" element={<Dashboard />} />
             <Route path="/stock/:symbol" element={<StockDetail />} />
             <Route path="/search" element={<Search />} />
             <Route path="/dashboard" element={<Dashboard />} />

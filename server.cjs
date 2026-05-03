@@ -7271,6 +7271,290 @@ app.get('/api/x-social/trends', async (req, res) => {
   }
 });
 
+const CONVERGENCE_DASHBOARD_SCHEMA_VERSION = 1;
+const CONVERGENCE_DASHBOARD_TTL = 3 * 60 * 1000;
+let convergenceDashboardCache = null;
+let convergenceDashboardFetch = 0;
+let convergenceDashboardInFlight = null;
+
+function emptyConvergenceSignalBucket() {
+  return {
+    price: { score: 0, label: '-', detail: '' },
+    news: { score: 0, label: '-', detail: '' },
+    reddit: { score: 0, label: '-', detail: '' },
+    x: { score: 0, label: '-', detail: '' },
+    insider: { score: 0, label: '-', detail: '' },
+    congress: { score: 0, label: '-', detail: '' },
+    funds: { score: 0, label: '-', detail: '' },
+    ownershipFilings: { score: 0, label: '-', detail: '' },
+  };
+}
+
+function convergenceRow(map, symbol) {
+  const normalized = normalizeSymbol(symbol);
+  if (!normalized) return null;
+  if (!map.has(normalized)) {
+    map.set(normalized, {
+      symbol: normalized,
+      companyName: '',
+      convergenceScore: 0,
+      summary: '',
+      reasons: [],
+      conflicts: [],
+      signals: emptyConvergenceSignalBucket(),
+      sources: [],
+      updatedAt: null,
+      links: {
+        stock: `/stock/${encodeURIComponent(normalized)}`,
+        news: '/news-impact',
+        reddit: '/reddit-trends',
+        x: '/x-trends',
+        insiders: '/insiders',
+        funds: '/funds',
+      },
+    });
+  }
+  return map.get(normalized);
+}
+
+function bumpConvergence(row, signal, score, label, detail, source = null) {
+  if (!row) return;
+  const safeScore = Math.max(0, Math.round(Number(score) || 0));
+  const current = row.signals[signal] || { score: 0, label: '-', detail: '' };
+  if (safeScore >= current.score) {
+    row.signals[signal] = { score: safeScore, label: label || '-', detail: detail || '' };
+  }
+  if (detail) row.reasons.push(detail);
+  if (source) row.sources.push(source);
+  row.convergenceScore += safeScore;
+  row.updatedAt = new Date().toISOString();
+}
+
+async function fetchDashboardNewsItems() {
+  if (!hasNewsDb()) return [];
+  const cutoff = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await serverSupabase
+    .from('news_items')
+    .select('id, headline, source, published_at, url, impact_score, category, summary, affected_tickers')
+    .gte('published_at', cutoff)
+    .order('impact_score', { ascending: false })
+    .order('published_at', { ascending: false })
+    .limit(80);
+  if (error) throw error;
+  return data || [];
+}
+
+async function buildConvergenceDashboardPayload({ limit = 80 } = {}) {
+  const rowMap = new Map();
+  const generatedAt = new Date().toISOString();
+  const notes = [];
+
+  const [newsItems, redditPayload, xPayload, insiderRows] = await Promise.all([
+    fetchDashboardNewsItems().catch((err) => {
+      notes.push(`News unavailable: ${err.message}`);
+      return [];
+    }),
+    buildRedditTrendsPayload('all-stocks', 1, 40, '').catch((err) => {
+      notes.push(`Reddit unavailable: ${err.message}`);
+      return { results: [] };
+    }),
+    getXSocialTrends({ hours: 24, limit: 80 }).catch((err) => {
+      notes.push(`X unavailable: ${err.message}`);
+      return { results: [] };
+    }),
+    Promise.all([
+      readUsInsiderTradesFromDb(7).catch(() => []),
+      readCaInsiderTradesFromDb(7, 'insiders').catch(() => []),
+    ]).then(([us, ca]) => [...us, ...ca]).catch((err) => {
+      notes.push(`Insiders unavailable: ${err.message}`);
+      return [];
+    }),
+  ]);
+
+  for (const item of newsItems) {
+    const tickers = Array.isArray(item.affected_tickers) ? item.affected_tickers.slice(0, 6) : [];
+    for (const ticker of tickers) {
+      const row = convergenceRow(rowMap, ticker);
+      const score = Math.min(24, Math.max(6, Number(item.impact_score || 0) * 2));
+      bumpConvergence(
+        row,
+        'news',
+        score,
+        `${item.impact_score || 0}/10`,
+        `${item.impact_score || 0}/10 news: ${item.summary || item.headline}`,
+        { type: 'news', title: item.headline, source: item.source, url: item.url, publishedAt: item.published_at, score: item.impact_score }
+      );
+    }
+  }
+
+  for (const item of redditPayload.results || []) {
+    const row = convergenceRow(rowMap, item.ticker);
+    const pct = Number(item.mentionChangePct);
+    const score = Math.min(22, Math.max(4, Math.round((Number(item.velocityScore || 0) / 100) * 14 + Math.max(0, Math.min(200, pct || 0)) / 25)));
+    bumpConvergence(
+      row,
+      'reddit',
+      score,
+      pct == null || !Number.isFinite(pct) ? `${item.mentions} mentions` : `${pct > 0 ? '+' : ''}${pct.toFixed(0)}%`,
+      `Reddit: ${item.mentions} mentions, velocity ${item.velocityScore}/100`,
+      { type: 'reddit', title: `${item.ticker} Reddit trend`, url: '/reddit-trends', score: item.velocityScore }
+    );
+    if (!row.companyName) row.companyName = item.name || item.ticker;
+  }
+
+  for (const item of xPayload.results || []) {
+    const row = convergenceRow(rowMap, item.symbol);
+    const pct = Number(item.mentionChangePct);
+    const score = Math.min(20, Math.max(5, Math.round((item.uniqueAccounts || 0) * 3 + Math.min(8, item.mentions || 0))));
+    bumpConvergence(
+      row,
+      'x',
+      score,
+      pct == null || !Number.isFinite(pct) ? `${item.mentions} posts` : `${pct > 0 ? '+' : ''}${pct.toFixed(0)}%`,
+      `X: ${item.mentions} mentions from ${item.uniqueAccounts} analyst accounts`,
+      { type: 'x', title: `${item.symbol} X trend`, url: '/x-trends', score: item.engagementScore }
+    );
+  }
+
+  for (const filing of (insiderRows || []).slice(0, 80)) {
+    const symbol = filing.symbol || filing.ticker;
+    const row = convergenceRow(rowMap, symbol);
+    const amount = Number(filing.totalValue || filing.amount || 0);
+    const isBuy = String(filing.type || filing.transactionCode || '').toUpperCase().includes('BUY') || String(filing.type || '').toUpperCase() === 'P';
+    const score = Math.min(18, Math.max(5, Math.round(amount / 150000))) + (isBuy ? 3 : 0);
+    bumpConvergence(
+      row,
+      'insider',
+      score,
+      `${isBuy ? 'BUY' : 'SELL'} $${Math.round(amount / 1000)}K`,
+      `Insider ${isBuy ? 'buy' : 'sell'}: ${filing.insiderName || filing.insider_name || 'insider'} about $${Math.round(amount / 1000)}K`,
+      { type: 'insider', title: `${filing.insiderName || filing.insider_name || 'Insider'} ${symbol}`, url: '/insiders', filedDate: filing.filingDate || filing.filedDate, amount }
+    );
+  }
+
+  const rows = [...rowMap.values()]
+    .map((row) => {
+      const sourceCount = Object.values(row.signals).filter((signal) => signal.score > 0).length;
+      const score = Math.min(100, Math.round(row.convergenceScore + Math.max(0, sourceCount - 1) * 8));
+      const sortedReasons = [...new Set(row.reasons)].slice(0, 4);
+      return {
+        ...row,
+        convergenceScore: score,
+        summary: sortedReasons[0] || 'Single-source market signal detected.',
+        reasons: sortedReasons,
+        sourceCount,
+        sources: row.sources.slice(0, 8),
+      };
+    })
+    .filter((row) => row.convergenceScore >= 10)
+    .sort((a, b) => b.convergenceScore - a.convergenceScore || b.sourceCount - a.sourceCount)
+    .slice(0, Math.min(100, Math.max(10, limit)));
+
+  return {
+    schemaVersion: CONVERGENCE_DASHBOARD_SCHEMA_VERSION,
+    generatedAt,
+    rows,
+    note: notes.length ? notes.join(' | ') : undefined,
+    agent: {
+      summaryEndpoint: '/api/agent/convergence-summary',
+      tickerContextEndpoint: '/api/agent/ticker/{symbol}/context',
+      llms: '/llms.txt',
+    },
+  };
+}
+
+function ensureConvergenceDashboardCache(force = false) {
+  if (!force && convergenceDashboardCache && Date.now() - convergenceDashboardFetch < CONVERGENCE_DASHBOARD_TTL) {
+    return Promise.resolve(convergenceDashboardCache);
+  }
+  if (convergenceDashboardInFlight) return convergenceDashboardInFlight;
+  convergenceDashboardInFlight = buildConvergenceDashboardPayload({ limit: 80 })
+    .then((payload) => {
+      convergenceDashboardCache = payload;
+      convergenceDashboardFetch = Date.now();
+      return payload;
+    })
+    .finally(() => {
+      convergenceDashboardInFlight = null;
+    });
+  return convergenceDashboardInFlight;
+}
+
+app.get('/api/convergence-dashboard', async (req, res) => {
+  try {
+    const limit = Math.min(100, Math.max(10, parseInt(req.query.limit || '60', 10)));
+    const payload = await ensureConvergenceDashboardCache(req.query.refresh === '1');
+    res.json({ ...payload, rows: payload.rows.slice(0, limit) });
+  } catch (err) {
+    console.error('[api/convergence-dashboard]', err.message);
+    res.status(502).json({ schemaVersion: CONVERGENCE_DASHBOARD_SCHEMA_VERSION, generatedAt: new Date().toISOString(), rows: [], error: err.message });
+  }
+});
+
+app.get('/api/agent/convergence-summary', async (req, res) => {
+  try {
+    const limit = Math.min(100, Math.max(10, parseInt(req.query.limit || '60', 10)));
+    const payload = await ensureConvergenceDashboardCache(req.query.refresh === '1');
+    res.json({
+      schemaVersion: CONVERGENCE_DASHBOARD_SCHEMA_VERSION,
+      generatedAt: payload.generatedAt,
+      purpose: 'Agent-readable ranked cross-source market signal convergence.',
+      rows: payload.rows.slice(0, limit),
+      fieldGuide: {
+        convergenceScore: '0-100 rank score built from independent signals and source count.',
+        signals: 'Per-source score, label, and short detail. Higher means stronger signal.',
+        sources: 'Evidence objects with source type, title, URL/path, score, and timestamp when available.',
+      },
+    });
+  } catch (err) {
+    res.status(502).json({ schemaVersion: CONVERGENCE_DASHBOARD_SCHEMA_VERSION, generatedAt: new Date().toISOString(), rows: [], error: err.message });
+  }
+});
+
+app.get('/api/agent/ticker/:symbol/context', async (req, res) => {
+  try {
+    const symbol = normalizeSymbol(req.params.symbol || '');
+    const payload = await ensureConvergenceDashboardCache(false);
+    const row = payload.rows.find((item) => item.symbol === symbol) || null;
+    res.json({
+      schemaVersion: CONVERGENCE_DASHBOARD_SCHEMA_VERSION,
+      generatedAt: payload.generatedAt,
+      symbol,
+      row,
+      uiPath: `/stock/${encodeURIComponent(symbol)}`,
+    });
+  } catch (err) {
+    res.status(502).json({ schemaVersion: CONVERGENCE_DASHBOARD_SCHEMA_VERSION, generatedAt: new Date().toISOString(), error: err.message });
+  }
+});
+
+app.get('/llms.txt', (req, res) => {
+  res.type('text/plain').send(`TARS / MoneyTalks agent interface
+
+Primary purpose:
+TARS aggregates market data, news, SEC filings, insider activity, congress trades, fund changes, Reddit trends, and X analyst chatter into ranked convergence signals.
+
+Agent endpoints:
+- GET /api/agent/convergence-summary
+  Ranked cross-source convergence rows. Start here.
+- GET /api/agent/ticker/{symbol}/context
+  Agent-readable convergence context for one ticker.
+- GET /api/convergence-dashboard
+  Human UI payload for the landing dashboard; same core rows as the agent summary.
+
+Important fields:
+- convergenceScore: 0-100 score based on independent signal alignment.
+- summary: plain-language why-now explanation.
+- signals: per-source score/label/detail for price, news, Reddit, X, insiders, congress, funds, and ownership filings.
+- sources: evidence objects with type, title, link/path, timestamp, and score when available.
+
+Use rules:
+- Treat timestamps and source links as part of the evidence.
+- Separate facts from inference.
+- Prefer ticker context endpoints before asking broad questions about a company.
+`);
+});
+
 app.post('/api/x-social/run-now', async (req, res) => {
   if (!isAdminRequest(req)) {
     return res.status(403).json({ error: 'Admin access required' });

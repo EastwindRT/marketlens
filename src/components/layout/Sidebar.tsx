@@ -311,6 +311,7 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
       )}
 
       {/* ── Market nav — always visible ── */}
+      <NavLink to="/dashboard" icon={<TrendingUp size={14} />} label="Convergence" onClose={onClose} />
       <NavLink to="/news-impact" icon={<Newspaper size={14} />} label="News" onClose={onClose} />
       <NavLink to="/alerts"   icon={<Bell size={14} />}       label="Alerts" onClose={onClose} />
       <NavLink to="/x-trends" icon={<AtSign size={14} />} label="X Trends" onClose={onClose} />
