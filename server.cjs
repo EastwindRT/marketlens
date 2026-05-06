@@ -2509,6 +2509,7 @@ async function buildCaInsiderCache(days, mode) {
 app.get('/api/ca-insider-activity', async (req, res) => {
   const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
   const mode = req.query.mode === 'filings' ? 'filings' : 'insiders'; // insiders=open-market only, filings=all types
+  const force = req.query.force === '1' || req.query.refresh === '1';
   const cacheKey = `${days}-${mode}`;
   const hasCache = Boolean(caInsiderCaches[cacheKey]);
   const isFresh = hasCache && (Date.now() - (caInsiderLastFetch[cacheKey] || 0) <= CA_INSIDER_TTL);
@@ -2523,15 +2524,59 @@ app.get('/api/ca-insider-activity', async (req, res) => {
         const dbFresh = isSyncStateFresh(syncState, CA_INSIDER_TTL);
 
         if (dbTrades.length) {
-          if (!dbFresh) {
-            buildCaInsiderCache(days, mode).catch((err) => {
-              console.error(`[ca-insider-db-refresh:${cacheKey}]`, err.message);
-            });
-            res.setHeader('X-Data-Stale', '1');
+          if (!dbFresh || force) {
+            try {
+              const refreshed = await buildCaInsiderCache(days, mode);
+              const refreshedTrades = refreshed?.trades || [];
+              if (refreshedTrades.length) {
+                return res.json({
+                  trades: refreshedTrades,
+                  overview: buildInsiderOverview(refreshedTrades),
+                  meta: buildInsiderFeedMeta({
+                    market: 'CA',
+                    source: 'TMX/SEDI live refresh',
+                    days,
+                    mode,
+                    trades: refreshedTrades,
+                    syncState: await getMarketDataSyncState(MARKET_DATA_DATASETS.caInsiders(days, mode)).catch(() => null),
+                    stale: false,
+                    refreshed: true,
+                  }),
+                });
+              }
+            } catch (refreshErr) {
+              console.error(`[ca-insider-db-refresh:${cacheKey}]`, refreshErr.message);
+              res.setHeader('X-Data-Stale', '1');
+              return res.json({
+                trades: dbTrades,
+                overview: buildInsiderOverview(dbTrades),
+                meta: buildInsiderFeedMeta({
+                  market: 'CA',
+                  source: 'Supabase stale fallback',
+                  days,
+                  mode,
+                  trades: dbTrades,
+                  syncState,
+                  stale: true,
+                  refreshed: false,
+                  error: refreshErr.message,
+                }),
+              });
+            }
           }
           return res.json({
             trades: dbTrades,
             overview: buildInsiderOverview(dbTrades),
+            meta: buildInsiderFeedMeta({
+              market: 'CA',
+              source: 'Supabase cache',
+              days,
+              mode,
+              trades: dbTrades,
+              syncState,
+              stale: !dbFresh,
+              refreshed: false,
+            }),
           });
         }
       } catch (err) {
@@ -2554,6 +2599,15 @@ app.get('/api/ca-insider-activity', async (req, res) => {
   res.json({
     trades: caInsiderCaches[cacheKey].trades,
     overview: buildInsiderOverview(caInsiderCaches[cacheKey].trades),
+    meta: buildInsiderFeedMeta({
+      market: 'CA',
+      source: 'TMX/SEDI memory cache',
+      days,
+      mode,
+      trades: caInsiderCaches[cacheKey].trades,
+      stale: !isFresh,
+      refreshed: !hasCache || force,
+    }),
   });
 });
 
@@ -2706,6 +2760,29 @@ function buildInsiderOverview(trades) {
       netValue,
     },
     bySymbol,
+  };
+}
+
+function latestFilingDateFromTrades(trades) {
+  return (Array.isArray(trades) ? trades : []).reduce((latest, trade) => {
+    const value = trade?.filingDate || trade?.filedDate || '';
+    return value > latest ? value : latest;
+  }, '');
+}
+
+function buildInsiderFeedMeta({ market, source, days, mode, trades, syncState = null, stale = false, refreshed = false, error = null }) {
+  return {
+    market,
+    source,
+    days,
+    mode: mode || null,
+    latestFilingDate: latestFilingDateFromTrades(trades),
+    rowCount: Array.isArray(trades) ? trades.length : 0,
+    syncedAt: syncState?.synced_at || null,
+    syncRowCount: syncState?.row_count ?? null,
+    stale: Boolean(stale),
+    refreshed: Boolean(refreshed),
+    error: error || null,
   };
 }
 
@@ -2901,6 +2978,7 @@ async function buildInsiderActivityCache(days) {
 app.get('/api/insider-activity', async (req, res) => {
   try {
     const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+    const force = req.query.force === '1' || req.query.refresh === '1';
     if (hasMarketDataDb()) {
       try {
         const [dbTrades, syncState] = await Promise.all([
@@ -2909,17 +2987,61 @@ app.get('/api/insider-activity', async (req, res) => {
         ]);
         const dbFresh = isSyncStateFresh(syncState, INSIDER_ACTIVITY_TTL);
         if (dbTrades.length) {
-          if (!dbFresh) {
-            buildInsiderActivityCache(days).catch((err) => {
-              console.error('[insider-activity-db-refresh]', err.message);
-            });
-            res.setHeader('X-Data-Stale', '1');
+          if (!dbFresh || force) {
+            try {
+              const refreshedTrades = await buildInsiderActivityCache(days);
+              if (refreshedTrades.length) {
+                const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
+                const limitedTrades = refreshedTrades.slice(0, limit);
+                return res.json({
+                  trades: limitedTrades,
+                  overview: buildInsiderOverview(refreshedTrades),
+                  meta: buildInsiderFeedMeta({
+                    market: 'US',
+                    source: 'SEC live refresh',
+                    days,
+                    trades: refreshedTrades,
+                    syncState: await getMarketDataSyncState(MARKET_DATA_DATASETS.usInsiders(days)).catch(() => null),
+                    stale: false,
+                    refreshed: true,
+                  }),
+                });
+              }
+            } catch (refreshErr) {
+              console.error('[insider-activity-db-refresh]', refreshErr.message);
+              res.setHeader('X-Data-Stale', '1');
+              const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
+              const limitedTrades = dbTrades.slice(0, limit);
+              return res.json({
+                trades: limitedTrades,
+                overview: buildInsiderOverview(dbTrades),
+                meta: buildInsiderFeedMeta({
+                  market: 'US',
+                  source: 'Supabase stale fallback',
+                  days,
+                  trades: dbTrades,
+                  syncState,
+                  stale: true,
+                  refreshed: false,
+                  error: refreshErr.message,
+                }),
+              });
+            }
           }
           const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
           const limitedTrades = dbTrades.slice(0, limit);
           return res.json({
             trades: limitedTrades,
             overview: buildInsiderOverview(dbTrades),
+            meta: buildInsiderFeedMeta({
+              market: 'US',
+              source: 'Supabase cache',
+              days,
+              trades: dbTrades,
+              syncState,
+              stale: !dbFresh,
+              refreshed: false,
+            }),
           });
         }
       } catch (err) {
@@ -2944,6 +3066,14 @@ app.get('/api/insider-activity', async (req, res) => {
     res.json({
       trades,
       overview: buildInsiderOverview(insiderActivityCaches[days]),
+      meta: buildInsiderFeedMeta({
+        market: 'US',
+        source: 'SEC memory cache',
+        days,
+        trades: insiderActivityCaches[days],
+        stale: !isFresh,
+        refreshed: !hasCache || force,
+      }),
     });
   } catch (err) {
     console.error('[insider-activity]', err.message);
@@ -4602,6 +4732,12 @@ const KNOWN_FUNDS = [
   { cik: '2045724', name: 'SITUATIONAL AWARENESS LP' },
 ];
 
+const FOCUSED_13F_WATCHLIST = [
+  { cik: '1067983', name: 'BERKSHIRE HATHAWAY INC' },
+  { cik: '2045724', name: 'SITUATIONAL AWARENESS LP' },
+  { cik: '1037389', name: 'RENAISSANCE TECHNOLOGIES LLC' },
+];
+
 const FUND_HOLDINGS_TTL = 24 * 60 * 60 * 1000;
 const fundHoldingsCache = new Map();
 const fundHoldingsInFlight = new Map();
@@ -4957,8 +5093,8 @@ function compare13FHoldings(current, previous, latestFiling) {
   };
 }
 
-async function buildBigFundChanges(limit = 18) {
-  const selectedFunds = KNOWN_FUNDS.slice(0, Math.min(limit, KNOWN_FUNDS.length));
+async function buildBigFundChanges(limit = FOCUSED_13F_WATCHLIST.length) {
+  const selectedFunds = FOCUSED_13F_WATCHLIST.slice(0, Math.min(limit, FOCUSED_13F_WATCHLIST.length));
   const results = [];
   const batchSize = 2;
 
@@ -5016,7 +5152,8 @@ async function buildBigFundChanges(limit = 18) {
   results.sort((a, b) => String(b.filingDate || '').localeCompare(String(a.filingDate || '')));
   return {
     funds: results,
-    trackedFundUniverse: KNOWN_FUNDS.length,
+    trackedFundUniverse: FOCUSED_13F_WATCHLIST.length,
+    watchlist: FOCUSED_13F_WATCHLIST.map((fund) => ({ cik: fund.cik, name: fund.name })),
     generatedAt: new Date().toISOString(),
   };
 }
@@ -5061,7 +5198,7 @@ app.get('/api/13f/recent-filings', async (req, res) => {
 });
 
 app.get('/api/13f/big-fund-changes', async (req, res) => {
-  const limit = Math.min(KNOWN_FUNDS.length, Math.max(6, Number(req.query.limit) || 18));
+  const limit = Math.min(FOCUSED_13F_WATCHLIST.length, Math.max(1, Number(req.query.limit) || FOCUSED_13F_WATCHLIST.length));
   try {
     if (bigFundChangesCache && bigFundChangesCacheLimit >= limit && isCacheFresh(bigFundChangesFetch, FUND_HOLDINGS_TTL)) {
       return res.json(bigFundChangesCache);
@@ -5356,10 +5493,11 @@ function scheduleRepeatingTask(label, intervalMs, task) {
 
 const NEWS_AGENT_ENABLED = process.env.NEWS_AGENT_ENABLED !== '0';
 const NEWS_SCHEMA_VERSION = 1;
-const REDDIT_TRENDS_SCHEMA_VERSION = 2;
+const REDDIT_TRENDS_SCHEMA_VERSION = 3;
 const REDDIT_TRENDS_TTL = 10 * 60 * 1000;
 const REDDIT_SNAPSHOT_MIN_GAP_MS = 30 * 60 * 1000;
 const REDDIT_SNAPSHOT_RETENTION_MS = 72 * 60 * 60 * 1000;
+const SOCIAL_TREND_HISTORY_DAYS = Math.min(30, Math.max(3, parseInt(process.env.SOCIAL_TREND_HISTORY_DAYS || '7', 10) || 7));
 const REDDIT_SUPPORTED_FILTERS = new Set([
   'all',
   'all-stocks',
@@ -5427,6 +5565,146 @@ function normalizeApeTrend(item) {
     mentionChange7dPct,
     velocityScore,
   };
+}
+
+function dateKeyFromIso(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
+  return date.toISOString().slice(0, 10);
+}
+
+function buildMentionTrajectory(history, currentMentions, nowIso = new Date().toISOString()) {
+  const byDate = new Map();
+  for (const point of history || []) {
+    const sampledAt = point.sampledAt || point.sampled_at || point.date || nowIso;
+    const date = dateKeyFromIso(sampledAt);
+    const mentions = Number(point.mentions);
+    if (!Number.isFinite(mentions)) continue;
+    const existing = byDate.get(date);
+    if (!existing || String(sampledAt) >= String(existing.sampledAt)) {
+      byDate.set(date, { date, sampledAt, mentions: Math.max(0, Math.round(mentions)) });
+    }
+  }
+
+  const today = dateKeyFromIso(nowIso);
+  byDate.set(today, { date: today, sampledAt: nowIso, mentions: Math.max(0, Math.round(Number(currentMentions) || 0)) });
+
+  const points = [...byDate.values()]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-SOCIAL_TREND_HISTORY_DAYS)
+    .map(({ date, mentions }) => ({ date, mentions }));
+
+  const last = points[points.length - 1] || { mentions: Math.max(0, Math.round(Number(currentMentions) || 0)) };
+  const prev = points[points.length - 2] || null;
+  const prev3 = points.length >= 4 ? points[points.length - 4] : points[0] || null;
+  const deltas = [];
+  for (let i = 1; i < points.length; i++) deltas.push(points[i].mentions - points[i - 1].mentions);
+  const lastDelta = deltas.length ? deltas[deltas.length - 1] : null;
+  const prevDelta = deltas.length >= 2 ? deltas[deltas.length - 2] : null;
+  const acceleration = lastDelta != null && prevDelta != null ? lastDelta - prevDelta : null;
+  let trendStreakDays = 0;
+  for (let i = deltas.length - 1; i >= 0; i--) {
+    if (deltas[i] > 0) trendStreakDays += 1;
+    else break;
+  }
+  const slope = deltas.length ? deltas.reduce((sum, delta) => sum + delta, 0) / deltas.length : 0;
+  const change1d = prev ? last.mentions - prev.mentions : null;
+  const changePct1d = prev && prev.mentions > 0 ? (change1d / prev.mentions) * 100 : null;
+  const change3d = prev3 && prev3 !== last ? last.mentions - prev3.mentions : null;
+  const changePct3d = prev3 && prev3.mentions > 0 ? (change3d / prev3.mentions) * 100 : null;
+
+  let trendState = 'building';
+  if (points.length >= 3 && lastDelta > 0 && acceleration > 0 && trendStreakDays >= 2) trendState = 'accelerating';
+  else if (lastDelta > 0) trendState = 'growing';
+  else if (lastDelta < 0) trendState = 'fading';
+  else if (lastDelta === 0) trendState = 'steady';
+
+  return {
+    history: points,
+    mentionChange1d: change1d,
+    mentionChangePct1d: changePct1d,
+    mentionChange3d: change3d,
+    mentionChangePct3d: changePct3d,
+    trendStreakDays,
+    slope,
+    acceleration,
+    trendState,
+  };
+}
+
+async function writeSocialTrendSnapshots(source, filter, items) {
+  if (!hasNewsDb() || !Array.isArray(items) || items.length === 0) return;
+  const sampledAt = new Date().toISOString();
+  const settingKey = `social_trend_snapshot_last_${source}_${String(filter || 'default').replace(/[^a-zA-Z0-9:_-]/g, '_')}`;
+  try {
+    const lastSnapshotAt = await getAppSetting(settingKey);
+    const lastMs = lastSnapshotAt ? Date.parse(String(lastSnapshotAt)) : 0;
+    if (Number.isFinite(lastMs) && Date.now() - lastMs < REDDIT_SNAPSHOT_MIN_GAP_MS) return;
+  } catch {}
+
+  const rows = items
+    .slice(0, 120)
+    .map((item) => {
+      const symbol = normalizeSymbol(item.symbol || item.ticker || '');
+      if (!symbol) return null;
+      return {
+        source,
+        filter: String(filter || 'default'),
+        symbol,
+        sampled_at: sampledAt,
+        mentions: Math.max(0, Math.round(Number(item.mentions) || 0)),
+        rank: Number.isFinite(Number(item.rank)) ? Math.round(Number(item.rank)) : null,
+        upvotes: Number.isFinite(Number(item.upvotes)) ? Math.round(Number(item.upvotes)) : null,
+        unique_accounts: Number.isFinite(Number(item.uniqueAccounts)) ? Math.round(Number(item.uniqueAccounts)) : null,
+        engagement_score: Number.isFinite(Number(item.engagementScore)) ? Number(item.engagementScore) : 0,
+        raw: {
+          name: item.name || null,
+          previousMentions: item.previousMentions ?? item.mentions24hAgo ?? null,
+          mentionChange: item.mentionChange ?? null,
+          mentionChangePct: item.mentionChangePct ?? null,
+        },
+      };
+    })
+    .filter(Boolean);
+  if (!rows.length) return;
+
+  try {
+    const { error } = await serverSupabase.from('social_trend_snapshots').insert(rows);
+    if (error) throw error;
+    await setAppSetting(settingKey, sampledAt).catch(() => {});
+  } catch (err) {
+    console.warn(`[social-trend-snapshots/write:${source}]`, err.message);
+  }
+}
+
+async function readSocialTrendHistory(source, filter, symbols, days = SOCIAL_TREND_HISTORY_DAYS) {
+  const normalized = [...new Set((symbols || []).map((symbol) => normalizeSymbol(symbol)).filter(Boolean))].slice(0, 120);
+  if (!hasNewsDb() || normalized.length === 0) return new Map();
+  const since = new Date(Date.now() - Math.max(1, days) * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const { data, error } = await serverSupabase
+      .from('social_trend_snapshots')
+      .select('symbol,sampled_at,mentions')
+      .eq('source', source)
+      .eq('filter', String(filter || 'default'))
+      .in('symbol', normalized)
+      .gte('sampled_at', since)
+      .order('sampled_at', { ascending: true })
+      .limit(5000);
+    if (error) throw error;
+    const map = new Map();
+    for (const row of data || []) {
+      const symbol = normalizeSymbol(row.symbol || '');
+      if (!symbol) continue;
+      const points = map.get(symbol) || [];
+      points.push({ sampledAt: row.sampled_at, mentions: Number(row.mentions) || 0 });
+      map.set(symbol, points);
+    }
+    return map;
+  } catch (err) {
+    console.warn(`[social-trend-snapshots/read:${source}]`, err.message);
+    return new Map();
+  }
 }
 
 async function fetchYahooQuoteBatch(symbols) {
@@ -5746,7 +6024,13 @@ async function buildRedditTrendsPayload(filter, page, limit, playerId = '') {
     buyPressure: classifyBuyPressure(buyPressureMap.get(item.ticker)),
     confirmation: emptyRedditConfirmation(),
   });
-  const results = await addReddit48hSpikeData(safeFilter, resultsWithout48h);
+  await writeSocialTrendSnapshots('reddit', safeFilter, resultsWithout48h);
+  const historyMap = await readSocialTrendHistory('reddit', safeFilter, resultsWithout48h.map((item) => item.ticker));
+  const resultsWithHistory = resultsWithout48h.map((item) => ({
+    ...item,
+    trajectory: buildMentionTrajectory(historyMap.get(item.ticker) || [], item.mentions),
+  }));
+  const results = await addReddit48hSpikeData(safeFilter, resultsWithHistory);
 
   return {
     schemaVersion: REDDIT_TRENDS_SCHEMA_VERSION,
@@ -5757,7 +6041,7 @@ async function buildRedditTrendsPayload(filter, page, limit, playerId = '') {
     generatedAt: new Date().toISOString(),
     source: 'ApeWisdom',
     results,
-    note: 'Velocity score blends mention count, upvotes, and 24h mention acceleration. 48h spike uses TARS snapshots and appears after enough history is collected.',
+    note: 'Velocity score blends mention count, upvotes, and 24h mention acceleration. Trajectory uses TARS daily snapshots and becomes stronger after multiple samples.',
   };
 }
 
@@ -5860,6 +6144,13 @@ async function setAppSetting(key, value) {
 // ── Phase 2: Headline fetchers + dedup + Claude scoring + job ────────────────
 
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY || '';
+const NEWS_SOURCE_MODE = String(process.env.NEWS_SOURCE_MODE || 'alpha').trim().toLowerCase();
+const NEWSAPI_ENABLED = !!NEWSAPI_KEY && isXEnabledValue(process.env.NEWSAPI_ENABLED ?? (NEWS_SOURCE_MODE === 'broad' ? 'true' : 'false'));
+const YAHOO_NEWS_SYMBOLS = (process.env.YAHOO_NEWS_SYMBOLS || '^GSPC,^IXIC,^DJI,NVDA,MSFT,AAPL,AMZN,META,GOOGL,TSLA,AMD,AVGO,PLTR,SHOP,COIN,SMCI,LLY,NVO,JPM,XOM')
+  .split(',')
+  .map((symbol) => symbol.trim().toUpperCase())
+  .filter(Boolean)
+  .slice(0, 40);
 const X_BEARER_TOKEN = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN || '';
 const X_ACCOUNT_USERNAMES = (process.env.X_ACCOUNT_USERNAMES || process.env.TWITTER_ACCOUNT_USERNAMES || '')
   .split(',')
@@ -5868,12 +6159,12 @@ const X_ACCOUNT_USERNAMES = (process.env.X_ACCOUNT_USERNAMES || process.env.TWIT
 const NEWS_SCORING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h — same headline scored at most once/day
 const FINNHUB_NEWS_CATEGORIES = ['general'];
 const MACRO_SCHEMA_VERSION = 1;
-const X_SOCIAL_SCHEMA_VERSION = 1;
+const X_SOCIAL_SCHEMA_VERSION = 2;
 const X_POST_LOOKBACK_HOURS = Math.min(168, Math.max(1, parseInt(process.env.X_POST_LOOKBACK_HOURS || '72', 10) || 72));
-const X_MAX_POSTS_PER_ACCOUNT = Math.min(10, Math.max(5, parseInt(process.env.X_MAX_POSTS_PER_ACCOUNT || '5', 10) || 5));
+const X_MAX_POSTS_PER_ACCOUNT = Math.min(10, Math.max(5, parseInt(process.env.X_MAX_POSTS_PER_ACCOUNT || '10', 10) || 10));
 const X_MAX_ACCOUNTS_PER_POLL = Math.min(300, Math.max(1, parseInt(process.env.X_MAX_ACCOUNTS_PER_POLL || '300', 10) || 300));
 const X_LIST_ID = String(process.env.X_LIST_ID || process.env.TWITTER_LIST_ID || '').trim();
-const X_LIST_MAX_POSTS = Math.min(100, Math.max(5, parseInt(process.env.X_LIST_MAX_POSTS || '25', 10) || 25));
+const X_LIST_MAX_POSTS = Math.min(100, Math.max(5, parseInt(process.env.X_LIST_MAX_POSTS || '75', 10) || 75));
 const X_LIST_SINCE_SETTING_KEY = X_LIST_ID ? `x_list_since_id_${X_LIST_ID}` : 'x_list_since_id';
 const X_RESOLVE_USERS_ON_POLL = isXEnabledValue(process.env.X_RESOLVE_USERS_ON_POLL ?? 'false');
 const DEFAULT_X_ANALYST_ACCOUNTS = [
@@ -5978,12 +6269,33 @@ const NEWS_QUERIES = [
 
 const NEWS_SCORING_SYSTEM_PROMPT = `You are a financial analyst. Does this headline have market impact in the next 30 days? Categories: macro, sector, company, policy, us_politics, canada_macro, trade_policy, geopolitical. For political news, only flag if it plausibly affects interest rates, trade, specific sectors, or currency — otherwise return null. If yes, return ONLY a valid JSON object: {"impact_score":1-10,"category":"...","why":"one sentence","affected_tickers":["..."]}. If no market impact, return the single word null. Be strict — only flag genuinely material news. Never wrap the JSON in markdown.`;
 
+const NEWS_ALPHA_SCORING_SYSTEM_PROMPT = `You are a financial analyst scoring alpha-relevant market catalysts. Return null for generic market recaps, routine politics, celebrity/consumer stories, stale summaries, opinion/listicle content, and headlines without a direct tradable catalyst. Only return JSON when the headline is likely to matter in the next 30 days because it involves one of: M&A/takeover, earnings surprise, guidance change, FDA/clinical/regulatory action, bankruptcy/restructuring, activist/13D/13G stake, insider transaction, buyback/dividend/capital return, major contract/customer loss, lawsuit/investigation, analyst upgrade/downgrade with a clear ticker, short report, sanctions/export controls/tariffs with clear sector or ticker exposure, or unusual macro data that can move rates/currency. Categories: macro, sector, company, policy, us_politics, canada_macro, trade_policy, geopolitical. If yes, return ONLY a valid JSON object: {"impact_score":1-10,"category":"...","why":"one sentence","affected_tickers":["..."]}. If no alpha-relevant market catalyst, return the single word null. Be strict. Never wrap the JSON in markdown.`;
+
+const ALPHA_NEWS_CATALYST_RE = /\b(13d|13g|activist|stake|takes stake|raises stake|cuts stake|insider|form 4|merger|acquisition|takeover|buyout|deal talks|strategic alternatives|ipo|spin[- ]?off|earnings|guidance|forecast|outlook|beats|misses|profit warning|revenue warning|buyback|repurchase|dividend|fda|phase [123]|clinical trial|approval|complete response|bankruptcy|chapter 11|restructuring|creditors|debt|distressed|lawsuit|investigation|probe|settlement|antitrust|sec charges|short report|downgrade|upgrade|price target|initiates coverage|contract|customer|tariff|tariffs|sanctions|export controls|rate decision|inflation|cpi|pce|jobs report|nonfarm|layoffs?)\b/i;
+
+function decodeNewsText(value) {
+  return String(value || '')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isAlphaNewsCandidate(item) {
+  const text = `${item?.headline || ''} ${item?.rawQuery || ''}`;
+  return ALPHA_NEWS_CATALYST_RE.test(text);
+}
+
 function headlineDedupKey(headline, publishedAt) {
   return crypto.createHash('sha1').update(`${headline}||${publishedAt || ''}`).digest('hex');
 }
 
 async function fetchNewsApiHeadlines(query) {
-  if (!NEWSAPI_KEY) return [];
+  if (!NEWSAPI_ENABLED) return [];
   const params = new URLSearchParams({
     q: query.q,
     language: query.language || 'en',
@@ -6012,6 +6324,42 @@ async function fetchNewsApiHeadlines(query) {
     })).filter(a => a.headline && a.headline !== '[Removed]');
   } catch (err) {
     console.warn(`[news-fetch:${query.label}]`, err.message);
+    return [];
+  }
+}
+
+async function fetchYahooFinanceHeadlines() {
+  if (YAHOO_NEWS_SYMBOLS.length === 0) return [];
+  const params = new URLSearchParams({
+    s: YAHOO_NEWS_SYMBOLS.join(','),
+    region: 'US',
+    lang: 'en-US',
+  });
+
+  try {
+    const raw = await httpsGet(`https://feeds.finance.yahoo.com/rss/2.0/headline?${params.toString()}`, {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+      Accept: 'application/rss+xml,application/xml,text/xml,*/*',
+    });
+    const items = [];
+    const itemRe = /<item\b[\s\S]*?<\/item>/gi;
+    let m;
+    while ((m = itemRe.exec(raw)) !== null && items.length < 80) {
+      const block = m[0];
+      const title = decodeNewsText(block.match(/<title>([\s\S]*?)<\/title>/i)?.[1]);
+      const link = decodeNewsText(block.match(/<link>([\s\S]*?)<\/link>/i)?.[1]);
+      const pubDate = decodeNewsText(block.match(/<pubDate>([\s\S]*?)<\/pubDate>/i)?.[1]);
+      const publishedAt = pubDate && !Number.isNaN(Date.parse(pubDate))
+        ? new Date(pubDate).toISOString()
+        : new Date().toISOString();
+      if (title && title !== '[Removed]') {
+        items.push({ headline: title, source: 'Yahoo Finance', publishedAt, url: link || null, rawQuery: 'yahoo:watchlist' });
+      }
+    }
+    console.log(`[news-fetch:yahoo] fetched ${items.length} headlines`);
+    return items;
+  } catch (err) {
+    console.warn('[news-fetch:yahoo]', err.message);
     return [];
   }
 }
@@ -6070,18 +6418,25 @@ async function fetchFinvizHeadlines() {
 
 async function fetchAllHeadlines() {
   const sourceJobs = [
-    ...NEWS_QUERIES.map((q) => fetchNewsApiHeadlines(q)),
+    fetchYahooFinanceHeadlines(),
     ...FINNHUB_NEWS_CATEGORIES.map((category) => fetchFinnhubNewsHeadlines(category)),
     fetchFinvizHeadlines(),
   ];
+  if (NEWSAPI_ENABLED) {
+    sourceJobs.push(...NEWS_QUERIES.map((q) => fetchNewsApiHeadlines(q)));
+  }
   const results = await Promise.allSettled(sourceJobs);
   const all = [];
   for (const r of results) {
     if (r.status === 'fulfilled') all.push(...r.value);
   }
+  const candidates = NEWS_SOURCE_MODE === 'broad' ? all : all.filter(isAlphaNewsCandidate);
+  if (NEWS_SOURCE_MODE !== 'broad' && candidates.length !== all.length) {
+    console.log(`[news-fetch] alpha catalyst gate kept ${candidates.length}/${all.length} headlines`);
+  }
   // dedup by headline text within this batch
   const seen = new Set();
-  return all.filter(a => {
+  return candidates.filter(a => {
     const k = a.headline.toLowerCase().trim();
     if (seen.has(k)) return false;
     seen.add(k);
@@ -6093,7 +6448,7 @@ function buildNewsFeedNote({ minScore, category, days, showAll }) {
   const windowLabel = days === 1 ? '24H' : `${days}D`;
   const scoreLabel = showAll ? 'all scored stories' : `${minScore}+ impact only`;
   const categoryLabel = category && category !== 'all' ? `, ${String(category).replace(/_/g, ' ')}` : '';
-  return `Showing ${windowLabel}, ${scoreLabel}${categoryLabel}. Stories only appear after NewsAPI/Finnhub ingestion, query matching, and Claude market-impact scoring.`;
+  return `Showing ${windowLabel}, ${scoreLabel}${categoryLabel}. Alpha mode prioritizes Yahoo Finance, Finnhub, and Finviz catalyst headlines; broad NewsAPI ingestion is optional and used as context/confirmation.`;
 }
 
 function macroIsoDate(month, day) {
@@ -6286,7 +6641,7 @@ async function scoreHeadlineWithClaude(headline, source, publishedAt) {
   const userPrompt = `Headline: "${headline}"\nSource: ${source}\nPublished: ${publishedAt}`;
   let tokensUsed = 0;
   try {
-    const { answer, usage } = await callClaudeRaw(NEWS_SCORING_SYSTEM_PROMPT, userPrompt, {
+    const { answer, usage } = await callClaudeRaw(NEWS_ALPHA_SCORING_SYSTEM_PROMPT, userPrompt, {
       model: CLAUDE_MODEL_PRESET,
       maxTokens: 200,
       temperature: 0.1,
@@ -6349,10 +6704,6 @@ let newsImpactJobRunning = false;
 
 async function runNewsImpactJob() {
   if (!NEWS_AGENT_ENABLED) return { written: 0, skipped: 0, tokensUsed: 0 };
-  if (!NEWSAPI_KEY && !FINNHUB_KEY) {
-    console.warn('[news-impact-job] NEWSAPI_KEY and FINNHUB_KEY not set — skipping');
-    return { written: 0, skipped: 0, tokensUsed: 0 };
-  }
   if (newsImpactJobRunning) {
     console.log('[news-impact-job] already running, skipping');
     return { written: 0, skipped: 0, tokensUsed: 0 };
@@ -7129,12 +7480,20 @@ async function getXSocialTrends({ hours = 24, limit = 100 } = {}) {
     .order('posted_at', { ascending: false })
     .limit(5000);
   if (error) throw error;
+  const summarized = summarizeMentionRows(data || [], safeHours).slice(0, limit);
+  await writeSocialTrendSnapshots('x', `curated:${safeHours}h`, summarized);
+  const historyMap = await readSocialTrendHistory('x', `curated:${safeHours}h`, summarized.map((item) => item.symbol));
+  const results = summarized.map((item) => ({
+    ...item,
+    trajectory: buildMentionTrajectory(historyMap.get(item.symbol) || [], item.mentions),
+  }));
   return {
     schemaVersion: X_SOCIAL_SCHEMA_VERSION,
     generatedAt: new Date().toISOString(),
     hours: safeHours,
     source: 'X curated accounts',
-    results: summarizeMentionRows(data || [], safeHours).slice(0, limit),
+    results,
+    note: 'Trajectory uses stored X mention events plus TARS snapshots, so growth/streak reads improve as polling history accumulates.',
   };
 }
 
@@ -7597,7 +7956,7 @@ app.post('/api/x-social/run-now', async (req, res) => {
 
 const NEWS_BACKGROUND_SYNC_MS = 60 * 60 * 1000; // 1 hour
 const X_SOCIAL_BACKGROUND_SYNC_MS =
-  Math.min(168, Math.max(1, parseInt(process.env.X_SOCIAL_BACKGROUND_SYNC_HOURS || '24', 10) || 24)) * 60 * 60 * 1000;
+  Math.min(168, Math.max(1, parseInt(process.env.X_SOCIAL_BACKGROUND_SYNC_HOURS || '4', 10) || 4)) * 60 * 60 * 1000;
 
 function startBackgroundSync() {
   if (!BACKGROUND_SYNC_ENABLED) {

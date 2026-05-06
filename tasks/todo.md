@@ -1174,3 +1174,35 @@ Make MarketLens/TARS feel fast, clean, mobile-friendly, and agent-friendly by ce
 - [x] `server.cjs` - added cached 13D/G ownership-filing contribution to the dashboard's `ownershipFilings` signal bucket.
 - [x] `server.cjs` - reordered signal processing so trend/insider/ownership reasons are more likely to lead the row summary, with news behind them.
 - [x] `node --check server.cjs` and `npm run build` passed cleanly.
+
+### Shipped slice 4 (2026-05-03)
+- [x] `server.cjs` - made NewsAPI opt-in for broad context via `NEWSAPI_ENABLED` / `NEWS_SOURCE_MODE=broad` instead of automatic alpha ingestion.
+- [x] `server.cjs` - added ticker-first Yahoo Finance RSS headline ingestion using `YAHOO_NEWS_SYMBOLS`.
+- [x] `server.cjs` - added an alpha-catalyst gate before Claude news scoring so generic headlines do not dominate cost or ranking.
+- [x] `server.cjs` - tightened the Claude scoring prompt around tradable catalysts like M&A, guidance, FDA/regulatory, activism/13D, insider activity, buybacks, short reports, and tariff/export-control exposure.
+- [x] `server.cjs` - increased X pull depth defaults to 10 posts/account and 75 list posts, and aligned the background scheduler default to 8 hours.
+- [x] `docs/news-and-alerts.md` and `docs/x-social-backend.md` - updated the runbook around alpha-first news and stronger X list polling.
+
+### Shipped slice 5 (2026-05-03)
+- [x] `server.cjs` - changed the default 13F changes surface from the first 18 broad known funds to a focused watchlist.
+- [x] `server.cjs` - default tracked 13F watchlist is now Berkshire Hathaway, Situational Awareness LP, and Renaissance Technologies.
+- [x] `src/pages/Funds.tsx` - renamed the landing copy to "Tracked 13F Filings" and made it clear the page is watching new filings from the stated funds.
+
+### Shipped slice 6 (2026-05-04)
+- [x] `supabase_migration_social_trend_snapshots.sql` - added durable Reddit/X mention snapshots for trend history.
+- [x] `server.cjs` - added shared social trajectory metrics: mention history, 1D/3D changes, streak, slope, acceleration, and trend state.
+- [x] `server.cjs` - Reddit trends now write/read TARS snapshots around ApeWisdom results so the path can show `20 -> 35 -> 60` style growth.
+- [x] `server.cjs` - X trends now combine stored mention events with snapshots and default to 4-hour polling for fuller intraday account coverage.
+- [x] `src/pages/RedditTrends.tsx` and `src/pages/XTrends.tsx` - added mention-path and trend-state display per row.
+- [x] `render.yaml` - aligned deployed X env defaults with the new backend expectations: X bearer token vars, 10 posts/account, 75 list posts, 4-hour cadence.
+
+### Shipped slice 7 (2026-05-05)
+- [x] `server.cjs` - fixed US and Canadian insider endpoints so stale DB rows trigger a foreground refresh before responding.
+- [x] `server.cjs` - added insider feed metadata: latest filing date, row count, sync time, source, stale state, refresh state, and fallback error.
+- [x] `src/pages/InsiderActivity.tsx` - added a live refresh control and freshness strip so stale insider data is visible and actionable.
+
+### Shipped slice 8 (2026-05-05)
+- [x] `src/index.css` and `tailwind.config.js` - moved the app from the warm dark theme to a light research-terminal palette inspired by the AI Bottlenecks reference: white panels, soft clay borders, blue/green/orange semantic accents, and quieter text hierarchy.
+- [x] `src/pages/Dashboard.tsx` - redesigned `/dashboard` as an Alpha Workbench with top metric cards, `Watchlist` / `Theme baskets` / `Catalysts` / `Theses` tabs, theme bucket chips, and a thesis-forward convergence table.
+- [x] `src/pages/Dashboard.tsx` - added inferred research buckets and thesis/evidence presentation while preserving ticker links, freshness status, and `data-agent-section` landmarks for agent traversal.
+- [x] `npm run build` passed cleanly.

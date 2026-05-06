@@ -66,6 +66,13 @@ interface BigFundChange {
   topChanged: FundChangeItem[];
 }
 
+interface BigFundChangesResponse {
+  funds: BigFundChange[];
+  trackedFundUniverse: number;
+  watchlist?: { cik: string; name: string }[];
+  generatedAt: string;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmt(n: number): string {
@@ -421,10 +428,10 @@ export default function FundsPage() {
   const navigate = useNavigate();
 
   const { data: bigFundChangesData } = useQuery({
-    queryKey: ['13f-big-fund-changes'],
+    queryKey: ['13f-focused-fund-filings'],
     queryFn: async () => {
-      const res = await fetch('/api/13f/big-fund-changes?limit=18');
-      return res.json() as Promise<{ funds: BigFundChange[]; trackedFundUniverse: number; generatedAt: string }>;
+      const res = await fetch('/api/13f/big-fund-changes');
+      return res.json() as Promise<BigFundChangesResponse>;
     },
     staleTime: 24 * 60 * 60 * 1000,
   });
@@ -500,11 +507,11 @@ export default function FundsPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
             <Briefcase size={20} color="var(--accent-blue-light)" />
             <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.02em' }}>
-              Big Fund Filing Changes
+              Tracked 13F Filings
             </h1>
           </div>
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-            Track 13F changes from major managers. Search any filer for detail.
+            Watch new 13F filings from your stated funds. Search any filer for detail.
           </p>
         </div>
 
@@ -514,7 +521,7 @@ export default function FundsPage() {
           <input
             value={query}
             onChange={e => { setQuery(e.target.value); if (selectedFund) setSelectedFund(null); setTab('all'); }}
-            placeholder="Search fund name (Berkshire, Bridgewater, Citadel…)"
+            placeholder="Search fund name (Berkshire, Situational Awareness, Renaissance)"
             style={{
               width: '100%', padding: '12px 14px 12px 38px', borderRadius: 12, boxSizing: 'border-box',
               background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
@@ -678,15 +685,15 @@ export default function FundsPage() {
           </>
         )}
 
-        {/* Big fund filing changes landing page */}
+        {/* Focused fund filing changes landing page */}
         {!selectedFund && !debouncedQuery && (
           <div style={{ marginTop: 24 }}>
             <div style={{ marginBottom: 14 }}>
               <p style={{ margin: '0 0 2px', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.01em' }}>
-                Big Fund Filing Changes
+                New 13F filings from tracked funds
               </p>
               <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)' }}>
-                Latest 13F changes from major managers. New, added, reduced, and exited positions only.
+                Berkshire Hathaway, Situational Awareness LP, and Renaissance Technologies. Tap a fund for new, added, reduced, and exited positions.
               </p>
             </div>
 
@@ -701,7 +708,7 @@ export default function FundsPage() {
             {bigFundChangesData && bigFundChangesData.funds.length === 0 && (
               <div style={{ padding: '20px 0' }}>
                 <p style={{ fontSize: 13, color: 'var(--text-tertiary)', marginBottom: 8 }}>
-                  No big fund filing changes are available right now.
+                  No tracked 13F filing changes are available right now.
                 </p>
               </div>
             )}
@@ -760,7 +767,7 @@ export default function FundsPage() {
                   </button>
                 ))}
                 <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '4px 0 0' }}>
-                  {bigFundChangesData.funds.length} major managers shown. Tap one for filing detail.
+                  {bigFundChangesData.funds.length} of {bigFundChangesData.trackedFundUniverse} tracked funds shown. Tap one for filing detail.
                 </p>
               </div>
             )}

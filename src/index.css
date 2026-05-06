@@ -6,30 +6,36 @@
 
 :root {
   /* ── Claude / Anthropic warm palette ── */
-  --bg-primary:        #1C1917;   /* warm near-black, like dark parchment */
-  --bg-surface:        #242019;   /* slightly lifted warm dark */
-  --bg-elevated:       #2E2923;   /* card / panel surfaces */
-  --bg-hover:          #3A342C;   /* hover state */
-  --text-primary:      #F5F0E8;   /* warm off-white, never harsh pure white */
-  --text-secondary:    #A8998A;   /* muted warm sand */
-  --text-tertiary:     #6B5F52;   /* dimmed warm brown-gray */
+  --bg-primary:        #F7F5F1;
+  --bg-surface:        #FFFFFF;
+  --bg-elevated:       #F2EFEA;
+  --bg-hover:          #ECE7DF;
+  --text-primary:      #202532;
+  --text-secondary:    #667085;
+  --text-tertiary:     #8B94A5;
 
   /* Claude signature coral-orange accent */
-  --accent-blue:       #D97757;   /* Claude's coral (replaces cold blue) */
-  --accent-blue-light: #E8916E;   /* lighter coral for hover / glow */
+  --accent-blue:       #2F80ED;
+  --accent-blue-light: #4C95F7;
 
   /* Semantic — keep green/red for financial up/down */
-  --color-up:          #4CAF82;   /* softer emerald green */
-  --color-down:        #E05C6A;   /* muted warm red */
-  --color-neutral:     #A8998A;
+  --color-up:          #079A6A;
+  --color-down:        #D94A55;
+  --color-neutral:     #7A8494;
 
   /* Borders — warm tone */
-  --border-subtle:     #2C2620;
-  --border-default:    #3D3630;
+  --border-subtle:     #E7E1D8;
+  --border-default:    #D7D0C5;
+
+  --accent-orange:     #D8622C;
+  --accent-green:      #2EA36A;
+  --accent-violet:     #9257D9;
+  --accent-cyan:       #28AFC7;
+  --shadow-soft:       0 10px 30px rgba(32, 37, 50, 0.08);
 
   /* Insider markers */
-  --insider-buy:       #4CAF82;
-  --insider-sell:      #E05C6A;
+  --insider-buy:       #079A6A;
+  --insider-sell:      #D94A55;
 }
 
 /* ── Reset ── */
@@ -49,6 +55,12 @@ html, body, #root {
   -moz-osx-font-smoothing: grayscale;
   font-size: 14px;
   line-height: 1.5;
+}
+
+body {
+  background:
+    linear-gradient(180deg, #FBFAF8 0%, var(--bg-primary) 220px),
+    var(--bg-primary);
 }
 
 /* ── Scrollbars ── */

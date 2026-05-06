@@ -4,9 +4,22 @@ export interface XTrendItem {
   previousMentions: number;
   mentionChange: number;
   mentionChangePct: number | null;
+  trajectory?: SocialTrendTrajectory;
   uniqueAccounts: number;
   engagementScore: number;
   latestPostAt: string | null;
+}
+
+export interface SocialTrendTrajectory {
+  history: Array<{ date: string; mentions: number }>;
+  mentionChange1d: number | null;
+  mentionChangePct1d: number | null;
+  mentionChange3d: number | null;
+  mentionChangePct3d: number | null;
+  trendStreakDays: number;
+  slope: number;
+  acceleration: number | null;
+  trendState: 'building' | 'accelerating' | 'growing' | 'steady' | 'fading' | string;
 }
 
 export interface XTrendsResponse {

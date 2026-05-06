@@ -40,6 +40,17 @@ function formatSpikePct(value: number | null | undefined) {
   return `${value > 0 ? '+' : ''}${value.toFixed(0)}%`;
 }
 
+function formatTrendState(value: string | undefined) {
+  if (!value) return 'building';
+  return value.replace(/_/g, ' ');
+}
+
+function trajectoryLine(item: RedditTrendItem) {
+  const points = item.trajectory?.history ?? [];
+  if (points.length < 2) return `${formatNumber(item.mentions24hAgo)} -> ${formatNumber(item.mentions)}`;
+  return points.slice(-4).map((point) => formatNumber(point.mentions)).join(' -> ');
+}
+
 function formatTime(value: string | null | undefined) {
   if (!value) return '';
   const date = new Date(value);
@@ -86,6 +97,8 @@ function TrendRow({ item, quote, spikeWindow }: { item: RedditTrendItem; quote?:
   const spikePct = spikeWindow === '48h' ? item.mentionChange48hPct : item.mentionChangePct;
   const spikeChange = spikeWindow === '48h' ? item.mentionChange48h : item.mentionChange;
   const mentionTone = (spikePct ?? 0) >= 50 || item.velocityScore >= 70 ? 'hot' : 'neutral';
+  const trajectory = item.trajectory;
+  const trajectoryTone = trajectory?.trendState === 'accelerating' ? 'hot' : trajectory?.trendState === 'growing' ? 'good' : 'neutral';
   const buyTone = item.buyPressure.net === 'buy' ? 'good' : item.buyPressure.net === 'sell' ? 'bad' : 'neutral';
   const price = quote
     ? { last: quote.c, changePct1d: quote.dp }
@@ -117,6 +130,17 @@ function TrendRow({ item, quote, spikeWindow }: { item: RedditTrendItem; quote?:
           <SignalPill label={`${formatNumber(item.mentions)} mentions`} tone={mentionTone} />
           <SignalPill label={`${formatNumber(item.upvotes)} upvotes`} />
           <SignalPill label={spikeChange == null ? `${spikeWindow} base building` : `${spikeChange > 0 ? '+' : ''}${formatNumber(spikeChange)} vs ${spikeWindow}`} tone={mentionTone} />
+          <SignalPill label={formatTrendState(trajectory?.trendState)} tone={trajectoryTone} />
+        </div>
+        <div data-agent-section="reddit-trend-trajectory" style={{ marginTop: 9 }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mention Path</p>
+          <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace", whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {trajectoryLine(item)}
+          </p>
+          <p style={{ margin: '3px 0 0', fontSize: 11, fontWeight: 800, color: pctTone(trajectory?.mentionChange1d) }}>
+            1D {formatSpikePct(trajectory?.mentionChangePct1d)}
+            {trajectory?.trendStreakDays ? ` | ${trajectory.trendStreakDays}d streak` : ''}
+          </p>
         </div>
       </div>
 

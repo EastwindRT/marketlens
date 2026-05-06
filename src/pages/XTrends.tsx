@@ -40,6 +40,22 @@ function tone(value: number | null | undefined) {
   return 'var(--text-tertiary)';
 }
 
+function formatTrendState(value: string | undefined) {
+  if (!value) return 'building';
+  return value.replace(/_/g, ' ');
+}
+
+function formatCompactPct(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return 'base building';
+  return `${value > 0 ? '+' : ''}${value.toFixed(0)}%`;
+}
+
+function trajectoryLine(item: XTrendItem) {
+  const points = item.trajectory?.history ?? [];
+  if (points.length < 2) return `${formatNumber(item.previousMentions)} -> ${formatNumber(item.mentions)}`;
+  return points.slice(-4).map((point) => formatNumber(point.mentions)).join(' -> ');
+}
+
 function Pill({ label, accent = false }: { label: string; accent?: boolean }) {
   return (
     <span style={{
@@ -60,6 +76,8 @@ function Pill({ label, accent = false }: { label: string; accent?: boolean }) {
 }
 
 function TrendRow({ item, quote }: { item: XTrendItem; quote?: { c?: number; dp?: number } }) {
+  const trajectory = item.trajectory;
+  const accelerating = trajectory?.trendState === 'accelerating' || trajectory?.trendState === 'growing';
   return (
     <article
       data-agent-section="x-trend-row"
@@ -103,6 +121,17 @@ function TrendRow({ item, quote }: { item: XTrendItem; quote?: { c?: number; dp?
         <div className="flex flex-wrap items-center gap-1.5" style={{ marginTop: 7 }}>
           <Pill label={`${formatNumber(item.mentions)} mentions`} accent={item.mentions >= 3} />
           <Pill label={`${formatNumber(item.uniqueAccounts)} acct`} />
+          <Pill label={formatTrendState(trajectory?.trendState)} accent={accelerating} />
+        </div>
+        <div data-agent-section="x-trend-trajectory" style={{ marginTop: 8 }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 800, textTransform: 'uppercase' }}>Trajectory</p>
+          <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--text-primary)', fontFamily: "'Roboto Mono', monospace", whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {trajectoryLine(item)}
+          </p>
+          <p style={{ margin: '3px 0 0', fontSize: 11, fontWeight: 800, color: tone(trajectory?.mentionChange1d) }}>
+            1D {formatCompactPct(trajectory?.mentionChangePct1d)}
+            {trajectory?.trendStreakDays ? ` | ${trajectory.trendStreakDays}d streak` : ''}
+          </p>
         </div>
       </div>
 

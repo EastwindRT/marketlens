@@ -1,7 +1,7 @@
 # News Impact + Agent Alerts — Schema & API Reference
 
 > Phase 1 (Foundation). Updated after each phase as new fields go live.
-> Last updated: 2026-04-26
+> Last updated: 2026-05-03
 
 ---
 
@@ -9,9 +9,11 @@
 
 Two hourly scheduled jobs power these features:
 
-1. **`news-impact` job** — pulls headlines from Yahoo Finance + four NewsAPI
-   queries, scores each with Claude Haiku 4.5, persists flagged items to
-   `news_items`.
+1. **`news-impact` job** — pulls ticker-first Yahoo Finance headlines plus
+   Finnhub/Finviz market headlines, applies an alpha-catalyst gate, scores each
+   remaining headline with Claude Haiku 4.5, and persists flagged items to
+   `news_items`. Broad NewsAPI queries are opt-in context, not the default
+   alpha source.
 2. **`agent-briefing` job** — pulls unseen news + material Form 4 filings,
    cross-references against each player's watchlist, produces a max-5-bullet
    Claude briefing per active watchlist, persists to `agent_alerts`.
@@ -37,7 +39,7 @@ Every run writes one row to `agent_run_logs` for cost observability.
 | `summary` | text | one-sentence Claude summary |
 | `affected_tickers` | text[] | e.g. `{AAPL, MSFT}` |
 | `seen_by_agent` | boolean | flipped after successful briefing run |
-| `raw_query` | text | which NewsAPI query produced this |
+| `raw_query` | text | provider/query lane that produced this |
 | `dedup_key` | text UNIQUE | `sha1(headline + published_at)` |
 
 **Categories**: `macro`, `sector`, `company`, `policy`, `us_politics`,
@@ -241,7 +243,10 @@ any time.
 
 | Var | Default | Description |
 |---|---|---|
-| `NEWSAPI_KEY` | — | NewsAPI.org API key (required for Phase 2) |
+| `NEWS_SOURCE_MODE` | `alpha` | `alpha` keeps only catalyst-like Yahoo/Finnhub/Finviz headlines; `broad` also enables broad context lanes. |
+| `NEWSAPI_ENABLED` | `false` unless `NEWS_SOURCE_MODE=broad` | Explicitly enable/disable broad NewsAPI ingestion when `NEWSAPI_KEY` is present. |
+| `NEWSAPI_KEY` | — | NewsAPI.org API key. Optional; broad NewsAPI is no longer required for ingestion. |
+| `YAHOO_NEWS_SYMBOLS` | core indices + liquid leaders | Comma-separated Yahoo Finance RSS symbols for ticker-first headline pulls. |
 | `NEWS_AGENT_ENABLED` | `1` | Set to `0` to disable news + alerts jobs |
 | `DISABLE_BACKGROUND_SYNC` | `0` | Set to `1` to halt all background jobs |
 | `CLAUDE_MODEL_PRESET` | `claude-haiku-4-5-20251001` | Model for scoring + briefing |
@@ -253,10 +258,9 @@ any time.
 
 `app_settings.twitter_enabled = false` (seeded in migration).
 
-When `true`, `fetchTwitterHeadlines()` will pull from a curated list of
-financial accounts, filter for watchlist ticker mentions, and feed those
-headlines into the same scoring pipeline. The function stub exists in
-`server.cjs` but returns `[]` until Phase 2 is built.
+X/Twitter now runs as a separate curated-account signal instead of being folded
+into generic headline scoring. Use the X Social backend docs for list mode,
+cadence, and account management.
 
 ---
 
@@ -265,6 +269,7 @@ headlines into the same scoring pipeline. The function stub exists in
 | Phase | Date | What changed |
 |---|---|---|
 | 1 — Foundation | 2026-04-26 | Schema, DB-backed endpoints (empty until Phase 2 ingestion runs), typed client, this doc. Note: `/api/news/impact` and `/api/alerts/latest` query the DB immediately — they return empty arrays until ingestion populates `news_items`. |
-| 2 — Ingestion | TBD | Yahoo + NewsAPI fetchers, Claude scoring, `run-now` endpoint |
+| 2 — Ingestion | 2026-05-03 | Yahoo ticker RSS + Finnhub/Finviz fetchers, optional NewsAPI, alpha-catalyst gate, Claude scoring, `run-now` endpoint |
 | 3 — Agent | TBD | Form 4 filter, briefing pipeline, per-player alerts |
 | 4 — Scheduling | TBD | Hourly scheduler wiring, Twitter stub, polish |
+| 5 — Social trajectory | 2026-05-04 | `social_trend_snapshots` table plus Reddit/X trajectory fields for mention history, 1D/3D changes, streak, slope, acceleration, and trend state |

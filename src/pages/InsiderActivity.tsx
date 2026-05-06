@@ -21,6 +21,18 @@ type SymbolMetadata = {
 type InsiderResponse = {
   trades: InsiderFeedItem[];
   overview?: InsiderOverview;
+  meta?: {
+    market?: string;
+    source?: string;
+    days?: number;
+    mode?: string | null;
+    latestFilingDate?: string;
+    rowCount?: number;
+    syncedAt?: string | null;
+    stale?: boolean;
+    refreshed?: boolean;
+    error?: string | null;
+  };
 };
 
 function formatSignalLabel(signal?: string | null): string {
@@ -47,6 +59,7 @@ export default function InsiderActivityPage() {
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [periodMode, setPeriodMode] = useState<PeriodMode>('30d');
   const [sectorFilter, setSectorFilter] = useState('All sectors');
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const watchlistSymbols = useWatchlistStore((state) => state.items.map((item) => item.symbol));
 
   const days = periodMode === '7d' ? 7 : periodMode === '14d' ? 14 : 30;
@@ -59,9 +72,9 @@ export default function InsiderActivityPage() {
     dataUpdatedAt: usUpdatedAt,
     error: usError,
   } = useQuery({
-    queryKey: ['insider-activity-feed', days],
+    queryKey: ['insider-activity-feed', days, refreshNonce],
     queryFn: async (): Promise<InsiderResponse> => {
-      const response = await fetch(`/api/insider-activity?days=${days}&limit=250`);
+      const response = await fetch(`/api/insider-activity?days=${days}&limit=250${refreshNonce ? '&force=1' : ''}`);
       if (!response.ok) throw new Error(`Feed error ${response.status}`);
       return response.json();
     },
@@ -78,9 +91,9 @@ export default function InsiderActivityPage() {
     dataUpdatedAt: caUpdatedAt,
     error: caError,
   } = useQuery({
-    queryKey: ['ca-insider-activity', days, caMode],
+    queryKey: ['ca-insider-activity', days, caMode, refreshNonce],
     queryFn: async (): Promise<InsiderResponse> => {
-      const response = await fetch(`/api/ca-insider-activity?days=${days}&mode=${caMode}&limit=250`);
+      const response = await fetch(`/api/ca-insider-activity?days=${days}&mode=${caMode}&limit=250${refreshNonce ? '&force=1' : ''}`);
       if (!response.ok) throw new Error(`CA feed error ${response.status}`);
       return response.json();
     },
@@ -92,6 +105,7 @@ export default function InsiderActivityPage() {
 
   const rawTrades = marketTab === 'us' ? (usData?.trades ?? []) : (caData?.trades ?? []);
   const overview = marketTab === 'us' ? usData?.overview : caData?.overview;
+  const feedMeta = marketTab === 'us' ? usData?.meta : caData?.meta;
   const isLoading = marketTab === 'us' ? usLoading : caLoading;
   const isFetching = marketTab === 'us' ? usFetching : caFetching;
   const updatedAt = marketTab === 'us' ? usUpdatedAt : caUpdatedAt;
@@ -212,7 +226,35 @@ export default function InsiderActivityPage() {
               { id: 'sell', label: 'Sells' },
             ]}
           />
+          <button
+            onClick={() => setRefreshNonce((value) => value + 1)}
+            disabled={isFetching}
+            style={{
+              padding: '7px 12px',
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: isFetching ? 'default' : 'pointer',
+              background: 'var(--bg-elevated)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border-subtle)',
+              opacity: isFetching ? 0.65 : 1,
+            }}
+          >
+            Refresh live
+          </button>
         </div>
+
+        {feedMeta && (
+          <div data-agent-section="insider-feed-freshness" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+            <FreshnessPill label="Latest filed" value={feedMeta.latestFilingDate || '-'} tone={feedMeta.stale ? 'bad' : 'neutral'} />
+            <FreshnessPill label="Rows" value={String(feedMeta.rowCount ?? rawTrades.length)} />
+            <FreshnessPill label="Source" value={feedMeta.source || '-'} />
+            <FreshnessPill label="Synced" value={feedMeta.syncedAt ? new Date(feedMeta.syncedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '-'} tone={feedMeta.stale ? 'bad' : 'neutral'} />
+            {feedMeta.refreshed && <FreshnessPill label="Refresh" value="live" tone="good" />}
+            {feedMeta.error && <FreshnessPill label="Fallback" value={feedMeta.error} tone="bad" />}
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
           <select
@@ -441,6 +483,29 @@ function DataPoint({ label, value, strong, color }: { label: string; value: stri
         {value}
       </div>
     </div>
+  );
+}
+
+function FreshnessPill({ label, value, tone = 'neutral' }: { label: string; value: string; tone?: 'good' | 'bad' | 'neutral' }) {
+  const color = tone === 'good' ? 'var(--color-up)' : tone === 'bad' ? 'var(--color-down)' : 'var(--text-secondary)';
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        maxWidth: '100%',
+        padding: '5px 8px',
+        borderRadius: 8,
+        border: '1px solid var(--border-subtle)',
+        background: 'var(--bg-elevated)',
+        fontSize: 11,
+        color,
+      }}
+    >
+      <strong style={{ color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</strong>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
+    </span>
   );
 }
 

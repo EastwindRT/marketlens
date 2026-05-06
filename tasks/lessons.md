@@ -604,3 +604,51 @@
 **Observation:** News can dominate a convergence score because it is frequent and already impact-scored, but that makes the dashboard feel like a news ranking instead of a cross-source alpha surface.
 **Root cause:** The score weights were too similar across news, trend, social, insider, and ownership signals, and news was processed first, so it often became both the highest contributor and the summary lead.
 **Rule:** Rank convergence around scarce/behavioral signals first: social acceleration, insider activity, and 13D/G ownership filings. Let news confirm or explain those moves, but cap its standalone contribution so it lands as the third or fourth signal rather than the default driver.
+
+---
+
+## Lesson: 2026-05-03 - Alpha news needs a catalyst gate before model scoring
+
+**Observation:** Broad headline APIs can produce lots of plausible market stories that still do not feel relevant or tradable.
+**Root cause:** Provider quality helps, but the missing control is upstream selectivity. If routine recaps and generic politics reach the scoring model, the feed becomes noisy even when the model is asked to be strict.
+**Rule:** Treat broad news as context. Default ingestion should prefer ticker-first sources and pass only catalyst-like headlines into Claude scoring: M&A, guidance, earnings surprise, FDA/regulatory, activism/13D/G, insider activity, buybacks, bankruptcy/restructuring, short reports, major contracts, and policy shocks with clear ticker or sector exposure.
+
+---
+
+## Lesson: 2026-05-03 - X signal quality comes from curated breadth and cadence
+
+**Observation:** A small pull from a few accounts makes X trends look thin and late.
+**Root cause:** The backend can support curated polling, but conservative defaults under-sample posts and list mode unless explicitly configured.
+**Rule:** Prefer X List mode with a vetted 100-200 account basket and enough pull depth to observe acceleration. Keep broad X search off for cost/noise, but poll curated sources every 4-8 hours and store history so 24h/7d trend math becomes meaningful.
+
+---
+
+## Lesson: 2026-05-03 - Fund changes should start from a named watchlist
+
+**Observation:** A "big fund changes" surface can look impressive while missing the user's actual research intent.
+**Root cause:** The backend defaulted to the first slice of a broad known-fund universe, which favors mega/index managers and generic hedge funds over explicitly requested funds.
+**Rule:** For 13F monitoring, default to the user's named tracked funds first. Broad search stays available, but the landing page should answer: did a fund I care about file, and what changed in that filing?
+
+---
+
+## Lesson: 2026-05-04 - Social alpha is trajectory, not popularity
+
+**Observation:** A ticker with 300 mentions can be less interesting than one moving from 20 to 35 to 60 mentions.
+**Root cause:** Raw mention counts rank popularity, but alpha often sits in direction, persistence, and acceleration.
+**Rule:** Store social snapshots and expose mention history alongside the latest count. Rank and explain social signals with daily path, 1D/3D change, streak, slope, acceleration, and a readable state like `accelerating`, `growing`, `steady`, or `fading`.
+
+---
+
+## Lesson: 2026-05-05 - Stale filing feeds need foreground refresh and visible freshness
+
+**Observation:** US and Canadian insider feeds can look broken when the DB contains rows but the latest filing date stops advancing.
+**Root cause:** The endpoints returned existing DB rows first and only kicked off stale refreshes in the background. If the background refresh failed, timed out, or never completed before the next user read, the UI kept showing old filings with no explanation.
+**Rule:** For filing feeds, stale DB data should trigger a foreground refresh before responding. Always return freshness metadata: latest filing date, sync time, source, stale flag, refresh flag, row count, and fallback error when applicable.
+
+---
+
+## Lesson: 2026-05-05 - A light terminal can be faster than a dark terminal when the product is collaborative research
+
+**Observation:** The AI Bottlenecks reference felt cleaner and easier to scan because the page used a light surface, subtle borders, calm metric cards, and a table that left room for thesis and bucket review.
+**Root cause:** The previous dark palette made every page feel heavier and pushed the dashboard toward feed scanning rather than collaborative research triage.
+**Rule:** For convergence research, use the terminal metaphor for speed and structure, not for darkness or density. Keep the main page light, table-first, bucket-aware, and explicit about thesis/evidence so humans and agents can review the same objects quickly.

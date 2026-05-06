@@ -33,17 +33,21 @@ services:
         sync: false
       - key: NEWS_AGENT_ENABLED
         value: "1"
+      - key: X_BEARER_TOKEN
+        sync: false
+      - key: TWITTER_BEARER_TOKEN
+        sync: false
       - key: TWITTER_ENABLED
-        value: "0"
+        value: "1"
       - key: X_MAX_ACCOUNTS_PER_POLL
         value: "300"
       - key: X_MAX_POSTS_PER_ACCOUNT
-        value: "5"
+        value: "10"
       - key: X_LIST_ID
         sync: false
       - key: X_LIST_MAX_POSTS
-        value: "25"
+        value: "75"
       - key: X_SOCIAL_BACKGROUND_SYNC_HOURS
-        value: "24"
+        value: "4"
       - key: X_RESOLVE_USERS_ON_POLL
         value: "0"

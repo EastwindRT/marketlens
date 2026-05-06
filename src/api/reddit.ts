@@ -23,6 +23,7 @@ export interface RedditTrendItem {
   mentionChange48h: number | null;
   mentionChange48hPct: number | null;
   mentionChange7dPct: number | null;
+  trajectory?: SocialTrendTrajectory;
   velocityScore: number;
   price: {
     last: number | null;
@@ -63,6 +64,18 @@ export interface RedditTrendItem {
       filingUrl?: string;
     }>;
   };
+}
+
+export interface SocialTrendTrajectory {
+  history: Array<{ date: string; mentions: number }>;
+  mentionChange1d: number | null;
+  mentionChangePct1d: number | null;
+  mentionChange3d: number | null;
+  mentionChangePct3d: number | null;
+  trendStreakDays: number;
+  slope: number;
+  acceleration: number | null;
+  trendState: 'building' | 'accelerating' | 'growing' | 'steady' | 'fading' | string;
 }
 
 export interface RedditTrendsResponse {
