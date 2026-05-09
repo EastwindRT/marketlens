@@ -2878,34 +2878,77 @@ async function fetchRecentForm4Entries(daysBack = 7) {
   });
 }
 
+async function fetchCurrentForm4AtomEntries() {
+  const url = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=include&count=100&output=atom';
+  const atom = await httpsGet(url, { 'User-Agent': SEC_UA, Accept: 'application/atom+xml,application/xml,text/xml' });
+  const entries = [];
+  for (const match of atom.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)) {
+    const block = match[1];
+    const title = htmlDecode(block.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '');
+    const href = htmlDecode(block.match(/<link[^>]*href="([^"]+)"/i)?.[1] || '');
+    const summary = htmlDecode(block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i)?.[1] || '');
+    const formType = (block.match(/<category[^>]*term="([^"]+)"/i)?.[1] || '').trim();
+    if (formType !== '4' && formType !== '4/A' && !/^4\s/i.test(title)) continue;
+
+    const cik = href.match(/\/data\/(\d+)\//i)?.[1] || title.match(/\((\d{6,10})\)/)?.[1];
+    const accession = summary.match(/AccNo:\s*([0-9-]+)/i)?.[1]
+      || block.match(/accession-number=([0-9-]+)/i)?.[1]
+      || href.match(/\/([0-9]{10}-[0-9]{2}-[0-9]{6})-/i)?.[1];
+    const filedDate = summary.match(/Filed:\s*(\d{4}-\d{2}-\d{2})/i)?.[1]
+      || block.match(/<updated[^>]*>(\d{4}-\d{2}-\d{2})/i)?.[1];
+    if (!cik || !accession || !filedDate) continue;
+
+    const companyName = title.replace(/^4\/?A?\s*-\s*/i, '').replace(/\s+\(\d{6,10}\).*$/i, '').trim();
+    entries.push({
+      cik,
+      companyName,
+      formType: formType || '4',
+      filedDate,
+      filename: `edgar/data/${String(Number(cik))}/${accession}.txt`,
+      accession,
+    });
+  }
+  return entries;
+}
+
 async function fetchSecInsiderActivityItem(entry) {
   const cikClean = String(Number(entry.cik));
   const accClean = entry.accession.replace(/-/g, '');
   const dirUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/`;
 
-  let dirHtml = '';
+  let xml = '';
+  const txtUrl = `https://www.sec.gov/Archives/${entry.filename}`;
   try {
-    dirHtml = await httpsGet(dirUrl, { 'User-Agent': SEC_UA, Accept: 'text/html' });
+    const txt = await httpsGet(txtUrl, { 'User-Agent': SEC_UA, Accept: 'text/plain,application/xml,text/xml' });
+    xml = txt.match(/<ownershipDocument[\s\S]*?<\/ownershipDocument>/i)?.[0] || '';
   } catch {
-    return [];
+    xml = '';
   }
 
-  const xmlFiles = [...dirHtml.matchAll(/href="([^"]+\.xml)"/gi)]
-    .map((match) => match[1])
-    .filter((href) => !/xsl/i.test(href));
-  const ownershipFile = xmlFiles.find((href) => /ownership|form4/i.test(href))
-    || xmlFiles.find((href) => !/primary_doc/i.test(href));
-  if (!ownershipFile) return [];
+  let dirHtml = '';
+  if (!xml) {
+    try {
+      dirHtml = await httpsGet(dirUrl, { 'User-Agent': SEC_UA, Accept: 'text/html' });
+    } catch {
+      return [];
+    }
 
-  const xmlUrl = ownershipFile.startsWith('http')
-    ? ownershipFile
-    : `https://www.sec.gov${ownershipFile.startsWith('/Archives') ? '' : `/Archives/edgar/data/${cikClean}/${accClean}/`}${ownershipFile}`;
+    const xmlFiles = [...dirHtml.matchAll(/href="([^"]+\.xml)"/gi)]
+      .map((match) => match[1])
+      .filter((href) => !/xsl/i.test(href));
+    const ownershipFile = xmlFiles.find((href) => /ownership|form4/i.test(href))
+      || xmlFiles.find((href) => !/primary_doc/i.test(href));
+    if (!ownershipFile) return [];
 
-  let xml = '';
-  try {
-    xml = await httpsGet(xmlUrl, { 'User-Agent': SEC_UA, Accept: 'application/xml,text/xml' });
-  } catch {
-    return [];
+    const xmlUrl = ownershipFile.startsWith('http')
+      ? ownershipFile
+      : `https://www.sec.gov${ownershipFile.startsWith('/Archives') ? '' : `/Archives/edgar/data/${cikClean}/${accClean}/`}${ownershipFile}`;
+
+    try {
+      xml = await httpsGet(xmlUrl, { 'User-Agent': SEC_UA, Accept: 'application/xml,text/xml' });
+    } catch {
+      return [];
+    }
   }
 
   const symbol = xmlMatch(xml, /<issuerTradingSymbol>\s*([^<]+)\s*<\/issuerTradingSymbol>/i).toUpperCase();
@@ -2954,7 +2997,15 @@ async function fetchSecInsiderActivityItem(entry) {
 async function fetchLatestInsiderActivity(days = 7) {
   // Fetch enough days to cover weekends / holidays
   const daysBack = days + Math.ceil(days / 5) * 2 + 1;
-  const entries = await fetchRecentForm4Entries(daysBack);
+  let entries = [];
+  try {
+    entries = await fetchCurrentForm4AtomEntries();
+  } catch (err) {
+    console.error('[us-insider-atom]', err.message);
+  }
+  if (entries.length === 0) {
+    entries = await fetchRecentForm4Entries(daysBack);
+  }
 
   // Cut to entries actually within requested window
   const cutoff = new Date();
