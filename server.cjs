@@ -509,9 +509,14 @@ async function readUsInsiderTradesFromDb(days) {
 async function writeUsInsiderTradesToDb(trades) {
   if (!hasMarketDataDb() || !Array.isArray(trades) || trades.length === 0) return;
 
-  const rows = trades.map((trade) => ({
-    id: trade.id,
-    symbol: trade.symbol,
+  const dedupedTrades = [...new Map(trades
+    .filter((trade) => trade?.id && trade?.symbol)
+    .map((trade) => [trade.id, trade])
+  ).values()];
+
+  const rows = dedupedTrades.map((trade) => ({
+    id: String(trade.id),
+    symbol: String(trade.symbol).toUpperCase(),
     company_name: trade.companyName || null,
     insider_name: trade.insiderName || null,
     title: trade.title || null,
@@ -530,11 +535,15 @@ async function writeUsInsiderTradesToDb(trades) {
     updated_at: new Date().toISOString(),
   }));
 
-  const { error } = await serverSupabase
-    .from('us_insider_trades')
-    .upsert(rows, { onConflict: 'id' });
-  if (error) {
-    throw new Error(`us insider db write failed: ${error.message}`);
+  const chunkSize = 100;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const { error } = await serverSupabase
+      .from('us_insider_trades')
+      .upsert(chunk, { onConflict: 'id' });
+    if (error) {
+      throw new Error(`us insider db write failed: ${error.message}`);
+    }
   }
 }
 
@@ -3061,6 +3070,26 @@ app.get('/api/insider-activity', async (req, res) => {
               });
             }
           } else if (!dbFresh) {
+            const memoryTrades = Array.isArray(insiderActivityCaches[days]) ? insiderActivityCaches[days] : [];
+            const memoryLatest = latestFilingDateFromTrades(memoryTrades);
+            const dbLatest = latestFilingDateFromTrades(dbTrades);
+            if (memoryTrades.length && memoryLatest && (!dbLatest || memoryLatest > dbLatest)) {
+              const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
+              const limitedTrades = memoryTrades.slice(0, limit);
+              return res.json({
+                trades: limitedTrades,
+                overview: buildInsiderOverview(memoryTrades),
+                meta: buildInsiderFeedMeta({
+                  market: 'US',
+                  source: 'SEC memory cache',
+                  days,
+                  trades: memoryTrades,
+                  syncState,
+                  stale: false,
+                  refreshed: false,
+                }),
+              });
+            }
             buildInsiderActivityCache(days).catch((refreshErr) => {
               console.error('[insider-activity-db-refresh]', refreshErr.message);
             });
