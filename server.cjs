@@ -2531,7 +2531,8 @@ app.get('/api/ca-insider-activity', async (req, res) => {
           readCaInsiderTradesFromDb(days, mode),
           getMarketDataSyncState(MARKET_DATA_DATASETS.caInsiders(days, mode)),
         ]);
-        const dbFresh = isSyncStateFresh(syncState, CA_INSIDER_TTL);
+        const dbLatest = latestFilingDateFromTrades(dbTrades);
+        const dbFresh = isSyncStateFresh(syncState, CA_INSIDER_TTL) && !isLatestFilingDateStale(dbLatest);
 
         if (dbTrades.length) {
           if (force) {
@@ -2799,6 +2800,13 @@ function latestFilingDateFromTrades(trades) {
   }, '');
 }
 
+function isLatestFilingDateStale(latestDate, maxAgeDays = 5) {
+  if (!latestDate) return true;
+  const time = new Date(`${latestDate}T00:00:00Z`).getTime();
+  if (!Number.isFinite(time)) return true;
+  return Date.now() - time > maxAgeDays * 24 * 60 * 60 * 1000;
+}
+
 function buildInsiderFeedMeta({ market, source, days, mode, trades, syncState = null, stale = false, refreshed = false, error = null }) {
   return {
     market,
@@ -2998,10 +3006,19 @@ async function buildInsiderActivityCache(days) {
       const trades = await fetchLatestInsiderActivity(days);
       if (hasMarketDataDb()) {
         try {
+          const existingTrades = await readUsInsiderTradesFromDb(days).catch(() => []);
+          const fetchedLatest = latestFilingDateFromTrades(trades);
+          const existingLatest = latestFilingDateFromTrades(existingTrades);
+          if (existingLatest && (!fetchedLatest || fetchedLatest < existingLatest)) {
+            console.error(`[us-insider-db-write:${days}] refusing older refresh latest=${fetchedLatest || 'none'} existing=${existingLatest}`);
+            insiderActivityCaches[days] = existingTrades;
+            insiderActivityLastFetch[days] = Date.now();
+            return existingTrades;
+          }
           if (trades.length) {
             await writeUsInsiderTradesToDb(trades);
+            await setMarketDataSyncState(MARKET_DATA_DATASETS.usInsiders(days), trades.length);
           }
-          await setMarketDataSyncState(MARKET_DATA_DATASETS.usInsiders(days), trades.length);
         } catch (err) {
           console.error(`[us-insider-db-write:${days}]`, err.message);
         }
@@ -3027,7 +3044,8 @@ app.get('/api/insider-activity', async (req, res) => {
           readUsInsiderTradesFromDb(days),
           getMarketDataSyncState(MARKET_DATA_DATASETS.usInsiders(days)),
         ]);
-        const dbFresh = isSyncStateFresh(syncState, INSIDER_ACTIVITY_TTL);
+        const dbLatest = latestFilingDateFromTrades(dbTrades);
+        const dbFresh = isSyncStateFresh(syncState, INSIDER_ACTIVITY_TTL) && !isLatestFilingDateStale(dbLatest);
         if (dbTrades.length) {
           if (force) {
             try {
