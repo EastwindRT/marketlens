@@ -1206,3 +1206,9 @@ Make MarketLens/TARS feel fast, clean, mobile-friendly, and agent-friendly by ce
 - [x] `src/pages/Dashboard.tsx` - redesigned `/dashboard` as an Alpha Workbench with top metric cards, `Watchlist` / `Theme baskets` / `Catalysts` / `Theses` tabs, theme bucket chips, and a thesis-forward convergence table.
 - [x] `src/pages/Dashboard.tsx` - added inferred research buckets and thesis/evidence presentation while preserving ticker links, freshness status, and `data-agent-section` landmarks for agent traversal.
 - [x] `npm run build` passed cleanly.
+
+### Shipped slice 9 (2026-05-06)
+- [x] `vite.config.ts` - fixed local dev proxying for insider endpoints so `/api/insider-activity` and `/api/ca-insider-activity` return JSON instead of the Vite app HTML.
+- [x] `src/pages/InsiderActivity.tsx` - added a dedicated `CA Filings` tab that requests `mode=filings` instead of hiding all SEDI filing types behind the open-market insiders view.
+- [x] `server.cjs` - changed normal US/Canadian insider page loads to serve stale Supabase rows immediately and refresh in the background; `force=1` still performs a foreground live refresh.
+- [x] `node --check server.cjs` and `npm run build` passed cleanly.

@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const API_PROXY_TARGET = process.env.VITE_API_PROXY_TARGET || 'http://localhost:3000'
+const INSIDER_API_PROXY_TARGET = process.env.VITE_INSIDER_API_PROXY_TARGET || 'https://marketlens-jn9s.onrender.com'
+
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -47,11 +50,14 @@ export default defineConfig({
         rewrite: (path: string) => path.replace(/^\/api\/senate-trades/, ''),
       },
       // Express server API endpoints
-      '/api/latest-congress': { target: 'http://localhost:3001', changeOrigin: true },
-      '/api/analyze-filing':  { target: 'http://localhost:3001', changeOrigin: true },
-      '/api/ask-stock':       { target: 'http://localhost:3001', changeOrigin: true },
-      '/api/13f':             { target: 'http://localhost:3001', changeOrigin: true },
-      '/api/ask-fund':        { target: 'http://localhost:3001', changeOrigin: true },
+      '/api/latest-congress': { target: API_PROXY_TARGET, changeOrigin: true },
+      '/api/analyze-filing':  { target: API_PROXY_TARGET, changeOrigin: true },
+      '/api/ask-stock':       { target: API_PROXY_TARGET, changeOrigin: true },
+      '/api/13f':             { target: API_PROXY_TARGET, changeOrigin: true },
+      '/api/ask-fund':        { target: API_PROXY_TARGET, changeOrigin: true },
+      '/api/insider-activity':    { target: INSIDER_API_PROXY_TARGET, changeOrigin: true },
+      '/api/ca-insider-activity': { target: INSIDER_API_PROXY_TARGET, changeOrigin: true },
+      '/api/symbol-metadata':     { target: API_PROXY_TARGET, changeOrigin: true },
     },
   },
 })

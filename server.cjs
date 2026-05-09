@@ -5,6 +5,7 @@ const { createClient: createSupabaseClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const LOCAL_DEV_LIVE_ORIGIN = process.env.LOCAL_DEV_LIVE_ORIGIN || 'https://marketlens-jn9s.onrender.com';
 const SERVICE_SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const SERVICE_SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const serverSupabase = SERVICE_SUPABASE_URL && SERVICE_SUPABASE_KEY
@@ -2524,7 +2525,7 @@ app.get('/api/ca-insider-activity', async (req, res) => {
         const dbFresh = isSyncStateFresh(syncState, CA_INSIDER_TTL);
 
         if (dbTrades.length) {
-          if (!dbFresh || force) {
+          if (force) {
             try {
               const refreshed = await buildCaInsiderCache(days, mode);
               const refreshedTrades = refreshed?.trades || [];
@@ -2563,6 +2564,25 @@ app.get('/api/ca-insider-activity', async (req, res) => {
                 }),
               });
             }
+          } else if (!dbFresh) {
+            buildCaInsiderCache(days, mode).catch((refreshErr) => {
+              console.error(`[ca-insider-db-refresh:${cacheKey}]`, refreshErr.message);
+            });
+            res.setHeader('X-Data-Stale', '1');
+            return res.json({
+              trades: dbTrades,
+              overview: buildInsiderOverview(dbTrades),
+              meta: buildInsiderFeedMeta({
+                market: 'CA',
+                source: 'Supabase stale fallback',
+                days,
+                mode,
+                trades: dbTrades,
+                syncState,
+                stale: true,
+                refreshed: false,
+              }),
+            });
           }
           return res.json({
             trades: dbTrades,
@@ -2786,6 +2806,19 @@ function buildInsiderFeedMeta({ market, source, days, mode, trades, syncState = 
   };
 }
 
+function shouldUseLocalDevLiveFallback() {
+  return process.env.NODE_ENV !== 'production' && !hasMarketDataDb() && LOCAL_DEV_LIVE_ORIGIN;
+}
+
+async function fetchLiveUsInsiderFallback(days, limit) {
+  if (!shouldUseLocalDevLiveFallback()) return null;
+  const url = `${LOCAL_DEV_LIVE_ORIGIN.replace(/\/$/, '')}/api/insider-activity?days=${days}&limit=${limit}`;
+  const raw = await httpsGet(url, { Accept: 'application/json' });
+  const payload = JSON.parse(raw);
+  if (!Array.isArray(payload?.trades) || payload.trades.length === 0) return null;
+  return payload;
+}
+
 async function fetchRecentForm4Entries(daysBack = 7) {
   const entries = [];
 
@@ -2987,7 +3020,7 @@ app.get('/api/insider-activity', async (req, res) => {
         ]);
         const dbFresh = isSyncStateFresh(syncState, INSIDER_ACTIVITY_TTL);
         if (dbTrades.length) {
-          if (!dbFresh || force) {
+          if (force) {
             try {
               const refreshedTrades = await buildInsiderActivityCache(days);
               if (refreshedTrades.length) {
@@ -3027,6 +3060,26 @@ app.get('/api/insider-activity', async (req, res) => {
                 }),
               });
             }
+          } else if (!dbFresh) {
+            buildInsiderActivityCache(days).catch((refreshErr) => {
+              console.error('[insider-activity-db-refresh]', refreshErr.message);
+            });
+            res.setHeader('X-Data-Stale', '1');
+            const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
+            const limitedTrades = dbTrades.slice(0, limit);
+            return res.json({
+              trades: limitedTrades,
+              overview: buildInsiderOverview(dbTrades),
+              meta: buildInsiderFeedMeta({
+                market: 'US',
+                source: 'Supabase stale fallback',
+                days,
+                trades: dbTrades,
+                syncState,
+                stale: true,
+                refreshed: false,
+              }),
+            });
           }
           const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
           const limitedTrades = dbTrades.slice(0, limit);
@@ -3062,6 +3115,33 @@ app.get('/api/insider-activity', async (req, res) => {
     }
 
     const limit = Math.min(parseInt(req.query.limit || '150', 10), 300);
+    if (!Array.isArray(insiderActivityCaches[days]) || insiderActivityCaches[days].length === 0) {
+      try {
+        const fallback = await fetchLiveUsInsiderFallback(days, limit);
+        if (fallback?.trades?.length) {
+          return res.json({
+            trades: fallback.trades.slice(0, limit),
+            overview: fallback.overview || buildInsiderOverview(fallback.trades),
+            meta: {
+              ...(fallback.meta || buildInsiderFeedMeta({
+                market: 'US',
+                source: 'Live fallback',
+                days,
+                trades: fallback.trades,
+                stale: false,
+                refreshed: false,
+              })),
+              source: 'Live fallback',
+              refreshed: false,
+              error: null,
+            },
+          });
+        }
+      } catch (fallbackErr) {
+        console.error('[insider-activity-live-fallback]', fallbackErr.message);
+      }
+    }
+
     const trades = insiderActivityCaches[days].slice(0, limit);
     res.json({
       trades,

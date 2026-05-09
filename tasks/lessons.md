@@ -652,3 +652,11 @@
 **Observation:** The AI Bottlenecks reference felt cleaner and easier to scan because the page used a light surface, subtle borders, calm metric cards, and a table that left room for thesis and bucket review.
 **Root cause:** The previous dark palette made every page feel heavier and pushed the dashboard toward feed scanning rather than collaborative research triage.
 **Rule:** For convergence research, use the terminal metaphor for speed and structure, not for darkness or density. Keep the main page light, table-first, bucket-aware, and explicit about thesis/evidence so humans and agents can review the same objects quickly.
+
+---
+
+## Lesson: 2026-05-06 - Filing feeds need fast stale reads and explicit live refresh
+
+**Observation:** Forcing a foreground upstream refresh whenever cached insider rows were stale made the US insider page look broken during SEC throttling.
+**Root cause:** Freshness and responsiveness were coupled too tightly. A stale but visible DB snapshot is more useful than a hanging page, especially when the provider is rate-limited.
+**Rule:** Default filing pages should serve the last durable snapshot immediately, mark it stale, and refresh in the background. Reserve foreground upstream refreshes for explicit user actions like `Refresh live`.
