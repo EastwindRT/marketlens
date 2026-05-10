@@ -2889,12 +2889,13 @@ async function fetchCurrentForm4AtomEntries() {
     const summary = htmlDecode(block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i)?.[1] || '');
     const formType = (block.match(/<category[^>]*term="([^"]+)"/i)?.[1] || '').trim();
     if (formType !== '4' && formType !== '4/A' && !/^4\s/i.test(title)) continue;
+    if (/\(Reporting\)/i.test(title)) continue;
 
     const cik = href.match(/\/data\/(\d+)\//i)?.[1] || title.match(/\((\d{6,10})\)/)?.[1];
-    const accession = summary.match(/AccNo:\s*([0-9-]+)/i)?.[1]
+    const accession = summary.match(/AccNo:\s*(?:<\/b>)?\s*([0-9-]+)/i)?.[1]
       || block.match(/accession-number=([0-9-]+)/i)?.[1]
       || href.match(/\/([0-9]{10}-[0-9]{2}-[0-9]{6})-/i)?.[1];
-    const filedDate = summary.match(/Filed:\s*(\d{4}-\d{2}-\d{2})/i)?.[1]
+    const filedDate = summary.match(/Filed:\s*(?:<\/b>)?\s*(\d{4}-\d{2}-\d{2})/i)?.[1]
       || block.match(/<updated[^>]*>(\d{4}-\d{2}-\d{2})/i)?.[1];
     if (!cik || !accession || !filedDate) continue;
 
