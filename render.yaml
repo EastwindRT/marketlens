@@ -51,3 +51,9 @@ services:
         value: "4"
       - key: X_RESOLVE_USERS_ON_POLL
         value: "0"
+      - key: TYPESAFE_API_KEY
+        sync: false
+      - key: OWNERSHIP_TRIAGE_ENABLED
+        value: "0"
+      - key: JEV_MODEL
+        value: "jev-latest"

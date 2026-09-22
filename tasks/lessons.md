@@ -660,3 +660,19 @@
 **Observation:** Forcing a foreground upstream refresh whenever cached insider rows were stale made the US insider page look broken during SEC throttling.
 **Root cause:** Freshness and responsiveness were coupled too tightly. A stale but visible DB snapshot is more useful than a hanging page, especially when the provider is rate-limited.
 **Rule:** Default filing pages should serve the last durable snapshot immediately, mark it stale, and refresh in the background. Reserve foreground upstream refreshes for explicit user actions like `Refresh live`.
+
+---
+
+## Lesson: 2026-05-10 - External data CLIs should enrich caches, not page loads
+
+**Observation:** Printing Press CLIs can add useful Yahoo, Hacker News, and creator/social signals, but calling external binaries directly from dashboard reads would make the fastest page depend on the slowest integration.
+**Root cause:** CLI tools are operational dependencies with install state, API keys, local storage, and provider latency that may vary by environment.
+**Rule:** Wrap external CLIs as optional collector jobs. Normalize output, write small cache rows or settings, expose status/run-now endpoints for agents, and let convergence consume the cached results later.
+
+---
+
+## Lesson: 2026-09-21 - A cheap structured classifier changes what "expensive AI gate" means
+
+**Observation:** The original 13D/13G triage idea was a metadata-only heuristic gate in front of the existing Groq/Claude filing-analysis prompts, sized to control LLM cost. Once evaluated, a metadata-only gate turned out too weak to discriminate (feed metadata has no stake size, no change-from-prior, no stated intent) — the real signal lives in the filing text, which the gate couldn't see without fetching it anyway.
+**Root cause:** Two different problems were being solved with one mechanism. LLM *cost* control and *judgment quality* are separate concerns; a text-generation model is expensive for both, but a typed classifier (Jev / TypeSafe System One — choice/score/noul questions in one fan-out call, no free text, calibrated confidence, ~$0.042/1M input tokens, output free) is cheap enough to run on literally every filing while still reading the actual document.
+**Rule:** When a pipeline needs "score everything cheaply, only deep-read the interesting ones," reach for a structured/typed classifier as the middle tier before assuming a hand-tuned metadata heuristic or a second cheap LLM call is the only option — it changes the escalation threshold from a cost question into a confidence question (see `shouldEscalateToLlm()` in `server.cjs`), and removes the cost risk from volume spikes (e.g. 13G amendment deadline clusters) almost entirely. See [[docs/ownership-filing-triage.md]] for the full pipeline.

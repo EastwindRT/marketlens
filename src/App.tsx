@@ -21,6 +21,7 @@ const importXTrends = () => import('./pages/XTrends')
 const importInsiderActivity = () => import('./pages/InsiderActivity')
 const importCongress = () => import('./pages/Congress')
 const importFunds = () => import('./pages/Funds')
+const importOwnershipFilings = () => import('./pages/OwnershipFilings')
 
 // Lazy-load heavy pages to reduce initial bundle size
 const StockDetail         = lazyWithAutoReload(importStockDetail)
@@ -37,6 +38,7 @@ const XTrendsPage         = lazyWithAutoReload(importXTrends)
 const InsiderActivityPage = lazyWithAutoReload(importInsiderActivity)
 const CongressPage        = lazyWithAutoReload(importCongress)
 const FundsPage           = lazyWithAutoReload(importFunds)
+const OwnershipFilingsPage = lazyWithAutoReload(importOwnershipFilings)
 import { useLeagueStore } from './store/leagueStore'
 import { useWatchlistStore } from './store/watchlistStore'
 import { syncPendingTradesForPlayer } from './store/pendingTradeStore'
@@ -315,6 +317,7 @@ export default function App() {
             <Route path="/insiders" element={<InsiderActivityPage />} />
             <Route path="/congress" element={<CongressPage />} />
             <Route path="/funds" element={<FundsPage />} />
+            <Route path="/ownership-filings" element={<OwnershipFilingsPage />} />
           </Routes>
         </Suspense>
       </ErrorBoundary>

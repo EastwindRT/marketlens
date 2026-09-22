@@ -8,6 +8,7 @@ import {
   CalendarClock,
   Layers3,
   LineChart,
+  Radar,
   RefreshCw,
   Search,
   Sparkles,
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import { fetchConvergenceDashboard, type ConvergenceRow } from '../api/convergence';
 import { DataStatus } from '../components/ui/DataStatus';
+import { useOwnershipFilings } from '../hooks/useOwnershipFilings';
 
 const SIGNAL_COLUMNS: Array<{ key: keyof ConvergenceRow['signals']; label: string; color: string }> = [
   { key: 'reddit', label: 'Reddit', color: '#C05AD9' },
@@ -161,6 +163,8 @@ export default function Dashboard() {
         </div>
       </header>
 
+      <OwnershipFilingsHighlight />
+
       <section data-agent-section="convergence-metrics" className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3" style={{ marginBottom: 18 }}>
         <TopMetric icon={<Layers3 size={18} />} label="Names tracked" value={String(rows.length)} tone="#2F80ED" />
         <TopMetric icon={<Activity size={18} />} label="Theme baskets" value={String(basketCount)} tone="#D8622C" />
@@ -267,6 +271,54 @@ export default function Dashboard() {
         )}
       </section>
     </div>
+  );
+}
+
+function OwnershipFilingsHighlight() {
+  const { data, isLoading } = useOwnershipFilings({ minMateriality: 1.75, days: 7, limit: 5 });
+  const signals = data?.signals ?? [];
+  const top = signals[0] ?? null;
+  const escalatedCount = signals.filter((s) => s.escalated).length;
+
+  return (
+    <Link
+      to="/ownership-filings"
+      data-agent-section="ownership-filing-highlight"
+      style={{
+        display: 'block',
+        textDecoration: 'none',
+        background: 'linear-gradient(135deg, rgba(47,128,237,0.08), rgba(217,74,85,0.06))',
+        border: '1px solid rgba(47,128,237,0.24)',
+        borderRadius: 14,
+        padding: '14px 18px',
+        marginBottom: 18,
+      }}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3" style={{ minWidth: 0 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 8, background: '#FFFFFF', border: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Radar size={17} style={{ color: 'var(--accent-blue)' }} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <p style={{ margin: 0, fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>
+              13D/13G Triage — {isLoading ? 'scanning…' : signals.length > 0 ? `${signals.length} notable filing${signals.length === 1 ? '' : 's'} this week` : 'no notable filings this week'}
+            </p>
+            {top ? (
+              <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                Top: <strong>{top.symbol || top.subject_company}</strong> — {top.filer_name} ({top.form_type}){top.escalated ? ' · AI thesis ready' : ''}
+              </p>
+            ) : (
+              <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--text-tertiary)' }}>
+                Jev triages every new activist/passive ownership filing · {escalatedCount} escalated to a full AI thesis
+              </p>
+            )}
+          </div>
+        </div>
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-blue)', whiteSpace: 'nowrap' }}>
+          View triage feed →
+        </span>
+      </div>
+    </Link>
   );
 }
 

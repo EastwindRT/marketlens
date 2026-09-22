@@ -1212,3 +1212,31 @@ Make MarketLens/TARS feel fast, clean, mobile-friendly, and agent-friendly by ce
 - [x] `src/pages/InsiderActivity.tsx` - added a dedicated `CA Filings` tab that requests `mode=filings` instead of hiding all SEDI filing types behind the open-market insiders view.
 - [x] `server.cjs` - changed normal US/Canadian insider page loads to serve stale Supabase rows immediately and refresh in the background; `force=1` still performs a foreground live refresh.
 - [x] `node --check server.cjs` and `npm run build` passed cleanly.
+
+### Shipped slice 10 (2026-05-10)
+- [x] `server.cjs` - added optional Printing Press CLI collector discovery through `GET /api/external-collectors/status`.
+- [x] `server.cjs` - added admin-only `POST /api/external-collectors/run-now` for `yahoo-trending`, `hackernews-pulse`, and `creator-trends`.
+- [x] `server.cjs` - Yahoo trending and cashtag creator runs can write normalized snapshots into `social_trend_snapshots`; Hacker News topic pulse is cached in `app_settings`.
+- [x] `docs/printingpress-data-clis.md` - documented collector purpose, env vars, endpoints, and how the signals should feed convergence without slowing first paint.
+- [ ] Install/verify the chosen Printing Press CLIs in the deployed environment before enabling scheduled runs.
+
+### Shipped slice 11 (2026-09-21) — 13D/13G triage via Jev + dedicated page
+- [x] `server.cjs` - fixed `fetchMarketFilings`'s four EDGAR atom-feed calls to send the SEC-compliant `SEC_UA` header instead of falling through to the generic spoofed-browser default.
+- [x] `server.cjs` - added `callJev()` (raw HTTPS to `api.typesafe.ai/v1/systemone`, `withRetry`-wrapped via existing `httpsPost`) and a 5-question fan-out schema (`investor_type` choice, `board_or_strategic_intent`/`new_position`/`mechanical_crossing` noul, `materiality` score) scoring every new 13D/13G/amendment for a fraction of a cent per filing.
+- [x] `server.cjs` - `shouldEscalateToLlm()` gates the existing `QUANT_PROMPT`/Groq thesis path to only the filings Jev flags as material with high confidence, or with high board/strategic-intent probability.
+- [x] `server.cjs` - `runOwnershipFilingTriageJob()` dedupes against already-scored `accession_no`, persists every scored filing (escalated or not) to `ownership_filing_signals`, and logs one `agent_run_logs` row per run.
+- [x] `server.cjs` - `GET /api/ownership-filings/triage` (public, filterable) and `POST /api/ownership-filings/run-now` (admin-gated, same pattern as `/api/news/run-now`).
+- [x] `server.cjs` - wired into `startBackgroundSyncLoop` at a 30-min cadence, gated behind `OWNERSHIP_TRIAGE_ENABLED` (default off).
+- [x] `supabase_migration_ownership_filing_triage.sql` (new) - `ownership_filing_signals` table, public-read/service-role-write RLS, seeds `app_settings.ownership_triage_enabled=false`.
+- [x] `render.yaml` - added `TYPESAFE_API_KEY` (sync: false), `OWNERSHIP_TRIAGE_ENABLED` (default `"0"`), `JEV_MODEL` (default `jev-latest`).
+- [x] `src/api/ownershipFilings.ts` + `src/hooks/useOwnershipFilings.ts` (new) - typed client and react-query hook for the triage endpoint.
+- [x] `src/pages/OwnershipFilings.tsx` (new) - dedicated `/ownership-filings` page: investor-type/day-range/materiality/escalated-only filters, ranked filing cards with Jev badges and the AI thesis when escalated.
+- [x] `src/App.tsx` - added the `/ownership-filings` route (lazy-loaded, same pattern as the other feature pages).
+- [x] `src/components/layout/Sidebar.tsx` - added a "13D/13G Triage" nav link under Convergence.
+- [x] `src/pages/Dashboard.tsx` - added an `OwnershipFilingsHighlight` call-out card at the top of the homepage (`/dashboard`, also `/`) surfacing the top notable filing and a link into the full feed; deliberately not added to the mobile bottom nav (already a curated 4-5 slot subset — Funds isn't in it either).
+- [x] `docs/ownership-filing-triage.md` (new) - pipeline, escalation thresholds, endpoints, env vars, and known gaps.
+- [x] `public/llms.txt` - documented the new route and both endpoints for agent traversal.
+- [x] `node --check server.cjs` and `npm run build` passed cleanly.
+- [ ] Sign up for a TypeSafe/Jev account, add `TYPESAFE_API_KEY` to Render, and run `supabase_migration_ownership_filing_triage.sql` against the live Supabase project before setting `OWNERSHIP_TRIAGE_ENABLED=1` — until then the job safely no-ops and the page shows its empty state.
+- [ ] Verify `POST /api/ownership-filings/run-now` against the live TypeSafe API once the key is set (request/response shapes here are from `docs.typesafe.ai`, not independently tested against a live key).
+- [ ] `fetchMarketFilings`'s `action=getcurrent` EDGAR feed only covers a recent rolling window, not a guaranteed N-day lookback — switch to EDGAR daily-index files (like the Form 4 pipeline already does) if filings appear to go missing under real load.

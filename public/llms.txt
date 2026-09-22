@@ -12,6 +12,13 @@ Primary routes:
 - `/insiders`: insider activity.
 - `/congress`: congressional trading disclosures.
 - `/funds`: fund and ownership changes.
+- `/ownership-filings`: 13D/13G filings triaged by Jev (fast structured classification), with the small escalated slice carrying a full AI thesis. Highlighted on `/dashboard`.
+
+Agent-facing API surfaces:
+- `GET /api/external-collectors/status`: checks optional Printing Press CLI availability.
+- `POST /api/external-collectors/run-now`: admin-only collector trigger for `yahoo-trending`, `hackernews-pulse`, and `creator-trends`.
+- `GET /api/ownership-filings/triage`: ranked 13D/13G signals; `minMateriality`, `investorType`, `days`, `escalatedOnly` filters.
+- `POST /api/ownership-filings/run-now`: admin-only, triggers one triage pass on demand.
 
 How to inspect:
 - Use `/dashboard` first, then open `/stock/:symbol` for detail.

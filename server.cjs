@@ -1,6 +1,7 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const path = require('path');
+const { execFile } = require('child_process');
 const { createClient: createSupabaseClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -1630,11 +1631,14 @@ function parseMarketFilingsFeed(xml) {
 
 async function fetchMarketFilings(days = 14) {
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // SEC requires a compliant "<Org> <contact-email>" User-Agent on every request;
+  // pass SEC_UA explicitly here instead of falling through to httpsGet's generic
+  // spoofed-browser default, since this feed is now polled by the triage job too.
   const [d, g, da, ga] = await Promise.allSettled([
-    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13D')}&dateb=&owner=include&count=80&output=atom`),
-    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13G')}&dateb=&owner=include&count=80&output=atom`),
-    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13D/A')}&dateb=&owner=include&count=80&output=atom`),
-    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13G/A')}&dateb=&owner=include&count=80&output=atom`),
+    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13D')}&dateb=&owner=include&count=80&output=atom`, { 'User-Agent': SEC_UA }),
+    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13G')}&dateb=&owner=include&count=80&output=atom`, { 'User-Agent': SEC_UA }),
+    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13D/A')}&dateb=&owner=include&count=80&output=atom`, { 'User-Agent': SEC_UA }),
+    httpsGet(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent('SCHEDULE 13G/A')}&dateb=&owner=include&count=80&output=atom`, { 'User-Agent': SEC_UA }),
   ]);
 
   const merged = [
@@ -4057,6 +4061,253 @@ app.post('/api/analyze-filing', async (req, res) => {
   }
 });
 
+// ── Ownership Filing Triage (13D/13G via Jev + LLM escalation) ───────────────
+// Every new 13D/13G/13D-A/13G-A filing gets a fast structured read from Jev
+// (TypeSafe's System One model — typed choice/score/noul questions, not free
+// text; ~$0.042 per 1M input tokens, output free, 70-500ms per call). Only
+// filings that clear the escalation threshold get sent to the existing
+// QUANT_PROMPT (Groq) for a full written thesis, so LLM volume stays small
+// and the page shows a ranked, cheaply-computed triage for everything else.
+// See docs/ownership-filing-triage.md for the full design.
+
+const TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY || '';
+const OWNERSHIP_TRIAGE_ENABLED = process.env.OWNERSHIP_TRIAGE_ENABLED === '1';
+const JEV_MODEL = process.env.JEV_MODEL || 'jev-latest';
+
+function hasOwnershipTriageDb() {
+  return Boolean(serverSupabase);
+}
+
+async function callJev(state, questions) {
+  if (!TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY not configured');
+  const raw = await httpsPost(
+    'https://api.typesafe.ai/v1/systemone',
+    { state, model: JEV_MODEL, questions },
+    { Authorization: `Bearer ${TYPESAFE_API_KEY}` }
+  );
+  const parsed = JSON.parse(raw);
+  if (!parsed?.answers) throw new Error('Invalid Jev response — missing answers');
+  return parsed;
+}
+
+const OWNERSHIP_TRIAGE_QUESTIONS = {
+  investor_type: {
+    type: 'choice',
+    instructions: 'What kind of investor filed this SEC beneficial-ownership disclosure?',
+    criteria: {
+      activist: 'Investor is known for, or is signaling, intent to influence company strategy, board composition, or capital allocation',
+      passive_index: 'A passive institutional holder (index fund, asset manager) crossing a reporting threshold with no signaled intent to act',
+      strategic_acquirer: 'A corporate or strategic buyer building a stake, potentially toward an acquisition or commercial relationship',
+      other: 'Does not clearly fit the above — e.g. insider/founder consolidation, estate or trust transfer, unclear intent',
+    },
+  },
+  board_or_strategic_intent: {
+    type: 'noul',
+    instructions: 'Item 4 (Purpose of Transaction) of this filing discloses intent to seek board representation, propose a merger, sale, or other strategic alternative, or otherwise actively influence the company.',
+  },
+  new_position: {
+    type: 'noul',
+    instructions: 'This filing represents a brand-new beneficial ownership position rather than a routine periodic update to a stake the filer already disclosed before.',
+  },
+  mechanical_crossing: {
+    type: 'noul',
+    instructions: 'This filing looks like a routine passive threshold crossing by an index fund or large asset manager (e.g. BlackRock, Vanguard, State Street, Geode) with no indication of active intent.',
+  },
+  materiality: {
+    type: 'score',
+    instructions: 'How significant is this filing for a trader deciding whether to look at it right now?',
+    criteria: [
+      'Routine — no market-moving content, safe to skip',
+      'Notable — worth a line in a feed but not urgent',
+      'Significant — should be reviewed promptly, plausible near-term catalyst',
+      'Highly significant — activist campaign, large new stake, or clear strategic intent',
+    ],
+  },
+};
+
+async function scoreFilingWithJev(filingText) {
+  const started = Date.now();
+  const result = await callJev(filingText, OWNERSHIP_TRIAGE_QUESTIONS);
+  const answers = result.answers || {};
+  return {
+    investorType: answers.investor_type?.choice ?? null,
+    investorTypeConfidence: answers.investor_type?.confidence ?? null,
+    boardOrStrategicIntent: answers.board_or_strategic_intent?.noul ?? null,
+    newPosition: answers.new_position?.noul ?? null,
+    mechanicalCrossing: answers.mechanical_crossing?.noul ?? null,
+    materialityScore: answers.materiality?.score ?? null,
+    materialityConfidence: answers.materiality?.confidence ?? null,
+    jevModel: result.model || JEV_MODEL,
+    jevRaw: result,
+    tokensUsed: (result.usage?.input_tokens || 0) + (result.usage?.output_tokens || 0),
+    msElapsed: Date.now() - started,
+  };
+}
+
+// A filing only earns the full LLM thesis when Jev is both confident and
+// flags it as material — this is what keeps LLM call volume small even
+// during a 13G amendment deadline spike.
+function shouldEscalateToLlm(signal) {
+  if (signal.materialityScore == null) return false;
+  if (signal.materialityScore >= 2 && (signal.materialityConfidence ?? 0) >= 0.6) return true;
+  if ((signal.boardOrStrategicIntent ?? 0) >= 0.7) return true;
+  return false;
+}
+
+async function upsertOwnershipFilingSignal(row) {
+  if (!hasOwnershipTriageDb()) return null;
+  const { data, error } = await serverSupabase
+    .from('ownership_filing_signals')
+    .upsert(row, { onConflict: 'accession_no' })
+    .select('id')
+    .maybeSingle();
+  if (error) { console.error('[ownership-filing-signals upsert]', error.message); return null; }
+  return data?.id ?? null;
+}
+
+async function getScoredAccessionNumbers(accessionNos) {
+  if (!hasOwnershipTriageDb() || !accessionNos.length) return new Set();
+  const { data, error } = await serverSupabase
+    .from('ownership_filing_signals')
+    .select('accession_no')
+    .in('accession_no', accessionNos);
+  if (error) { console.error('[ownership-filing-signals scored-lookup]', error.message); return new Set(); }
+  return new Set((data ?? []).map((r) => r.accession_no));
+}
+
+async function getOwnershipFilingSignals({ minMateriality = 0, investorType = null, days = 14, escalatedOnly = false, limit = 100 } = {}) {
+  if (!hasOwnershipTriageDb()) return [];
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  let query = serverSupabase
+    .from('ownership_filing_signals')
+    .select('*')
+    .gte('filed_date', cutoff)
+    .order('materiality_score', { ascending: false, nullsFirst: false })
+    .order('filed_date', { ascending: false })
+    .limit(Math.min(limit, 500));
+  if (minMateriality > 0) query = query.gte('materiality_score', minMateriality);
+  if (investorType) query = query.eq('investor_type', investorType);
+  if (escalatedOnly) query = query.eq('escalated', true);
+  const { data, error } = await query;
+  if (error) { console.error('[ownership-filing-signals query]', error.message); return []; }
+  return data ?? [];
+}
+
+async function runOwnershipFilingTriageJob({ days = 3, maxNew = 60 } = {}) {
+  const started = Date.now();
+  if (!OWNERSHIP_TRIAGE_ENABLED) return { skipped: true, reason: 'disabled (OWNERSHIP_TRIAGE_ENABLED != 1)' };
+  if (!TYPESAFE_API_KEY) return { skipped: true, reason: 'TYPESAFE_API_KEY not configured' };
+  if (!hasOwnershipTriageDb()) return { skipped: true, reason: 'no database configured' };
+
+  let filings;
+  try {
+    filings = await fetchMarketFilings(days);
+  } catch (err) {
+    await logAgentRun({ job: 'ownership-filing-triage', itemsProcessed: 0, tokensUsed: 0, msElapsed: Date.now() - started, error: err.message });
+    throw err;
+  }
+
+  const withAccession = filings.filter((f) => f.accessionNo);
+  const alreadyScored = await getScoredAccessionNumbers(withAccession.map((f) => f.accessionNo));
+  const unscored = withAccession.filter((f) => !alreadyScored.has(f.accessionNo)).slice(0, maxNew);
+
+  let tokensUsed = 0;
+  let scored = 0;
+  let escalated = 0;
+  const errors = [];
+
+  for (const filing of unscored) {
+    try {
+      const filingText = await fetchEdgarFilingText(filing.filingUrl);
+      const signal = await scoreFilingWithJev(filingText);
+      tokensUsed += signal.tokensUsed;
+      const escalate = shouldEscalateToLlm(signal);
+
+      let llmThesis = null;
+      let llmModel = null;
+      if (escalate && process.env.GROQ_API_KEY) {
+        try {
+          const rawJson = await callAI('groq', process.env.GROQ_API_KEY, filingText);
+          const cleaned = rawJson.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim();
+          llmThesis = JSON.parse(cleaned);
+          llmModel = 'groq-llama-3.3-70b';
+        } catch (err) {
+          errors.push(`${filing.accessionNo} llm: ${err.message}`);
+        }
+      }
+
+      await upsertOwnershipFilingSignal({
+        accession_no: filing.accessionNo,
+        symbol: filing.symbol || null,
+        subject_company: filing.subjectCompany || '',
+        subject_cik: filing.subjectCik || null,
+        filer_name: filing.filerName || '',
+        form_type: filing.formType,
+        filed_date: filing.filedDate,
+        filing_url: filing.filingUrl,
+        investor_type: signal.investorType,
+        investor_type_confidence: signal.investorTypeConfidence,
+        board_or_strategic_intent: signal.boardOrStrategicIntent,
+        new_position: signal.newPosition,
+        mechanical_crossing: signal.mechanicalCrossing,
+        materiality_score: signal.materialityScore,
+        materiality_confidence: signal.materialityConfidence,
+        jev_raw: signal.jevRaw,
+        jev_model: signal.jevModel,
+        escalated: Boolean(llmThesis),
+        llm_thesis: llmThesis,
+        llm_model: llmModel,
+        sector: filing.sector || null,
+        industry: filing.industry || null,
+        updated_at: new Date().toISOString(),
+      });
+      scored += 1;
+      if (llmThesis) escalated += 1;
+    } catch (err) {
+      errors.push(`${filing.accessionNo}: ${err.message}`);
+    }
+  }
+
+  await logAgentRun({
+    job: 'ownership-filing-triage',
+    itemsProcessed: scored,
+    tokensUsed,
+    msElapsed: Date.now() - started,
+    error: errors.length ? errors.slice(0, 5).join(' | ') : null,
+  });
+
+  return { scored, escalated, candidates: unscored.length, tokensUsed, errors };
+}
+
+app.get('/api/ownership-filings/triage', async (req, res) => {
+  try {
+    const minMateriality = Number(req.query.minMateriality ?? 0);
+    const investorType = req.query.investorType ? String(req.query.investorType) : null;
+    const days = Math.min(Math.max(parseInt(req.query.days || '14', 10), 1), 90);
+    const escalatedOnly = req.query.escalatedOnly === '1';
+    const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
+    const signals = await getOwnershipFilingSignals({ minMateriality, investorType, days, escalatedOnly, limit });
+    res.json({ schemaVersion: 1, signals, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('[api/ownership-filings/triage]', err.message);
+    res.status(502).json({ schemaVersion: 1, signals: [], generatedAt: new Date().toISOString(), error: err.message });
+  }
+});
+
+app.post('/api/ownership-filings/run-now', async (req, res) => {
+  const adminEmails = (process.env.VITE_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  const callerEmail = (req.headers['x-admin-email'] || '').toLowerCase().trim();
+  if (adminEmails.length > 0 && !adminEmails.includes(callerEmail)) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  try {
+    const result = await runOwnershipFilingTriageJob();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ── Insider AI Analysis ──────────────────────────────────────────────────────
 
 const INSIDER_QUANT_PROMPT = `You are a senior quant analyst at a top-tier Wall Street hedge fund (think Citadel, Renaissance Technologies, or Point72). You specialise in reading insider transaction filings (SEC Form 4, SEDI) to extract high-conviction trading signals before the market reacts.
@@ -6322,6 +6573,164 @@ async function setAppSetting(key, value) {
 
 // ── Phase 2: Headline fetchers + dedup + Claude scoring + job ────────────────
 
+// Optional Printing Press CLI collectors. They enrich MarketLens caches when
+// installed, but dashboard/API reads never depend on the external binaries.
+const PP_YAHOO_FINANCE_CLI = process.env.PP_YAHOO_FINANCE_CLI || 'yahoo-finance-pp-cli';
+const PP_HACKERNEWS_CLI = process.env.PP_HACKERNEWS_CLI || 'hackernews-pp-cli';
+const PP_SCRAPE_CREATORS_CLI = process.env.PP_SCRAPE_CREATORS_CLI || 'scrape-creators-pp-cli';
+const EXTERNAL_COLLECTOR_TIMEOUT_MS = Math.min(
+  120000,
+  Math.max(5000, parseInt(process.env.EXTERNAL_COLLECTOR_TIMEOUT_MS || '45000', 10) || 45000)
+);
+const DEFAULT_HN_TOPICS = (process.env.HACKERNEWS_TREND_TOPICS || 'AI agents,semiconductors,Nvidia,datacenter,robotics')
+  .split(',')
+  .map((topic) => topic.trim())
+  .filter(Boolean)
+  .slice(0, 12);
+
+function runExternalCli(command, args = [], { timeoutMs = EXTERNAL_COLLECTOR_TIMEOUT_MS } = {}) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    let child;
+    const finish = (error, stdout = '', stderr = '') => {
+      resolve({
+        ok: !error,
+        command,
+        args,
+        exitCode: Number.isFinite(error?.code) ? error.code : (error ? 1 : 0),
+        timedOut: Boolean(error?.killed || /timed out/i.test(String(error?.message || ''))),
+        msElapsed: Date.now() - startedAt,
+        stdout: String(stdout || '').trim(),
+        stderr: String(stderr || '').trim(),
+        error: error ? String(error.message || error) : null,
+      });
+    };
+    try {
+      child = execFile(command, args, { timeout: timeoutMs, maxBuffer: 5 * 1024 * 1024, windowsHide: true }, finish);
+      child.on('error', (error) => finish(error));
+    } catch (error) {
+      finish(error);
+    }
+  });
+}
+
+function parseCliJson(stdout) {
+  const text = String(stdout || '').trim();
+  if (!text) return null;
+  try { return JSON.parse(text); } catch {}
+  const firstJson = text.search(/[\[{]/);
+  if (firstJson < 0) return null;
+  try { return JSON.parse(text.slice(firstJson)); } catch {}
+  return null;
+}
+
+function compactCliResult(result) {
+  return {
+    ok: result.ok,
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    msElapsed: result.msElapsed,
+    error: result.error,
+    stderr: result.stderr ? result.stderr.slice(0, 1200) : '',
+  };
+}
+
+async function checkExternalCollectorStatus({ live = false } = {}) {
+  const checks = [
+    { id: 'yahoo-finance', label: 'Yahoo Finance', command: PP_YAHOO_FINANCE_CLI, install: 'npx -y @mvanhorn/printing-press install yahoo-finance --cli-only', args: live ? ['doctor', '--json'] : ['--help'] },
+    { id: 'hackernews', label: 'Hacker News', command: PP_HACKERNEWS_CLI, install: 'npx -y @mvanhorn/printing-press install hackernews --cli-only', args: live ? ['doctor', '--json'] : ['--help'] },
+    { id: 'scrape-creators', label: 'Scrape Creators', command: PP_SCRAPE_CREATORS_CLI, install: 'npx -y @mvanhorn/printing-press install scrape-creators --cli-only', args: ['--help'], configured: Boolean(process.env.SCRAPE_CREATORS_API_KEY), note: process.env.SCRAPE_CREATORS_API_KEY ? 'API key configured' : 'Set SCRAPE_CREATORS_API_KEY before live social pulls' },
+  ];
+  const collectors = await Promise.all(checks.map(async (check) => {
+    const result = await runExternalCli(check.command, check.args, { timeoutMs: live ? 20000 : 5000 });
+    return { id: check.id, label: check.label, available: result.ok, configured: check.configured ?? true, command: check.command, install: check.install, note: check.note || null, check: compactCliResult(result) };
+  }));
+  return { schemaVersion: 1, generatedAt: new Date().toISOString(), live, collectors };
+}
+
+function arrayFromCliPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ['items', 'results', 'stories', 'quotes', 'symbols', 'data']) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  if (Array.isArray(payload?.data?.items)) return payload.data.items;
+  if (Array.isArray(payload?.data?.results)) return payload.data.results;
+  return [];
+}
+
+function normalizeYahooTrendingItem(item, index) {
+  const symbol = normalizeSymbol(item?.symbol || item?.ticker || item?.quote?.symbol || '');
+  if (!symbol || !/^[A-Z0-9.^-]{1,12}$/.test(symbol)) return null;
+  return {
+    rank: finiteNumber(item.rank) || index + 1,
+    ticker: symbol,
+    symbol,
+    name: String(item.shortName || item.longName || item.name || symbol),
+    mentions: Math.max(1, 101 - Math.min(100, index + 1)),
+    upvotes: 0,
+    uniqueAccounts: 0,
+    engagementScore: finiteNumber(item.regularMarketChangePercent) || 0,
+    raw: item,
+  };
+}
+
+async function runYahooTrendingCollector({ region = 'US', limit = 50 } = {}) {
+  const result = await runExternalCli(PP_YAHOO_FINANCE_CLI, ['trending', String(region || 'US'), '--json', '--compact', '--no-color']);
+  const payload = parseCliJson(result.stdout);
+  const items = arrayFromCliPayload(payload).map((item, index) => normalizeYahooTrendingItem(item, index)).filter(Boolean).slice(0, Math.min(100, Math.max(5, Number(limit) || 50)));
+  if (items.length) await writeSocialTrendSnapshots('yahoo_trending', String(region || 'US'), items);
+  const normalized = { collector: 'yahoo-trending', source: 'Printing Press Yahoo Finance CLI', generatedAt: new Date().toISOString(), region: String(region || 'US'), count: items.length, items };
+  await setAppSetting('external_collector_last_yahoo_trending', normalized).catch(() => {});
+  return { ...compactCliResult(result), payload: normalized };
+}
+
+function normalizeHackerNewsPulse(payload, topic) {
+  const rows = arrayFromCliPayload(payload);
+  const totals = rows.reduce((acc, row) => {
+    acc.mentions += finiteNumber(row.mentions ?? row.count ?? row.hits) || 0;
+    acc.score += finiteNumber(row.score ?? row.points ?? row.avg_score) || 0;
+    acc.comments += finiteNumber(row.comments ?? row.comment_count ?? row.num_comments) || 0;
+    return acc;
+  }, { mentions: 0, score: 0, comments: 0 });
+  return { topic, mentions: Math.round(totals.mentions), score: Math.round(totals.score), comments: Math.round(totals.comments), rows };
+}
+
+async function runHackerNewsPulseCollector({ topics = DEFAULT_HN_TOPICS, days = 7 } = {}) {
+  const cleanTopics = (Array.isArray(topics) ? topics : String(topics || '').split(',')).map((topic) => String(topic || '').trim()).filter(Boolean).slice(0, 12);
+  const cleanDays = Math.min(30, Math.max(1, Number(days) || 7));
+  const results = [];
+  for (const topic of cleanTopics) {
+    const result = await runExternalCli(PP_HACKERNEWS_CLI, ['pulse', topic, '--days', String(cleanDays), '--agent']);
+    const payload = parseCliJson(result.stdout);
+    results.push({ topic, cli: compactCliResult(result), pulse: normalizeHackerNewsPulse(payload, topic) });
+  }
+  const normalized = { collector: 'hackernews-pulse', source: 'Printing Press Hacker News CLI', generatedAt: new Date().toISOString(), days: cleanDays, topics: results };
+  await setAppSetting('external_collector_last_hackernews_pulse', normalized).catch(() => {});
+  return normalized;
+}
+
+function symbolFromTrendQuery(query) {
+  const match = String(query || '').toUpperCase().match(/\$([A-Z]{1,5})\b/);
+  return match ? match[1] : '';
+}
+
+async function runCreatorTrendCollector({ query = 'AI agents', platform = '', days = 7 } = {}) {
+  if (!process.env.SCRAPE_CREATORS_API_KEY) return { ok: false, collector: 'creator-trends', error: 'SCRAPE_CREATORS_API_KEY is not configured', generatedAt: new Date().toISOString() };
+  const cleanQuery = String(query || 'AI agents').trim().slice(0, 80);
+  const cleanPlatform = String(platform || '').trim();
+  const args = ['trends', cleanPlatform ? 'delta' : 'triangulate', cleanQuery, '--json'];
+  if (cleanPlatform) args.push('--platform', cleanPlatform, '--days', String(Math.min(30, Math.max(1, Number(days) || 7))));
+  const result = await runExternalCli(PP_SCRAPE_CREATORS_CLI, args, { timeoutMs: Math.max(EXTERNAL_COLLECTOR_TIMEOUT_MS, 60000) });
+  const payload = parseCliJson(result.stdout);
+  const symbol = symbolFromTrendQuery(cleanQuery);
+  if (symbol && result.ok) {
+    await writeSocialTrendSnapshots('creator_trends', cleanPlatform || 'triangulate', [{ symbol, ticker: symbol, rank: 1, mentions: finiteNumber(payload?.mentions ?? payload?.count ?? payload?.videoCount) || 1, upvotes: finiteNumber(payload?.engagement ?? payload?.likes ?? payload?.score) || 0, engagementScore: finiteNumber(payload?.engagement ?? payload?.score) || 0, raw: payload }]);
+  }
+  const normalized = { collector: 'creator-trends', source: 'Printing Press Scrape Creators CLI', generatedAt: new Date().toISOString(), query: cleanQuery, platform: cleanPlatform || 'triangulate', symbol: symbol || null, cli: compactCliResult(result), payload };
+  await setAppSetting('external_collector_last_creator_trends', normalized).catch(() => {});
+  return normalized;
+}
+
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY || '';
 const NEWS_SOURCE_MODE = String(process.env.NEWS_SOURCE_MODE || 'alpha').trim().toLowerCase();
 const NEWSAPI_ENABLED = !!NEWSAPI_KEY && isXEnabledValue(process.env.NEWSAPI_ENABLED ?? (NEWS_SOURCE_MODE === 'broad' ? 'true' : 'false'));
@@ -7156,6 +7565,57 @@ app.get('/api/reddit-trends', async (req, res) => {
       results: [],
       error: err.message,
     });
+  }
+});
+
+app.get('/api/external-collectors/status', async (req, res) => {
+  try {
+    const payload = await checkExternalCollectorStatus({ live: req.query.live === '1' });
+    res.json(payload);
+  } catch (err) {
+    console.error('[api/external-collectors/status]', err.message);
+    res.status(502).json({ schemaVersion: 1, generatedAt: new Date().toISOString(), error: err.message, collectors: [] });
+  }
+});
+
+app.post('/api/external-collectors/run-now', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  const collector = String(req.body?.collector || req.query.collector || '').trim();
+  try {
+    let result;
+    if (collector === 'yahoo-trending') {
+      result = await runYahooTrendingCollector({
+        region: req.body?.region || req.query.region || 'US',
+        limit: req.body?.limit || req.query.limit || 50,
+      });
+    } else if (collector === 'hackernews-pulse') {
+      result = await runHackerNewsPulseCollector({
+        topics: req.body?.topics || req.query.topics || DEFAULT_HN_TOPICS,
+        days: req.body?.days || req.query.days || 7,
+      });
+    } else if (collector === 'creator-trends') {
+      result = await runCreatorTrendCollector({
+        query: req.body?.query || req.query.query || 'AI agents',
+        platform: req.body?.platform || req.query.platform || '',
+        days: req.body?.days || req.query.days || 7,
+      });
+    } else {
+      return res.status(400).json({
+        error: 'collector must be one of yahoo-trending, hackernews-pulse, creator-trends',
+      });
+    }
+    await logAgentRun({
+      job: `external-${collector}`,
+      itemsProcessed: Number(result?.payload?.count ?? result?.topics?.length ?? 0) || 0,
+      tokensUsed: 0,
+      msElapsed: Number(result?.msElapsed ?? 0) || 0,
+      error: result?.error || result?.cli?.error || null,
+    });
+    res.json({ ok: !result?.error, collector, result });
+  } catch (err) {
+    console.error('[api/external-collectors/run-now]', err.message);
+    await logAgentRun({ job: `external-${collector || 'unknown'}`, itemsProcessed: 0, tokensUsed: 0, msElapsed: 0, error: err.message });
+    res.status(502).json({ ok: false, collector, error: err.message });
   }
 });
 
@@ -8134,6 +8594,7 @@ app.post('/api/x-social/run-now', async (req, res) => {
 // ── Phase 4: Wire news + briefing jobs into background scheduler ──────────────
 
 const NEWS_BACKGROUND_SYNC_MS = 60 * 60 * 1000; // 1 hour
+const OWNERSHIP_TRIAGE_BACKGROUND_SYNC_MS = 30 * 60 * 1000; // 30 minutes
 const X_SOCIAL_BACKGROUND_SYNC_MS =
   Math.min(168, Math.max(1, parseInt(process.env.X_SOCIAL_BACKGROUND_SYNC_HOURS || '4', 10) || 4)) * 60 * 60 * 1000;
 
@@ -8175,6 +8636,16 @@ function startBackgroundSync() {
     console.log('[background-sync] news-impact + agent-briefing scheduled at 60-min cadence');
   } else {
     console.log('[background-sync] news agent disabled (NEWS_AGENT_ENABLED=0)');
+  }
+
+  if (OWNERSHIP_TRIAGE_ENABLED) {
+    scheduleRepeatingTask('ownership-filing-triage', OWNERSHIP_TRIAGE_BACKGROUND_SYNC_MS, async () => {
+      const result = await runOwnershipFilingTriageJob();
+      console.log(`[ownership-triage sync] scored=${result.scored ?? 0} escalated=${result.escalated ?? 0} tokens=${result.tokensUsed ?? 0}`);
+    });
+    console.log('[background-sync] ownership-filing-triage scheduled at 30-min cadence');
+  } else {
+    console.log('[background-sync] ownership filing triage disabled (set OWNERSHIP_TRIAGE_ENABLED=1 to enable)');
   }
 }
 
