@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Menu, Search, X, Trophy, User, LogOut, BarChart2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Menu, Search, X, User, LogOut } from 'lucide-react';
 import { supabase } from '../../api/supabase';
 
 // TARS logo — a 4-pointed star ✦ because TARS is an anagram of STAR
@@ -32,7 +32,6 @@ export function Header({ onMenuClick }: HeaderProps) {
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   const desktopMenuRef = useRef<HTMLDivElement>(null);
   const { player } = useLeagueStore();
-  const navigate = useNavigate();
 
   useEffect(() => {
     if (!showPlayerMenu) return;
@@ -114,15 +113,6 @@ export function Header({ onMenuClick }: HeaderProps) {
                       borderRadius: 10, overflow: 'hidden', minWidth: 140, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
                     }}>
                       <button
-                        onClick={() => { setShowPlayerMenu(false); navigate('/portfolio'); }}
-                        style={{ width: '100%', padding: '10px 14px', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                      >
-                        <BarChart2 size={14} color="var(--text-secondary)" /> Portfolio
-                      </button>
-                      <div style={{ height: 1, background: 'var(--border-subtle)' }} />
-                      <button
                         onClick={handleSignOut}
                         style={{ width: '100%', padding: '10px 14px', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#F6465D' }}
                         onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
@@ -169,17 +159,6 @@ export function Header({ onMenuClick }: HeaderProps) {
           {/* Right nav */}
           {SUPABASE_CONFIGURED && (
             <div className="flex items-center gap-3 flex-shrink-0">
-              <Link
-                to="/leaderboard"
-                className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium no-underline"
-                style={{ color: 'var(--text-secondary)', background: 'transparent', transition: 'color 150ms' }}
-                onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
-                onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
-              >
-                <Trophy size={15} />
-                Portfolios
-              </Link>
-
               {player ? (
                 <div ref={desktopMenuRef} style={{ position: 'relative' }}>
                   <button
@@ -201,15 +180,6 @@ export function Header({ onMenuClick }: HeaderProps) {
                       background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
                       borderRadius: 10, overflow: 'hidden', minWidth: 150, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
                     }}>
-                      <button
-                        onClick={() => { setShowPlayerMenu(false); navigate('/portfolio'); }}
-                        style={{ width: '100%', padding: '10px 14px', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                      >
-                        <BarChart2 size={14} color="var(--text-secondary)" /> Portfolio
-                      </button>
-                      <div style={{ height: 1, background: 'var(--border-subtle)' }} />
                       <button
                         onClick={handleSignOut}
                         style={{ width: '100%', padding: '10px 14px', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#F6465D' }}

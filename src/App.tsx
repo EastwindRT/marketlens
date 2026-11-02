@@ -1,23 +1,14 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState, Suspense, lazy } from 'react'
 import type { ComponentType } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import AppShell from './components/layout/AppShell'
-import Dashboard from './pages/Dashboard'
 import LoginModal from './components/auth/LoginModal'
 import ErrorBoundary from './components/ui/ErrorBoundary'
 
 const importStockDetail = () => import('./pages/StockDetail')
 const importSearch = () => import('./pages/Search')
-const importLeaderboard = () => import('./pages/Leaderboard')
-const importPortfolio = () => import('./pages/Portfolio')
-const importPlayerPortfolio = () => import('./pages/PlayerPortfolio')
-const importAdmin = () => import('./pages/Admin')
 const importNews = () => import('./pages/News')
-const importNewsImpact = () => import('./pages/NewsImpact')
-const importAgentAlerts = () => import('./pages/AgentAlerts')
-const importRedditTrends = () => import('./pages/RedditTrends')
-const importXTrends = () => import('./pages/XTrends')
 const importInsiderActivity = () => import('./pages/InsiderActivity')
 const importCongress = () => import('./pages/Congress')
 const importFunds = () => import('./pages/Funds')
@@ -26,22 +17,13 @@ const importOwnershipFilings = () => import('./pages/OwnershipFilings')
 // Lazy-load heavy pages to reduce initial bundle size
 const StockDetail         = lazyWithAutoReload(importStockDetail)
 const Search              = lazyWithAutoReload(importSearch)
-const Leaderboard         = lazyWithAutoReload(importLeaderboard)
-const Portfolio           = lazyWithAutoReload(importPortfolio)
-const PlayerPortfolio     = lazyWithAutoReload(importPlayerPortfolio)
-const Admin               = lazyWithAutoReload(importAdmin)
 const NewsPage            = lazyWithAutoReload(importNews)
-const NewsImpactPage      = lazyWithAutoReload(importNewsImpact)
-const AgentAlertsPage     = lazyWithAutoReload(importAgentAlerts)
-const RedditTrendsPage    = lazyWithAutoReload(importRedditTrends)
-const XTrendsPage         = lazyWithAutoReload(importXTrends)
 const InsiderActivityPage = lazyWithAutoReload(importInsiderActivity)
 const CongressPage        = lazyWithAutoReload(importCongress)
 const FundsPage           = lazyWithAutoReload(importFunds)
 const OwnershipFilingsPage = lazyWithAutoReload(importOwnershipFilings)
 import { useLeagueStore } from './store/leagueStore'
 import { useWatchlistStore } from './store/watchlistStore'
-import { syncPendingTradesForPlayer } from './store/pendingTradeStore'
 import { supabase, ensurePlayerForSession, touchPlayerActivity } from './api/supabase'
 
 const SUPABASE_CONFIGURED =
@@ -51,7 +33,6 @@ const LAZY_RELOAD_KEY = 'tars:lazy-reload'
 const BOOTSTRAP_RETRY_DELAY_MS = 1200
 const IDLE_LOGOUT_MS = 30 * 60 * 1000
 const ACTIVITY_HEARTBEAT_MS = 60 * 1000
-const PENDING_TRADE_SYNC_MS = 15 * 1000
 
 function lazyWithAutoReload<T extends { default: ComponentType<any> }>(
   importer: () => Promise<T>
@@ -233,41 +214,6 @@ export default function App() {
     }
   }, [logout, player?.id, session])
 
-  useEffect(() => {
-    if (!SUPABASE_CONFIGURED || !session || !player?.id) return
-
-    let intervalId: number | null = null
-
-    const runSync = () => {
-      void syncPendingTradesForPlayer(player).catch((error) => {
-        console.warn('[App] pending trade sync failed:', error)
-      })
-    }
-
-    const handleOnline = () => runSync()
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') runSync()
-    }
-
-    runSync()
-    intervalId = window.setInterval(runSync, PENDING_TRADE_SYNC_MS)
-    window.addEventListener('online', handleOnline)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
-    return () => {
-      if (intervalId !== null) window.clearInterval(intervalId)
-      window.removeEventListener('online', handleOnline)
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-    }
-  }, [player, session])
-
-  useEffect(() => {
-    if (!session) return
-
-    void importPortfolio()
-    void importPlayerPortfolio()
-  }, [session])
-
   // Still loading session — show spinner instead of blank screen
   if (session === undefined) {
     return (
@@ -300,24 +246,15 @@ export default function App() {
           </div>
         }>
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<Navigate to="/ownership-filings" replace />} />
             <Route path="/stock/:symbol" element={<StockDetail />} />
             <Route path="/search" element={<Search />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/leaderboard" element={<Leaderboard />} />
-            <Route path="/players" element={<Leaderboard />} />
-            <Route path="/portfolio" element={<Portfolio />} />
-            <Route path="/portfolio/:playerId" element={<PlayerPortfolio />} />
-            <Route path="/admin" element={<Admin />} />
             <Route path="/news" element={<NewsPage />} />
-            <Route path="/news-impact" element={<NewsImpactPage />} />
-            <Route path="/alerts" element={<AgentAlertsPage />} />
-            <Route path="/reddit-trends" element={<RedditTrendsPage />} />
-            <Route path="/x-trends" element={<XTrendsPage />} />
             <Route path="/insiders" element={<InsiderActivityPage />} />
             <Route path="/congress" element={<CongressPage />} />
             <Route path="/funds" element={<FundsPage />} />
             <Route path="/ownership-filings" element={<OwnershipFilingsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
       </ErrorBoundary>

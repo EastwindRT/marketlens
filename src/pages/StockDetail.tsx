@@ -1,6 +1,6 @@
 import { lazy, Suspense, useRef, useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Check, RefreshCw, ArrowUpDown, Send, Bot } from 'lucide-react';
+import { Plus, Check, RefreshCw, Send, Bot } from 'lucide-react';
 import { useStockCandles, useStockQuote, useStockProfile } from '../hooks/useStockData';
 import { useInsiderData } from '../hooks/useInsiderData';
 import { useRealTimeQuote } from '../hooks/useRealTimeQuote';
@@ -9,7 +9,6 @@ import { useStockAIContext } from '../hooks/useStockAIContext';
 import { useEdgarFilings } from '../hooks/useEdgarFilings';
 import { useChartStore } from '../store/chartStore';
 import { useWatchlistStore } from '../store/watchlistStore';
-import { useLeagueStore } from '../store/leagueStore';
 import { StockChart } from '../components/chart/StockChart';
 import type { OHLCVBar, ChartType, InsiderTransaction, NewsItem } from '../api/types';
 import { PriceDisplay } from '../components/ui/PriceDisplay';
@@ -34,10 +33,6 @@ const DeepAnalyzeDrawer = lazy(() =>
 const FilingSheet = lazy(() =>
   import('../components/ui/FilingSheet').then((m) => ({ default: m.FilingSheet }))
 );
-const TradeModal = lazy(() => import('../components/trade/TradeModal'));
-
-const SUPABASE_CONFIGURED =
-  !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export default function StockDetail() {
   const { symbol = 'AAPL' } = useParams<{ symbol: string }>();
@@ -47,10 +42,8 @@ export default function StockDetail() {
     setTimeRange, setChartType, toggleSMA20, toggleSMA50, toggleVolume,
   } = useChartStore();
   const { hasItem, addItem, removeItem } = useWatchlistStore();
-  const { player } = useLeagueStore();
   const isCanadian = isTSXTicker(symbol);
   const currency = isCanadian ? 'CAD' : 'USD';
-  const [showTradeModal, setShowTradeModal] = useState(false);
   const [deepTarget, setDeepTarget] = useState<DeepAnalyzeTarget | null>(null);
   const [selectedFiling, setSelectedFiling] = useState<MarketFiling | null>(null);
 
@@ -137,25 +130,6 @@ export default function StockDetail() {
 
             {/* Buttons row */}
             <div className="flex items-center gap-2 flex-shrink-0 mt-1">
-              {/* Trade button — only if logged in + Supabase configured */}
-              {SUPABASE_CONFIGURED && player && (
-                <button
-                  onClick={() => setShowTradeModal(true)}
-                  className="flex items-center gap-1.5 px-3 md:px-4 py-2 rounded-xl text-sm font-semibold"
-                  style={{
-                    background: 'var(--color-up)',
-                    color: '#fff',
-                    border: 'none',
-                    cursor: 'pointer',
-                    minHeight: 44,
-                    transition: 'opacity 150ms',
-                  }}
-                >
-                  <ArrowUpDown size={14} />
-                  <span className="hidden sm:inline">Trade</span>
-                </button>
-              )}
-
               {/* Watch button */}
               <button
                 onClick={() => {
@@ -414,19 +388,6 @@ export default function StockDetail() {
       <Suspense fallback={null}>
         {selectedFiling && (
           <FilingSheet filing={selectedFiling} onClose={() => setSelectedFiling(null)} />
-        )}
-      </Suspense>
-
-      <Suspense fallback={null}>
-        {showTradeModal && quote?.c && (
-          <TradeModal
-            symbol={symbol}
-            exchange={isCanadian ? (quote._exchange || 'TSX') : (profile?.exchange || 'NYSE')}
-            companyName={profile?.name || quote._name || symbol}
-            currentPrice={liveQuote?.price ?? quote.c}
-            currency={currency}
-            onClose={() => setShowTradeModal(false)}
-          />
         )}
       </Suspense>
     </div>
