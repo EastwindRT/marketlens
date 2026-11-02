@@ -3727,20 +3727,24 @@ app.post('/api/analyze-filing', async (req, res) => {
   }
 });
 
-// ── Ownership Filing Triage (13D/13G via Jev + LLM escalation) ───────────────
-// Every new 13D/13G/13D-A/13G-A filing gets a fast structured read from Jev
-// (TypeSafe's System One model — typed choice/score/noul questions, not free
-// text; ~$0.042 per 1M input tokens, output free, 70-500ms per call). Only
-// filings that clear the escalation threshold get sent to the existing
-// QUANT_PROMPT (Groq) for a full written thesis, so LLM volume stays small
-// and the page shows a ranked, cheaply-computed triage for everything else.
-// See docs/ownership-filing-triage.md for the full design.
+// ── Filing Triage (13D/13G, Form 4, 8-K via Jev + LLM escalation) ────────────
+// Every new filing gets a fast structured read from Jev (TypeSafe System One:
+// typed choice/score/noul answers, not prose; ~$0.042 per 1M input tokens,
+// output free, 70-500ms). Jev's materiality becomes a unified 0-100 priority.
+// Only filings that clear their type's escalation rule get a written LLM
+// thesis. Per-type questions/rules live in filingTriage.cjs (pure, testable).
+// See docs/filing-triage.md for the full design.
+
+const { FILING_TYPES, buildSignal } = require('./filingTriage.cjs');
 
 const TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY || '';
-const OWNERSHIP_TRIAGE_ENABLED = process.env.OWNERSHIP_TRIAGE_ENABLED === '1';
+const FILING_TRIAGE_ENABLED =
+  process.env.FILING_TRIAGE_ENABLED === '1' || process.env.OWNERSHIP_TRIAGE_ENABLED === '1';
 const JEV_MODEL = process.env.JEV_MODEL || 'jev-latest';
+const INSIDER_CLUSTER_MIN = 3;
+const EVENT_ROUTINE_ITEMS = new Set(['9.01', '7.01', '5.07']);
 
-function hasOwnershipTriageDb() {
+function hasFilingDb() {
   return Boolean(serverSupabase);
 }
 
@@ -3752,57 +3756,17 @@ async function callJev(state, questions) {
     { Authorization: `Bearer ${TYPESAFE_API_KEY}` }
   );
   const parsed = JSON.parse(raw);
-  if (!parsed?.answers) throw new Error('Invalid Jev response — missing answers');
+  if (!parsed?.answers) throw new Error('Invalid Jev response - missing answers');
   return parsed;
 }
 
-const OWNERSHIP_TRIAGE_QUESTIONS = {
-  investor_type: {
-    type: 'choice',
-    instructions: 'What kind of investor filed this SEC beneficial-ownership disclosure?',
-    criteria: {
-      activist: 'Investor is known for, or is signaling, intent to influence company strategy, board composition, or capital allocation',
-      passive_index: 'A passive institutional holder (index fund, asset manager) crossing a reporting threshold with no signaled intent to act',
-      strategic_acquirer: 'A corporate or strategic buyer building a stake, potentially toward an acquisition or commercial relationship',
-      other: 'Does not clearly fit the above — e.g. insider/founder consolidation, estate or trust transfer, unclear intent',
-    },
-  },
-  board_or_strategic_intent: {
-    type: 'noul',
-    instructions: 'Item 4 (Purpose of Transaction) of this filing discloses intent to seek board representation, propose a merger, sale, or other strategic alternative, or otherwise actively influence the company.',
-  },
-  new_position: {
-    type: 'noul',
-    instructions: 'This filing represents a brand-new beneficial ownership position rather than a routine periodic update to a stake the filer already disclosed before.',
-  },
-  mechanical_crossing: {
-    type: 'noul',
-    instructions: 'This filing looks like a routine passive threshold crossing by an index fund or large asset manager (e.g. BlackRock, Vanguard, State Street, Geode) with no indication of active intent.',
-  },
-  materiality: {
-    type: 'score',
-    instructions: 'How significant is this filing for a trader deciding whether to look at it right now?',
-    criteria: [
-      'Routine — no market-moving content, safe to skip',
-      'Notable — worth a line in a feed but not urgent',
-      'Significant — should be reviewed promptly, plausible near-term catalyst',
-      'Highly significant — activist campaign, large new stake, or clear strategic intent',
-    ],
-  },
-};
-
-async function scoreFilingWithJev(filingText) {
+async function scoreFilingWithJev(typeKey, state, context = {}) {
   const started = Date.now();
-  const result = await callJev(filingText, OWNERSHIP_TRIAGE_QUESTIONS);
-  const answers = result.answers || {};
+  const def = FILING_TYPES[typeKey];
+  const result = await callJev(state, def.questions);
+  const signal = buildSignal(typeKey, result.answers || {}, context);
   return {
-    investorType: answers.investor_type?.choice ?? null,
-    investorTypeConfidence: answers.investor_type?.confidence ?? null,
-    boardOrStrategicIntent: answers.board_or_strategic_intent?.noul ?? null,
-    newPosition: answers.new_position?.noul ?? null,
-    mechanicalCrossing: answers.mechanical_crossing?.noul ?? null,
-    materialityScore: answers.materiality?.score ?? null,
-    materialityConfidence: answers.materiality?.confidence ?? null,
+    ...signal,
     jevModel: result.model || JEV_MODEL,
     jevRaw: result,
     tokensUsed: (result.usage?.input_tokens || 0) + (result.usage?.output_tokens || 0),
@@ -3810,149 +3774,361 @@ async function scoreFilingWithJev(filingText) {
   };
 }
 
-// A filing only earns the full LLM thesis when Jev is both confident and
-// flags it as material — this is what keeps LLM call volume small even
-// during a 13G amendment deadline spike.
-function shouldEscalateToLlm(signal) {
-  if (signal.materialityScore == null) return false;
-  if (signal.materialityScore >= 2 && (signal.materialityConfidence ?? 0) >= 0.6) return true;
-  if ((signal.boardOrStrategicIntent ?? 0) >= 0.7) return true;
-  return false;
+function parseJsonLoose(text) {
+  const cleaned = String(text || '').replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim();
+  return JSON.parse(cleaned);
 }
 
-async function upsertOwnershipFilingSignal(row) {
-  if (!hasOwnershipTriageDb()) return null;
+// Written thesis for filings that cleared escalation. Ownership keeps its
+// existing Groq QUANT_PROMPT path; Form 4 and 8-K use the Claude preset model.
+async function generateFilingThesis(def, stateText) {
+  if (def.key === 'ownership' && process.env.GROQ_API_KEY) {
+    const raw = await callAI('groq', process.env.GROQ_API_KEY, stateText);
+    return { thesis: parseJsonLoose(raw), model: 'groq-llama-3.3-70b', tokens: 0 };
+  }
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const systemPrompt = def.thesisPrompt || QUANT_PROMPT;
+  const { answer, usage } = await callClaudeRaw(systemPrompt, `FILING:\n${stateText}`, {
+    model: CLAUDE_MODEL_PRESET,
+    maxTokens: 1024,
+    temperature: 0.2,
+  });
+  return {
+    thesis: parseJsonLoose(answer),
+    model: CLAUDE_MODEL_PRESET,
+    tokens: (usage?.input_tokens || 0) + (usage?.output_tokens || 0),
+  };
+}
+
+async function upsertFilingSignal(row) {
+  if (!hasFilingDb()) return null;
   const { data, error } = await serverSupabase
-    .from('ownership_filing_signals')
+    .from('filing_signals')
     .upsert(row, { onConflict: 'accession_no' })
     .select('id')
     .maybeSingle();
-  if (error) { console.error('[ownership-filing-signals upsert]', error.message); return null; }
+  if (error) { console.error('[filing-signals upsert]', error.message); return null; }
   return data?.id ?? null;
 }
 
 async function getScoredAccessionNumbers(accessionNos) {
-  if (!hasOwnershipTriageDb() || !accessionNos.length) return new Set();
-  const { data, error } = await serverSupabase
-    .from('ownership_filing_signals')
-    .select('accession_no')
-    .in('accession_no', accessionNos);
-  if (error) { console.error('[ownership-filing-signals scored-lookup]', error.message); return new Set(); }
-  return new Set((data ?? []).map((r) => r.accession_no));
+  if (!hasFilingDb() || !accessionNos.length) return new Set();
+  const scored = new Set();
+  for (let i = 0; i < accessionNos.length; i += 150) {
+    const { data, error } = await serverSupabase
+      .from('filing_signals')
+      .select('accession_no')
+      .in('accession_no', accessionNos.slice(i, i + 150));
+    if (error) { console.error('[filing-signals scored-lookup]', error.message); return new Set(); }
+    for (const r of data ?? []) scored.add(r.accession_no);
+  }
+  return scored;
 }
 
-async function getOwnershipFilingSignals({ minMateriality = 0, investorType = null, days = 14, escalatedOnly = false, limit = 100 } = {}) {
-  if (!hasOwnershipTriageDb()) return [];
+async function getFilingSignals({ types = null, minPriority = 0, tier = null, days = 14, escalatedOnly = false, symbol = null, limit = 100 } = {}) {
+  if (!hasFilingDb()) return [];
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   let query = serverSupabase
-    .from('ownership_filing_signals')
+    .from('filing_signals')
     .select('*')
     .gte('filed_date', cutoff)
-    .order('materiality_score', { ascending: false, nullsFirst: false })
+    .order('priority', { ascending: false })
     .order('filed_date', { ascending: false })
     .limit(Math.min(limit, 500));
-  if (minMateriality > 0) query = query.gte('materiality_score', minMateriality);
-  if (investorType) query = query.eq('investor_type', investorType);
+  if (types?.length) query = query.in('filing_type', types);
+  if (minPriority > 0) query = query.gte('priority', minPriority);
+  if (tier) query = query.eq('priority_tier', tier);
   if (escalatedOnly) query = query.eq('escalated', true);
+  if (symbol) query = query.eq('symbol', symbol);
   const { data, error } = await query;
-  if (error) { console.error('[ownership-filing-signals query]', error.message); return []; }
+  if (error) { console.error('[filing-signals query]', error.message); return []; }
   return data ?? [];
 }
 
-async function runOwnershipFilingTriageJob({ days = 3, maxNew = 60 } = {}) {
-  const started = Date.now();
-  if (!OWNERSHIP_TRIAGE_ENABLED) return { skipped: true, reason: 'disabled (OWNERSHIP_TRIAGE_ENABLED != 1)' };
-  if (!TYPESAFE_API_KEY) return { skipped: true, reason: 'TYPESAFE_API_KEY not configured' };
-  if (!hasOwnershipTriageDb()) return { skipped: true, reason: 'no database configured' };
+// ── Discovery: each returns candidates { accessionNo, formType, filedDate,
+// filingUrl, symbol, subjectCompany, subjectCik, filerName, sector, industry,
+// context, loadState() } for filings not yet scored.
 
-  let filings;
-  try {
-    filings = await fetchMarketFilings(days);
-  } catch (err) {
-    await logAgentRun({ job: 'ownership-filing-triage', itemsProcessed: 0, tokensUsed: 0, msElapsed: Date.now() - started, error: err.message });
-    throw err;
+async function discoverOwnershipCandidates({ days, maxNew }) {
+  const filings = (await fetchMarketFilings(days)).filter((f) => f.accessionNo);
+  const scored = await getScoredAccessionNumbers(filings.map((f) => f.accessionNo));
+  return filings
+    .filter((f) => !scored.has(f.accessionNo))
+    .slice(0, maxNew)
+    .map((f) => ({
+      accessionNo: f.accessionNo,
+      formType: f.formType,
+      filedDate: f.filedDate,
+      filingUrl: f.edgarUrl,
+      symbol: f.symbol || null,
+      subjectCompany: f.subjectCompany || f.filerName || '',
+      subjectCik: f.subjectCik || null,
+      filerName: f.filerName || '',
+      sector: f.sector || null,
+      industry: f.industry || null,
+      context: {},
+      loadState: () => fetchEdgarFilingText(f.edgarUrl),
+    }));
+}
+
+function describeInsiderTransaction(t) {
+  const kind = t.eventCategory && t.eventCategory !== 'other' ? t.eventCategory.replace(/_/g, ' ') : t.type;
+  const price = t.pricePerShare ? ` @ $${t.pricePerShare}` : '';
+  const value = t.totalValue ? ` = $${Math.round(t.totalValue).toLocaleString('en-US')}` : '';
+  return `- ${t.transactionDate} | code ${t.transactionCode} (${kind}) | ${Math.round(t.shares).toLocaleString('en-US')} shares${price}${value}`;
+}
+
+async function discoverInsiderCandidates({ maxNew }) {
+  let entries = [];
+  try { entries = await fetchCurrentForm4AtomEntries(); } catch (err) { console.error('[triage insider atom]', err.message); }
+  if (!entries.length) entries = (await fetchRecentForm4Entries(2)).slice(0, maxNew * 2);
+
+  const unique = [...new Map(entries.map((e) => [e.accession, e])).values()];
+  const scored = await getScoredAccessionNumbers(unique.map((e) => e.accession));
+  const fresh = unique.filter((e) => !scored.has(e.accession)).slice(0, maxNew * 2);
+
+  const parsed = [];
+  for (let i = 0; i < fresh.length; i += 6) {
+    const batch = await Promise.allSettled(fresh.slice(i, i + 6).map(async (entry) => ({ entry, trades: await fetchSecInsiderActivityItem(entry) })));
+    for (const r of batch) if (r.status === 'fulfilled') parsed.push(r.value);
   }
 
-  const withAccession = filings.filter((f) => f.accessionNo);
-  const alreadyScored = await getScoredAccessionNumbers(withAccession.map((f) => f.accessionNo));
-  const unscored = withAccession.filter((f) => !alreadyScored.has(f.accessionNo)).slice(0, maxNew);
+  // Mechanical-only filings (grants, tax withholding, exercises) are skipped:
+  // they carry no discretionary signal and would only spend Jev calls.
+  const discretionary = parsed.filter(({ trades }) => trades.some((t) => t.type === 'BUY' || t.type === 'SELL'));
 
-  let tokensUsed = 0;
-  let scored = 0;
-  let escalated = 0;
-  const errors = [];
-
-  for (const filing of unscored) {
-    try {
-      const filingText = await fetchEdgarFilingText(filing.filingUrl);
-      const signal = await scoreFilingWithJev(filingText);
-      tokensUsed += signal.tokensUsed;
-      const escalate = shouldEscalateToLlm(signal);
-
-      let llmThesis = null;
-      let llmModel = null;
-      if (escalate && process.env.GROQ_API_KEY) {
-        try {
-          const rawJson = await callAI('groq', process.env.GROQ_API_KEY, filingText);
-          const cleaned = rawJson.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim();
-          llmThesis = JSON.parse(cleaned);
-          llmModel = 'groq-llama-3.3-70b';
-        } catch (err) {
-          errors.push(`${filing.accessionNo} llm: ${err.message}`);
-        }
-      }
-
-      await upsertOwnershipFilingSignal({
-        accession_no: filing.accessionNo,
-        symbol: filing.symbol || null,
-        subject_company: filing.subjectCompany || '',
-        subject_cik: filing.subjectCik || null,
-        filer_name: filing.filerName || '',
-        form_type: filing.formType,
-        filed_date: filing.filedDate,
-        filing_url: filing.filingUrl,
-        investor_type: signal.investorType,
-        investor_type_confidence: signal.investorTypeConfidence,
-        board_or_strategic_intent: signal.boardOrStrategicIntent,
-        new_position: signal.newPosition,
-        mechanical_crossing: signal.mechanicalCrossing,
-        materiality_score: signal.materialityScore,
-        materiality_confidence: signal.materialityConfidence,
-        jev_raw: signal.jevRaw,
-        jev_model: signal.jevModel,
-        escalated: Boolean(llmThesis),
-        llm_thesis: llmThesis,
-        llm_model: llmModel,
-        sector: filing.sector || null,
-        industry: filing.industry || null,
-        updated_at: new Date().toISOString(),
-      });
-      scored += 1;
-      if (llmThesis) escalated += 1;
-    } catch (err) {
-      errors.push(`${filing.accessionNo}: ${err.message}`);
+  const buyersBySymbol = new Map();
+  for (const { trades } of discretionary) {
+    for (const t of trades.filter((x) => x.type === 'BUY')) {
+      if (!buyersBySymbol.has(t.symbol)) buyersBySymbol.set(t.symbol, new Set());
+      buyersBySymbol.get(t.symbol).add(t.insiderName);
     }
   }
 
+  return discretionary.slice(0, maxNew).map(({ entry, trades }) => {
+    const first = trades[0];
+    const buys = trades.filter((t) => t.type === 'BUY');
+    const totalValue = trades.reduce((sum, t) => sum + (t.type === 'BUY' || t.type === 'SELL' ? t.totalValue || 0 : 0), 0);
+    const clusterBuy = buys.length > 0 && (buyersBySymbol.get(first.symbol)?.size || 0) >= INSIDER_CLUSTER_MIN;
+    const state = [
+      'FORM 4 INSIDER TRANSACTION REPORT',
+      `Issuer: ${first.companyName} (${first.symbol})`,
+      `Reporting insider: ${first.insiderName}${first.title ? `, ${first.title}` : ''}`,
+      `Filed: ${entry.filedDate}`,
+      'Transactions:',
+      ...trades.map(describeInsiderTransaction),
+      clusterBuy ? `Note: ${buyersBySymbol.get(first.symbol).size} different insiders bought ${first.symbol} in the current filing window.` : '',
+    ].filter(Boolean).join('\n');
+    return {
+      accessionNo: entry.accession,
+      formType: entry.formType || '4',
+      filedDate: entry.filedDate,
+      filingUrl: first.filingUrl,
+      symbol: first.symbol,
+      subjectCompany: first.companyName,
+      subjectCik: entry.cik ? String(entry.cik) : null,
+      filerName: first.insiderName,
+      sector: null,
+      industry: null,
+      context: { clusterBuy, totalValue },
+      loadState: async () => state,
+    };
+  });
+}
+
+async function discoverEventCandidates({ maxNew }) {
+  const atom = await httpsGet(
+    'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&owner=include&count=100&output=atom',
+    { 'User-Agent': SEC_UA, Accept: 'application/atom+xml,application/xml,text/xml' }
+  );
+  const directory = await loadSecCompanyTickerDirectory().catch(() => null);
+  const items = [];
+  for (const match of atom.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)) {
+    const block = match[1];
+    const title = htmlDecode(block.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '');
+    const href = htmlDecode(block.match(/<link[^>]*href="([^"]+)"/i)?.[1] || '');
+    const summary = htmlDecode(block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i)?.[1] || '').replace(/<[^>]+>/g, ' ');
+    const t = title.match(/^(8-K(?:\/A)?)\s+-\s+(.+?)\s+\((\d{6,10})\)/i);
+    if (!t) continue;
+    const accessionNo = summary.match(/AccNo:\s*([\d-]+)/i)?.[1];
+    const filedDate = summary.match(/Filed:\s*(\d{4}-\d{2}-\d{2})/i)?.[1];
+    if (!accessionNo || !filedDate || !href) continue;
+    const itemCodes = [...summary.matchAll(/Item\s+(\d\.\d{2})/gi)].map((m) => m[1]);
+    if (itemCodes.length && itemCodes.every((c) => EVENT_ROUTINE_ITEMS.has(c))) continue;
+    items.push({ accessionNo, formType: t[1].toUpperCase(), company: t[2].trim(), cik: t[3], filedDate, href, itemCodes });
+  }
+
+  const unique = [...new Map(items.map((i) => [i.accessionNo, i])).values()];
+  const scored = await getScoredAccessionNumbers(unique.map((i) => i.accessionNo));
+  return unique
+    .filter((i) => !scored.has(i.accessionNo))
+    .slice(0, maxNew)
+    .map((i) => {
+      const match = directory?.byCik?.get(String(i.cik)) || directory?.byCik?.get(String(Number(i.cik))) || null;
+      return {
+        accessionNo: i.accessionNo,
+        formType: i.formType,
+        filedDate: i.filedDate,
+        filingUrl: i.href,
+        symbol: match?.ticker || null,
+        subjectCompany: i.company,
+        subjectCik: i.cik,
+        filerName: i.company,
+        sector: null,
+        industry: null,
+        context: {},
+        loadState: async () => {
+          const text = await fetchEdgarFilingText(i.href);
+          const head = i.itemCodes.length ? `Items reported: ${i.itemCodes.join(', ')}\n` : '';
+          return `FORM 8-K CURRENT REPORT\nIssuer: ${i.company}\n${head}${text.split(' ').slice(0, 3500).join(' ')}`;
+        },
+      };
+    });
+}
+
+const FILING_DISCOVERERS = {
+  ownership: discoverOwnershipCandidates,
+  insider: discoverInsiderCandidates,
+  event: discoverEventCandidates,
+};
+
+async function triageCandidate(typeKey, candidate) {
+  const def = FILING_TYPES[typeKey];
+  const stateText = await candidate.loadState();
+  const signal = await scoreFilingWithJev(typeKey, stateText, candidate.context);
+  let tokens = signal.tokensUsed;
+
+  let llm = null;
+  if (def.shouldEscalate(signal)) {
+    try {
+      llm = await generateFilingThesis(def, stateText);
+      if (llm) tokens += llm.tokens || 0;
+    } catch (err) {
+      console.error(`[filing-triage llm ${candidate.accessionNo}]`, err.message);
+    }
+  }
+
+  await upsertFilingSignal({
+    accession_no: candidate.accessionNo,
+    filing_type: typeKey,
+    form_type: candidate.formType,
+    symbol: candidate.symbol,
+    subject_company: candidate.subjectCompany,
+    subject_cik: candidate.subjectCik,
+    filer_name: candidate.filerName,
+    filed_date: candidate.filedDate,
+    filing_url: candidate.filingUrl,
+    priority: signal.priority,
+    priority_tier: signal.priorityTier,
+    materiality_score: signal.materialityScore,
+    materiality_confidence: signal.materialityConfidence,
+    signals: signal.fields,
+    jev_raw: signal.jevRaw,
+    jev_model: signal.jevModel,
+    escalated: Boolean(llm?.thesis),
+    llm_thesis: llm?.thesis ?? null,
+    llm_model: llm?.model ?? null,
+    sector: candidate.sector,
+    industry: candidate.industry,
+    updated_at: new Date().toISOString(),
+  });
+  return { tokens, escalated: Boolean(llm?.thesis) };
+}
+
+let filingTriageRunning = false;
+
+async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3, maxNewPerType = 40 } = {}) {
+  const started = Date.now();
+  if (!FILING_TRIAGE_ENABLED) return { skipped: true, reason: 'disabled (FILING_TRIAGE_ENABLED != 1)' };
+  if (!TYPESAFE_API_KEY) return { skipped: true, reason: 'TYPESAFE_API_KEY not configured' };
+  if (!hasFilingDb()) return { skipped: true, reason: 'no database configured' };
+  if (filingTriageRunning) return { skipped: true, reason: 'a triage run is already in progress' };
+
+  filingTriageRunning = true;
+  const summary = {};
+  let tokensUsed = 0;
+  const errors = [];
+  try {
+    for (const typeKey of types) {
+      const discover = FILING_DISCOVERERS[typeKey];
+      if (!discover) continue;
+      const stats = { candidates: 0, scored: 0, escalated: 0 };
+      summary[typeKey] = stats;
+      let candidates = [];
+      try {
+        candidates = await discover({ days, maxNew: maxNewPerType });
+      } catch (err) {
+        errors.push(`${typeKey} discovery: ${err.message}`);
+        continue;
+      }
+      stats.candidates = candidates.length;
+      for (const candidate of candidates) {
+        try {
+          const result = await triageCandidate(typeKey, candidate);
+          tokensUsed += result.tokens;
+          stats.scored += 1;
+          if (result.escalated) stats.escalated += 1;
+        } catch (err) {
+          errors.push(`${typeKey} ${candidate.accessionNo}: ${err.message}`);
+        }
+      }
+    }
+  } finally {
+    filingTriageRunning = false;
+  }
+
+  const scored = Object.values(summary).reduce((n, s) => n + s.scored, 0);
   await logAgentRun({
-    job: 'ownership-filing-triage',
+    job: 'filing-triage',
     itemsProcessed: scored,
     tokensUsed,
     msElapsed: Date.now() - started,
     error: errors.length ? errors.slice(0, 5).join(' | ') : null,
   });
-
-  return { scored, escalated, candidates: unscored.length, tokensUsed, errors };
+  return { scored, tokensUsed, byType: summary, errors };
 }
 
+function parseTypesParam(value) {
+  if (!value) return null;
+  const wanted = String(value).split(',').map((s) => s.trim()).filter((s) => FILING_TYPES[s]);
+  return wanted.length ? wanted : null;
+}
+
+app.get('/api/filings/feed', async (req, res) => {
+  try {
+    const signals = await getFilingSignals({
+      types: parseTypesParam(req.query.types),
+      minPriority: Math.max(0, Number(req.query.minPriority ?? 0) || 0),
+      tier: ['critical', 'high', 'medium', 'low'].includes(req.query.tier) ? req.query.tier : null,
+      days: Math.min(Math.max(parseInt(req.query.days || '7', 10), 1), 90),
+      escalatedOnly: req.query.escalatedOnly === '1',
+      symbol: req.query.symbol ? normalizeSymbol(String(req.query.symbol)) : null,
+      limit: Math.min(parseInt(req.query.limit || '100', 10) || 100, 500),
+    });
+    res.json({ schemaVersion: 2, signals, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('[api/filings/feed]', err.message);
+    res.status(502).json({ schemaVersion: 2, signals: [], generatedAt: new Date().toISOString(), error: err.message });
+  }
+});
+
+// Legacy 13D/13G endpoint kept for the existing /ownership-filings page:
+// flattens the ownership-specific fields back to their original column names.
 app.get('/api/ownership-filings/triage', async (req, res) => {
   try {
     const minMateriality = Number(req.query.minMateriality ?? 0);
     const investorType = req.query.investorType ? String(req.query.investorType) : null;
-    const days = Math.min(Math.max(parseInt(req.query.days || '14', 10), 1), 90);
-    const escalatedOnly = req.query.escalatedOnly === '1';
-    const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
-    const signals = await getOwnershipFilingSignals({ minMateriality, investorType, days, escalatedOnly, limit });
+    const rows = await getFilingSignals({
+      types: ['ownership'],
+      days: Math.min(Math.max(parseInt(req.query.days || '14', 10), 1), 90),
+      escalatedOnly: req.query.escalatedOnly === '1',
+      limit: Math.min(parseInt(req.query.limit || '100', 10) || 100, 500),
+    });
+    const signals = rows
+      .map((r) => ({ ...r, ...(r.signals || {}) }))
+      .filter((r) => (minMateriality > 0 ? (r.materiality_score ?? 0) >= minMateriality : true))
+      .filter((r) => (investorType ? r.investor_type === investorType : true))
+      .sort((a, b) => (b.materiality_score ?? -1) - (a.materiality_score ?? -1) || String(b.filed_date).localeCompare(String(a.filed_date)));
     res.json({ schemaVersion: 1, signals, generatedAt: new Date().toISOString() });
   } catch (err) {
     console.error('[api/ownership-filings/triage]', err.message);
@@ -3960,15 +4136,21 @@ app.get('/api/ownership-filings/triage', async (req, res) => {
   }
 });
 
-app.post('/api/ownership-filings/run-now', async (req, res) => {
-  const adminEmails = (process.env.VITE_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-  const callerEmail = (req.headers['x-admin-email'] || '').toLowerCase().trim();
-  if (adminEmails.length > 0 && !adminEmails.includes(callerEmail)) {
-    return res.status(403).json({ error: 'Admin access required' });
-  }
+app.post('/api/filings/run-now', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
   try {
-    const result = await runOwnershipFilingTriageJob();
+    const types = parseTypesParam(req.query.types) || undefined;
+    const result = await runFilingTriageJob({ types });
     res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/ownership-filings/run-now', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  try {
+    res.json({ ok: true, ...(await runFilingTriageJob({ types: ['ownership'] })) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -5856,61 +6038,6 @@ async function callClaudeRaw(systemPrompt, userPrompt, { model = CLAUDE_MODEL_FU
 
 // ── Phase 3: Material Form 4 filter + Agent Briefing job ─────────────────────
 
-const MATERIAL_BUY_THRESHOLD = 100000; // $100k
-const CLUSTER_BUY_MIN_INSIDERS = 3;
-async function fetchRecentMaterialForm4Entries({ days = 7 } = {}) {
-  const daysBack = days + Math.ceil(days / 5) * 2 + 1;
-  const entries = await fetchRecentForm4Entries(daysBack);
-
-  // Sample up to 120 entries to bound EDGAR load (most relevant for material filter)
-  const sampled = entries.slice(0, 120);
-  const concurrency = 8;
-  const results = [];
-
-  for (let i = 0; i < sampled.length; i += concurrency) {
-    const batch = sampled.slice(i, i + concurrency);
-    const parsed = await Promise.allSettled(batch.map(e => fetchSecInsiderActivityItem(e)));
-    for (const r of parsed) {
-      if (r.status === 'fulfilled') results.push(...r.value);
-    }
-  }
-
-  // Filter: ≥$100k buy OR cluster buy (≥3 distinct insiders at same ticker within window)
-  const buys = results.filter(r => r.type === 'BUY' && r.totalValue >= MATERIAL_BUY_THRESHOLD);
-
-  // Cluster detection: group by ticker, count distinct insiders
-  const clusterMap = new Map();
-  for (const r of results.filter(t => t.type === 'BUY')) {
-    const key = r.symbol;
-    if (!clusterMap.has(key)) clusterMap.set(key, new Set());
-    clusterMap.get(key).add(r.insiderName);
-  }
-  const clusterTickers = new Set(
-    [...clusterMap.entries()]
-      .filter(([, insiders]) => insiders.size >= CLUSTER_BUY_MIN_INSIDERS)
-      .map(([ticker]) => ticker)
-  );
-
-  // Merge: include material buys + all buys from cluster tickers
-  const materialSet = new Map();
-  for (const r of results) {
-    if (r.type !== 'BUY') continue;
-    const isMaterial = r.totalValue >= MATERIAL_BUY_THRESHOLD || clusterTickers.has(r.symbol);
-    if (!isMaterial) continue;
-    const key = `${r.symbol}-${r.insiderName}-${r.transactionDate}`;
-    if (!materialSet.has(key)) materialSet.set(key, r);
-  }
-
-  return Array.from(materialSet.values()).map(r => ({
-    ticker: r.symbol,
-    insiderName: r.insiderName,
-    type: 'BUY',
-    amount: Math.round(r.totalValue || 0),
-    filedDate: r.filingDate,
-    accessionNo: r.id?.split('-').slice(0, 3).join('-') || '',
-  }));
-}
-
 app.get('/api/external-collectors/status', async (req, res) => {
   try {
     const payload = await checkExternalCollectorStatus({ live: req.query.live === '1' });
@@ -5993,7 +6120,7 @@ Use rules:
 });
 // ── Background scheduler ──────────────
 
-const OWNERSHIP_TRIAGE_BACKGROUND_SYNC_MS = 30 * 60 * 1000; // 30 minutes
+const FILING_TRIAGE_BACKGROUND_SYNC_MS = 20 * 60 * 1000; // 20 minutes
 
 function startBackgroundSync() {
   if (!BACKGROUND_SYNC_ENABLED) {
@@ -6017,14 +6144,14 @@ function startBackgroundSync() {
     );
   });
 
-  if (OWNERSHIP_TRIAGE_ENABLED) {
-    scheduleRepeatingTask('ownership-filing-triage', OWNERSHIP_TRIAGE_BACKGROUND_SYNC_MS, async () => {
-      const result = await runOwnershipFilingTriageJob();
-      console.log(`[ownership-triage sync] scored=${result.scored ?? 0} escalated=${result.escalated ?? 0} tokens=${result.tokensUsed ?? 0}`);
+  if (FILING_TRIAGE_ENABLED) {
+    scheduleRepeatingTask('filing-triage', FILING_TRIAGE_BACKGROUND_SYNC_MS, async () => {
+      const result = await runFilingTriageJob();
+      if (!result.skipped) console.log(`[filing-triage sync] scored=${result.scored} tokens=${result.tokensUsed} ${JSON.stringify(result.byType)}`);
     });
-    console.log('[background-sync] ownership-filing-triage scheduled at 30-min cadence');
+    console.log('[background-sync] filing-triage scheduled at 20-min cadence');
   } else {
-    console.log('[background-sync] ownership filing triage disabled (set OWNERSHIP_TRIAGE_ENABLED=1 to enable)');
+    console.log('[background-sync] filing triage disabled (set FILING_TRIAGE_ENABLED=1 to enable)');
   }
 }
 
