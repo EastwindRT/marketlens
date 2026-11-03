@@ -31,7 +31,7 @@ services:
         sync: false
       - key: TYPESAFE_API_KEY
         sync: false
-      - key: OWNERSHIP_TRIAGE_ENABLED
+      - key: FILING_TRIAGE_ENABLED
         value: "0"
       - key: JEV_MODEL
         value: "jev-latest"

@@ -253,7 +253,7 @@ export default function OwnershipFilingsPage() {
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 18, padding: 24, textAlign: 'center' }}>
           <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>No filings match this filter yet.</p>
           <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--text-tertiary)' }}>
-            Triage runs on a schedule once <code>TYPESAFE_API_KEY</code> and <code>OWNERSHIP_TRIAGE_ENABLED=1</code> are set. Try widening the date range or turning off "Notable+ only".
+            Triage runs on a schedule once <code>TYPESAFE_API_KEY</code> and <code>FILING_TRIAGE_ENABLED=1</code> are set. Try widening the date range or turning off "Notable+ only".
           </p>
         </div>
       ) : (

@@ -59,6 +59,7 @@ export default defineConfig({
       '/api/ca-insider-activity': { target: INSIDER_API_PROXY_TARGET, changeOrigin: true },
       '/api/symbol-metadata':     { target: API_PROXY_TARGET, changeOrigin: true },
       '/api/ownership-filings':  { target: API_PROXY_TARGET, changeOrigin: true },
+      '/api/filings':            { target: API_PROXY_TARGET, changeOrigin: true },
     },
   },
 })
