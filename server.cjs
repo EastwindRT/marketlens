@@ -2007,6 +2007,20 @@ app.get('/api/stock-intelligence/schema', async (_req, res) => {
   res.json(buildStockIntelligenceSchema());
 });
 
+async function getStockIntelligenceCached(symbol) {
+  const cached = stockIntelligenceCache.get(symbol);
+  if (cached && Date.now() - cached.ts < STOCK_INTELLIGENCE_TTL) return cached.payload;
+  if (!stockIntelligenceBuilds.has(symbol)) {
+    stockIntelligenceBuilds.set(
+      symbol,
+      buildStockIntelligence(symbol).finally(() => {
+        stockIntelligenceBuilds.delete(symbol);
+      })
+    );
+  }
+  return stockIntelligenceBuilds.get(symbol);
+}
+
 app.get('/api/stock-intelligence', async (req, res) => {
   const symbol = normalizeSymbol(req.query.symbol);
   if (!symbol) {
@@ -2014,22 +2028,7 @@ app.get('/api/stock-intelligence', async (req, res) => {
   }
 
   try {
-    const cached = stockIntelligenceCache.get(symbol);
-    if (cached && Date.now() - cached.ts < STOCK_INTELLIGENCE_TTL) {
-      return res.json(cached.payload);
-    }
-
-    if (!stockIntelligenceBuilds.has(symbol)) {
-      stockIntelligenceBuilds.set(
-        symbol,
-        buildStockIntelligence(symbol).finally(() => {
-          stockIntelligenceBuilds.delete(symbol);
-        })
-      );
-    }
-
-    const payload = await stockIntelligenceBuilds.get(symbol);
-    res.json(payload);
+    res.json(await getStockIntelligenceCached(symbol));
   } catch (err) {
     console.error('[stock-intelligence]', err.message);
     res.status(502).json({ error: err.message });
@@ -3825,12 +3824,27 @@ async function getScoredAccessionNumbers(accessionNos) {
   return scored;
 }
 
+const FILING_SIGNAL_COLUMNS =
+  'id,accession_no,filing_type,form_type,symbol,subject_company,subject_cik,filer_name,filed_date,filing_url,' +
+  'priority,priority_tier,materiality_score,materiality_confidence,signals,escalated,llm_thesis,llm_model,sector,industry,created_at';
+
+async function getFilingByAccession(accessionNo) {
+  if (!hasFilingDb()) return null;
+  const { data, error } = await serverSupabase
+    .from('filing_signals')
+    .select(FILING_SIGNAL_COLUMNS)
+    .eq('accession_no', accessionNo)
+    .maybeSingle();
+  if (error) { console.error('[filing-signals by-accession]', error.message); return null; }
+  return data ?? null;
+}
+
 async function getFilingSignals({ types = null, minPriority = 0, tier = null, days = 14, escalatedOnly = false, symbol = null, limit = 100 } = {}) {
   if (!hasFilingDb()) return [];
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   let query = serverSupabase
     .from('filing_signals')
-    .select('*')
+    .select(FILING_SIGNAL_COLUMNS)
     .gte('filed_date', cutoff)
     .order('priority', { ascending: false })
     .order('filed_date', { ascending: false })
@@ -4153,6 +4167,128 @@ app.post('/api/ownership-filings/run-now', async (req, res) => {
     res.json({ ok: true, ...(await runFilingTriageJob({ types: ['ownership'] })) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── MCP server (Streamable HTTP, tools only) ─────────────────────────────────
+// Lets Claude and other MCP clients query the triaged filing feed directly.
+// Optional MCP_API_KEY: when set, clients must send `Authorization: Bearer <key>`.
+
+const { handleMcpRequest } = require('./mcp.cjs');
+const MCP_API_KEY = process.env.MCP_API_KEY || '';
+
+const MCP_INSTRUCTIONS =
+  'TARS triages SEC filings (13D/13G ownership, Form 4 insider trades, 8-K events). Each filing has a ' +
+  'priority 0-100 (tier: critical >=75, high >=50, medium >=25, low) derived from a fast classifier (Jev). ' +
+  "Filings that cleared their type's escalation rule also carry llm_thesis, a written AI read. " +
+  'Start with get_priority_feed, then get_filing for one accession number. Treat filing dates and ' +
+  'accession numbers as evidence; separate facts in the filing from inference in llm_thesis.';
+
+const MCP_FILING_TYPES = Object.keys(FILING_TYPES);
+
+const MCP_TOOLS = [
+  {
+    name: 'get_priority_feed',
+    description: 'Ranked feed of triaged SEC filings, highest priority first. Filter by filing type, priority, tier, window and whether an AI thesis exists.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        types: { type: 'array', items: { type: 'string', enum: MCP_FILING_TYPES }, description: 'ownership = 13D/13G, insider = Form 4, event = 8-K. Default: all.' },
+        min_priority: { type: 'integer', minimum: 0, maximum: 100, description: 'Default 50 (high and critical only).' },
+        tier: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
+        days: { type: 'integer', minimum: 1, maximum: 90, description: 'Look-back window in days. Default 3.' },
+        escalated_only: { type: 'boolean', description: 'Only filings that have an AI thesis.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Default 25.' },
+      },
+    },
+    handler: async (a) => {
+      const types = Array.isArray(a.types) ? a.types.filter((t) => FILING_TYPES[t]) : null;
+      const signals = await getFilingSignals({
+        types: types && types.length ? types : null,
+        minPriority: a.min_priority === undefined ? 50 : Math.max(0, Number(a.min_priority) || 0),
+        tier: ['critical', 'high', 'medium', 'low'].includes(a.tier) ? a.tier : null,
+        days: Math.min(Math.max(parseInt(a.days ?? 3, 10) || 3, 1), 90),
+        escalatedOnly: a.escalated_only === true,
+        limit: Math.min(Math.max(parseInt(a.limit ?? 25, 10) || 25, 1), 100),
+      });
+      return { count: signals.length, signals, generatedAt: new Date().toISOString() };
+    },
+  },
+  {
+    name: 'get_filing',
+    description: 'One triaged filing by SEC accession number (e.g. 0001104659-26-120752), including its typed signals and AI thesis if present.',
+    inputSchema: {
+      type: 'object',
+      properties: { accession_no: { type: 'string', description: 'Accession number with dashes.' } },
+      required: ['accession_no'],
+    },
+    handler: async (a) => {
+      const accession = String(a.accession_no || '').trim();
+      if (!/^\d{10}-\d{2}-\d{6}$/.test(accession)) throw new Error('accession_no must look like 0001104659-26-120752');
+      const filing = await getFilingByAccession(accession);
+      if (!filing) throw new Error(`No triaged filing found for ${accession}`);
+      return filing;
+    },
+  },
+  {
+    name: 'get_ticker_filings',
+    description: 'All triaged filings for one ticker, highest priority first, across 13D/13G, Form 4 and 8-K.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'US ticker, e.g. NVDA.' },
+        days: { type: 'integer', minimum: 1, maximum: 90, description: 'Default 30.' },
+        min_priority: { type: 'integer', minimum: 0, maximum: 100, description: 'Default 0 (everything triaged).' },
+      },
+      required: ['symbol'],
+    },
+    handler: async (a) => {
+      const symbol = normalizeSymbol(String(a.symbol || ''));
+      if (!symbol) throw new Error('symbol is required');
+      const signals = await getFilingSignals({
+        symbol,
+        minPriority: Math.max(0, Number(a.min_priority) || 0),
+        days: Math.min(Math.max(parseInt(a.days ?? 30, 10) || 30, 1), 90),
+        limit: 100,
+      });
+      return { symbol, count: signals.length, signals };
+    },
+  },
+  {
+    name: 'get_stock_intelligence',
+    description: 'Per-ticker context: price and trend, insider flow, 13D/13G filings, congress trades, tracked fund holders, fundamentals and derived signals.',
+    inputSchema: {
+      type: 'object',
+      properties: { symbol: { type: 'string', description: 'Ticker, e.g. AAPL or SHOP.TO.' } },
+      required: ['symbol'],
+    },
+    handler: async (a) => {
+      const symbol = normalizeSymbol(String(a.symbol || ''));
+      if (!symbol) throw new Error('symbol is required');
+      return getStockIntelligenceCached(symbol);
+    },
+  },
+];
+
+app.get('/mcp', (req, res) => {
+  res.status(405).set('Allow', 'POST').json({ error: 'This MCP endpoint is stateless: use POST with a JSON-RPC body.' });
+});
+
+app.post('/mcp', async (req, res) => {
+  if (MCP_API_KEY && req.headers.authorization !== `Bearer ${MCP_API_KEY}`) {
+    return res.status(401).json({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Unauthorized' } });
+  }
+  try {
+    const { status, body } = await handleMcpRequest(req.body, {
+      serverInfo: { name: 'tars-filings', version: '1.0.0' },
+      instructions: MCP_INSTRUCTIONS,
+      tools: MCP_TOOLS,
+    });
+    if (body === undefined) return res.status(status).end();
+    res.status(status).json(body);
+  } catch (err) {
+    console.error('[mcp]', err.message);
+    res.status(500).json({ jsonrpc: '2.0', id: null, error: { code: -32603, message: 'Internal error' } });
   }
 });
 

@@ -35,3 +35,5 @@ services:
         value: "0"
       - key: JEV_MODEL
         value: "jev-latest"
+      - key: MCP_API_KEY
+        sync: false

@@ -676,3 +676,19 @@
 **Observation:** The original 13D/13G triage idea was a metadata-only heuristic gate in front of the existing Groq/Claude filing-analysis prompts, sized to control LLM cost. Once evaluated, a metadata-only gate turned out too weak to discriminate (feed metadata has no stake size, no change-from-prior, no stated intent) — the real signal lives in the filing text, which the gate couldn't see without fetching it anyway.
 **Root cause:** Two different problems were being solved with one mechanism. LLM *cost* control and *judgment quality* are separate concerns; a text-generation model is expensive for both, but a typed classifier (Jev / TypeSafe System One — choice/score/noul questions in one fan-out call, no free text, calibrated confidence, ~$0.042/1M input tokens, output free) is cheap enough to run on literally every filing while still reading the actual document.
 **Rule:** When a pipeline needs "score everything cheaply, only deep-read the interesting ones," reach for a structured/typed classifier as the middle tier before assuming a hand-tuned metadata heuristic or a second cheap LLM call is the only option — it changes the escalation threshold from a cost question into a confidence question (see `shouldEscalateToLlm()` in `server.cjs`), and removes the cost risk from volume spikes (e.g. 13G amendment deadline clusters) almost entirely. See [[docs/ownership-filing-triage.md]] for the full pipeline.
+
+## Lesson: 2026-11-03 - A pipeline that has never run is untested, however finished it looks
+
+**Observation:** The shipped 13D/13G triage job read `filing.filingUrl`, but the function feeding it (`fetchMarketFilings`) returns `edgarUrl`. Every filing would have failed at fetch time. It passed `node --check` and `npm run build` and sat behind an env flag, so nothing ever exercised it.
+**Root cause:** Field names crossed a module boundary with no type or runtime check, and the job was gated off until external accounts existed.
+**Rule:** When wiring a job to a producer function, read the producer's return shape rather than recalling it. For gated pipelines, verify the discovery and parse steps against the real upstream (e.g. curl the live SEC atom feed) before declaring them done, and say plainly which steps were never run live.
+
+## Lesson: 2026-11-03 - Removing routes needs a JSON 404, not an SPA fallthrough
+
+**Observation:** After deleting API routes, `GET /api/leaderboard-snapshot` still returned 200 with the HTML app shell, because the SPA catch-all swallowed it.
+**Rule:** Register a JSON 404 for `/api` after all API routes and before the static/SPA handlers, so removed or mistyped endpoints fail loudly for API and MCP clients.
+
+## Lesson: 2026-11-03 - Delete code in layers and let a linter find the orphans
+
+**Observation:** Cutting routes and jobs from an 8,000-line `server.cjs` left chains of helpers that only they used (Reddit, news-item DB, convergence).
+**Rule:** Remove by whole blocks, then run `eslint --no-eslintrc` with `no-undef` and `no-unused-vars` and iterate until clean. `node --check` alone will not catch a dangling reference.
