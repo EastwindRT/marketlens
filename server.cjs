@@ -68,6 +68,21 @@ const https = require('https');
 
 // ── Server-side data fetchers (avoid CORS / 403 from client) ─────────────
 
+// SEC EDGAR limits each client to about 10 requests/second and answers 429 beyond that. Every request this
+// server makes to sec.gov goes through this spacing so triage bursts (Form 4 parsing, filing text downloads)
+// cannot trip it. Reservations are made synchronously, so concurrent callers queue in order.
+const SEC_MIN_INTERVAL_MS = Math.max(0, parseInt(process.env.SEC_MIN_INTERVAL_MS || '150', 10) || 0);
+let secNextAt = 0;
+async function secThrottle() {
+  const now = Date.now();
+  const startAt = Math.max(now, secNextAt);
+  secNextAt = startAt + SEC_MIN_INTERVAL_MS;
+  if (startAt > now) await new Promise((resolve) => setTimeout(resolve, startAt - now));
+}
+function isSecUrl(url) {
+  try { return new URL(url).hostname.endsWith('sec.gov'); } catch { return false; }
+}
+
 // Retry wrapper — retries on transient failures (429, 5xx, timeouts, network errors)
 // with exponential backoff + jitter. Used by httpsGet/httpsPost below.
 async function withRetry(fn, { retries = 2, baseMs = 500, label = 'req' } = {}) {
@@ -107,7 +122,10 @@ function httpsGetOnce(url, headers = {}) {
 }
 
 function httpsGet(url, headers = {}) {
-  return withRetry(() => httpsGetOnce(url, headers), { label: `GET ${new URL(url).hostname}` });
+  return withRetry(async () => {
+    if (isSecUrl(url)) await secThrottle();
+    return httpsGetOnce(url, headers);
+  }, { label: `GET ${new URL(url).hostname}` });
 }
 
 function httpsPostOnce(url, body, headers = {}) {
@@ -3141,7 +3159,8 @@ function aiCacheSet(key, answer) {
 async function fetchEdgarFilingText(edgarUrl) {
   const UA = 'TARS admin@tars.app';
 
-  function secFetch(url) {
+  async function secFetch(url) {
+    await secThrottle();
     return new Promise((resolve, reject) => {
       const req = https.get(url, { headers: { 'User-Agent': UA } }, (res) => {
         // Follow up to 2 redirects
@@ -3150,7 +3169,10 @@ async function fetchEdgarFilingText(edgarUrl) {
         }
         let body = '';
         res.on('data', (c) => (body += c));
-        res.on('end', () => resolve(body));
+        res.on('end', () => {
+          if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+          resolve(body);
+        });
       });
       req.on('error', reject);
       req.setTimeout(15000, () => { req.destroy(); reject(new Error('SEC fetch timeout')); });
@@ -3158,7 +3180,7 @@ async function fetchEdgarFilingText(edgarUrl) {
   }
 
   // Fetch the EDGAR filing index page
-  const indexHtml = await secFetch(edgarUrl);
+  const indexHtml = await withRetry(() => secFetch(edgarUrl), { label: 'GET sec filing index' });
 
   // Find the primary .htm document (first non-index .htm in the filing)
   const docLinkRe = /href="(\/Archives\/edgar\/data\/[^"]+\.htm[^"]*)"/gi;
@@ -3182,7 +3204,7 @@ async function fetchEdgarFilingText(edgarUrl) {
     throw new Error('Could not locate primary document in EDGAR filing index');
   }
 
-  const docHtml = await secFetch(`https://www.sec.gov${primaryDocPath}`);
+  const docHtml = await withRetry(() => secFetch(`https://www.sec.gov${primaryDocPath}`), { label: 'GET sec filing document' });
 
   // Strip HTML and clean text
   const text = docHtml
@@ -4053,19 +4075,22 @@ function describeInsiderTransaction(t) {
 
 async function collectForm4Entries() {
   const merged = new Map();
+  let sourceError = null;
   for (let page = 0; page < TRIAGE_ATOM_MAX_PAGES; page += 1) {
     let batch = [];
     try {
       batch = await fetchCurrentForm4AtomEntries(page * TRIAGE_ATOM_PAGE_SIZE);
     } catch (err) {
+      sourceError = err;
       console.error(`[triage form4 atom page ${page}]`, err.message);
       break;
     }
     if (!batch.length) break;
     for (const e of batch) merged.set(e.accession, e);
   }
-  const indexed = await fetchDailyIndexEntries(TRIAGE_INDEX_DAYS, (form) => form === '4' || form === '4/A').catch(() => []);
+  const indexed = await fetchDailyIndexEntries(TRIAGE_INDEX_DAYS, (form) => form === '4' || form === '4/A').catch((err) => { sourceError = sourceError || err; return []; });
   for (const e of indexed) if (!merged.has(e.accession)) merged.set(e.accession, e);
+  if (!merged.size && sourceError) throw new Error(`Form 4 sources unavailable: ${describeError(sourceError)}`);
   return [...merged.values()].sort(byNewest);
 }
 
@@ -4128,7 +4153,7 @@ async function discoverInsiderCandidates({ maxNew, dryRun }) {
       accessionNo: entry.accession,
       formType: entry.formType || '4',
       filedDate: entry.filedDate,
-      filingUrl: first.filingUrl,
+      filingUrl: indexPageUrl(entry),
       symbol: first.symbol,
       subjectCompany: first.companyName,
       subjectCik: entry.cik ? String(entry.cik) : null,
@@ -4163,6 +4188,7 @@ function parseEightKAtomBlock(block) {
 
 async function collectEightKItems() {
   const merged = new Map();
+  let sourceError = null;
   for (let page = 0; page < TRIAGE_ATOM_MAX_PAGES; page += 1) {
     let atom;
     try {
@@ -4171,6 +4197,7 @@ async function collectEightKItems() {
         { 'User-Agent': SEC_UA, Accept: 'application/atom+xml,application/xml,text/xml' }
       );
     } catch (err) {
+      sourceError = err;
       console.error(`[triage 8-K atom page ${page}]`, err.message);
       break;
     }
@@ -4184,7 +4211,7 @@ async function collectEightKItems() {
   }
   // The index has no item codes, so these cannot be pre-filtered as routine;
   // Jev classifies them (event_category "routine") instead.
-  const indexed = await fetchDailyIndexEntries(TRIAGE_INDEX_DAYS, (form) => form === '8-K' || form === '8-K/A').catch(() => []);
+  const indexed = await fetchDailyIndexEntries(TRIAGE_INDEX_DAYS, (form) => form === '8-K' || form === '8-K/A').catch((err) => { sourceError = sourceError || err; return []; });
   for (const e of indexed) {
     if (merged.has(e.accession)) continue;
     merged.set(e.accession, {
@@ -4192,6 +4219,7 @@ async function collectEightKItems() {
       filedDate: e.filedDate, href: indexPageUrl(e), itemCodes: [],
     });
   }
+  if (!merged.size && sourceError) throw new Error(`8-K sources unavailable: ${describeError(sourceError)}`);
   return [...merged.values()].sort(byNewest);
 }
 
@@ -4259,6 +4287,12 @@ async function saveTriageRow(typeKey, candidate, row) {
   await markAccessionsSeen([{ accession_no: candidate.accessionNo, filing_type: typeKey, outcome: 'scored' }]);
 }
 
+function describeError(err) {
+  if (err && err.message) return err.message;
+  const inner = err && Array.isArray(err.errors) ? err.errors[0] : null;
+  return [err && err.name, err && err.code, inner && inner.code].filter(Boolean).join(' ') || 'unknown error';
+}
+
 function buildRuleVerdict(typeKey, candidate, stateText) {
   const input = typeKey === 'event'
     ? { itemCodes: candidate.itemCodes && candidate.itemCodes.length ? candidate.itemCodes : extractEightKItems(String(stateText).slice(0, 60000)) }
@@ -4276,8 +4310,25 @@ function buildRuleVerdict(typeKey, candidate, stateText) {
 
 async function triageCandidate(typeKey, candidate) {
   const def = FILING_TYPES[typeKey];
-  const stateText = await candidate.loadState();
-  const { verdict, signals: ruleSignals } = buildRuleVerdict(typeKey, candidate, stateText);
+  // The filing text is loaded only when something needs it: 8-K item codes missing from the feed, or a
+  // classifier call. Rules for 13D/13G and Form 4 never read it, so rules-only runs skip the SEC download.
+  let stateText = null;
+  const getState = async () => {
+    if (stateText !== null) return stateText;
+    try {
+      stateText = await candidate.loadState();
+    } catch (firstErr) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      try {
+        stateText = await candidate.loadState();
+      } catch (err) {
+        throw new Error(describeError(err));
+      }
+    }
+    return stateText;
+  };
+  if (typeKey === 'event' && !(candidate.itemCodes && candidate.itemCodes.length)) await getState();
+  const { verdict, signals: ruleSignals } = buildRuleVerdict(typeKey, candidate, stateText || '');
 
   // Noise: recorded as seen so it is never re-fetched, but not stored in the feed.
   if (FILING_TRIAGE_MODE !== 'jev' && verdict.priority < TRIAGE_NOISE_FLOOR) {
@@ -4314,10 +4365,12 @@ async function triageCandidate(typeKey, candidate) {
   }
 
   let signal;
+  let text = null;
   try {
+    text = await getState();
     signal = FILING_CLASSIFIER === 'llm'
-      ? await scoreFilingWithLlm(typeKey, stateText, candidate.context)
-      : await scoreFilingWithJev(typeKey, stateText, candidate.context);
+      ? await scoreFilingWithLlm(typeKey, text, candidate.context)
+      : await scoreFilingWithJev(typeKey, text, candidate.context);
   } catch (err) {
     if (FILING_TRIAGE_MODE === 'jev') throw err;
     // Treat Jev as an unreliable provider: keep the filing visible with its rule-based score.
@@ -4333,7 +4386,7 @@ async function triageCandidate(typeKey, candidate) {
     llm = signal.thesis ? { thesis: signal.thesis, model: signal.model, tokens: 0 } : null;
   } else if (def.shouldEscalate(signal)) {
     try {
-      llm = await generateFilingThesis(def, stateText);
+      llm = await generateFilingThesis(def, text);
       if (llm) tokens += llm.tokens || 0;
     } catch (err) {
       console.error(`[filing-triage llm ${candidate.accessionNo}]`, err.message);
@@ -4392,7 +4445,7 @@ async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3,
       try {
         found = await discover({ days, maxNew: maxNewPerType, dryRun: false });
       } catch (err) {
-        errors.push(`${typeKey} discovery: ${err.message}`);
+        errors.push(`${typeKey} discovery: ${describeError(err)}`);
         continue;
       }
       Object.assign(stats, found.stats, { candidates: found.candidates.length });
@@ -4404,7 +4457,7 @@ async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3,
           else stats.scored += 1;
           if (result.escalated) stats.escalated += 1;
         } catch (err) {
-          errors.push(`${typeKey} ${candidate.accessionNo}: ${err.message}`);
+          errors.push(`${typeKey} ${candidate.accessionNo}: ${describeError(err)}`);
         }
       }, outOfTime);
       // Anything unscored (over the per-run cap or out of time) stays unseen
