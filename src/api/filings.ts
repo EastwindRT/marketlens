@@ -37,6 +37,15 @@ export interface Finding {
   updated_at: string;
 }
 
+export interface SignalRating {
+  score: number; // -100 strong bearish .. +100 strong bullish
+  label: 'Strong bullish' | 'Bullish' | 'Neutral' | 'Bearish' | 'Strong bearish' | 'Mixed';
+  direction: 'bullish' | 'bearish' | 'neutral' | 'mixed';
+  conviction: number;
+  reasons: string[];
+  context_flags: string[];
+}
+
 export interface FilingSignal {
   id: string;
   accession_no: string;
@@ -57,6 +66,7 @@ export interface FilingSignal {
   llm_model: string | null;
   sector: string | null;
   findings?: Finding[];
+  rating?: SignalRating;
 }
 
 export interface FilingsFeedResponse {
@@ -76,6 +86,8 @@ export interface FilingsFeedParams {
   escalatedOnly?: boolean;
   symbols?: string[];
   findingsOnly?: boolean;
+  direction?: 'bullish' | 'bearish';
+  sort?: 'priority' | 'signal';
   limit?: number;
 }
 
@@ -88,6 +100,8 @@ export async function fetchFilingsFeed(params: FilingsFeedParams = {}): Promise<
   if (params.escalatedOnly) qs.set('escalatedOnly', '1');
   if (params.symbols?.length) qs.set('symbols', params.symbols.join(','));
   if (params.findingsOnly) qs.set('findingsOnly', '1');
+  if (params.direction) qs.set('direction', params.direction);
+  if (params.sort) qs.set('sort', params.sort);
   if (params.limit !== undefined) qs.set('limit', String(params.limit));
 
   const res = await fetch(`/api/filings/feed?${qs.toString()}`);

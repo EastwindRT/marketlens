@@ -53,7 +53,32 @@ is no second call for the AI read. Guards for free-tier limits:
 - A 429 pauses the classifier for 90 s; three in a row pause it until UTC midnight. Any failure keeps the rule score.
 - Filings skipped for budget are recorded as scored by rules (`signals.llm_skipped`) and are not retried later.
 
-Free models are unaudited for accuracy here: check results with `POST /api/filings/classify` before trusting them.
+Only free models can ever be called: ids that are not `:free` variants or `openrouter/free` are dropped from `OPENROUTER_MODELS`.
+Tested against real OpenRouter free models (2026-11-05, `nvidia/nemotron-3.5-super-vl:free`): a restatement 8-K scored 98 critical with
+an accurate read, a CEO's first open-market buy in four years scored 63 high (bullish), and annual-meeting vote results scored 0 low.
+Lessons from that test: free models are mostly reasoning models, so requests ask for `reasoning.effort: low` and allow 4,000 output
+tokens (1,500 left no room for the answer); a 429 carrying `metadata.provider_name` / an upstream `limit_source` is that model's shared
+provider pool being busy, so the model is skipped for a minute and the next one is tried instead of pausing everything. Still spot-check
+results with `POST /api/filings/classify` before trusting a new model.
+
+## Signal rating (direction + score)
+
+Every feed row carries `rating`: `{ score -100..100, label, direction, conviction, reasons[], context_flags[] }`. It is computed
+at read time by `filingRating.cjs` from stored fields (so it also covers rows scored before it existed) and is **a directional
+reading of public filings, not investment advice**. It is separate from `priority` ("how important is this filing"): the rating says
+which way it points and how hard.
+
+- **Direction and conviction per filing:** Form 4 open-market purchases are bullish (conviction by size: $1M+ 85, $250K+ 70, $100K+ 60,
+  $25K+ 45; +10 executive; cluster buys floor at 80); open-market sales are weakly bearish (10-40, halved for a 10b5-1 plan). 8-K
+  items map to bearish (1.03 bankruptcy 90, 4.02 restatement 85, 2.04 80, 3.01 70, ...), mixed (5.01, 2.01, 1.01, 5.02) or neutral
+  (2.02 earnings, 8.01, 7.01); a classifier's `adverse_surprise` / `positive_catalyst` / `distress` answers override the item guess.
+  13D: new 65 bullish (activist intent 85), amendment 40 neutral; 13G: new 30 bullish, amendments and index-fund crossings ~5-10 neutral.
+- **Ticker context (the deeper triage):** other filings on the same ticker in the last 30 days adjust the score: agreeing filings +8 each
+  (max +16), conflicting -10 each (max -20), a recent new 13D +8 for bullish, a recent distress 8-K -12 for bullish (+8 for bearish).
+  `reasons` lists every term so the number can be audited; the page shows it under "Why this signal".
+- **Labels:** 60+ Strong bullish, 25+ Bullish, within +/-25 Neutral, -25 Bearish, -60 Strong bearish; "Mixed" for two-sided events.
+- Feed/MCP: `direction=bullish|bearish` filters, `sort=signal` orders by strength. Market context (price trend, RSI, earnings date)
+  is not part of the rating yet.
 
 ## Modes: rules, hybrid, jev
 

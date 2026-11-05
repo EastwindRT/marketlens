@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { BookOpen, ExternalLink, Layers, NotebookPen, Sparkles } from 'lucide-react';
 import { DataStatus } from '../components/ui/DataStatus';
 import { useFilingsFeed } from '../hooks/useFilingsFeed';
-import type { Finding, FindingVerdict, FilingSignal, FilingThesis, FilingType, PriorityTier } from '../api/filings';
+import type { Finding, FindingVerdict, FilingSignal, FilingThesis, FilingType, PriorityTier, SignalRating } from '../api/filings';
 
 type TypeFilter = FilingType | 'all';
 type TierFilter = PriorityTier | 'all';
@@ -107,6 +107,27 @@ const VERDICT_META: Record<FindingVerdict, { label: string; color: string }> = {
   dismiss: { label: 'Dismissed', color: 'var(--text-tertiary)' },
 };
 
+const RATING_COLOR: Record<SignalRating['direction'], string> = {
+  bullish: '#079A6A',
+  bearish: '#F6465D',
+  neutral: 'var(--text-tertiary)',
+  mixed: '#F7931A',
+};
+
+function SignalPill({ rating }: { rating: SignalRating }) {
+  const color = RATING_COLOR[rating.direction];
+  const arrow = rating.direction === 'bullish' ? '▲' : rating.direction === 'bearish' ? '▼' : '◆';
+  const shown = rating.score > 0 ? `+${rating.score}` : String(rating.score);
+  return (
+    <span
+      title={rating.reasons.join('\n')}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 800, color, border: `1px solid ${color}`, background: 'var(--bg-elevated)' }}
+    >
+      {arrow} {rating.label}{rating.direction === 'neutral' ? '' : ` ${shown}`}
+    </span>
+  );
+}
+
 function FindingNote({ finding }: { finding: Finding }) {
   const verdict = finding.verdict ? VERDICT_META[finding.verdict] : null;
   const edited = finding.updated_at && finding.updated_at !== finding.created_at;
@@ -180,6 +201,7 @@ function PriorityBadge({ priority, tier }: { priority: number; tier: PriorityTie
 function FilingRow({ signal }: { signal: FilingSignal }) {
   const [open, setOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [whyOpen, setWhyOpen] = useState(false);
   const findings = signal.findings ?? [];
   const type = TYPE_META[signal.filing_type];
   const { summary, flags } = describeSignal(signal);
@@ -214,6 +236,20 @@ function FilingRow({ signal }: { signal: FilingSignal }) {
             {signal.subject_company}
           </p>
           <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>{summary}</p>
+          {signal.rating && (
+            <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 6 }}>
+              <SignalPill rating={signal.rating} />
+              <button
+                onClick={() => setWhyOpen((v) => !v)}
+                style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent-blue)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
+              >
+                {whyOpen ? 'Hide why' : 'Why this signal'}
+              </button>
+              {signal.rating.context_flags.map((f) => (
+                <span key={f} style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{f}</span>
+              ))}
+            </div>
+          )}
           {(flags.length > 0 || signal.escalated || findings.length > 0) && (
             <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 6 }}>
               {flags.map((flag) => (
@@ -242,6 +278,20 @@ function FilingRow({ signal }: { signal: FilingSignal }) {
           <ExternalLink size={14} />
         </a>
       </div>
+
+      {whyOpen && signal.rating && (
+        <div style={{ background: 'var(--bg-elevated)', borderRadius: 10, padding: 12, marginTop: 10 }}>
+          <p style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>
+            Signal {signal.rating.score > 0 ? '+' : ''}{signal.rating.score} - conviction {signal.rating.conviction}/100
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 16, listStyle: 'disc', fontSize: 12, color: 'var(--text-secondary)' }}>
+            {signal.rating.reasons.map((r) => <li key={r}>{r}</li>)}
+          </ul>
+          <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--text-tertiary)' }}>
+            Automated reading of public filings. Not investment advice.
+          </p>
+        </div>
+      )}
 
       {notesOpen && findings.map((f) => <FindingNote key={f.id} finding={f} />)}
 
@@ -281,6 +331,8 @@ export default function FilingsPage() {
   const [includeLow, setIncludeLow] = useState(false);
   const [escalatedOnly, setEscalatedOnly] = useState(false);
   const [findingsOnly, setFindingsOnly] = useState(false);
+  const [direction, setDirection] = useState<'all' | 'bullish' | 'bearish'>('all');
+  const [sort, setSort] = useState<'priority' | 'signal'>('priority');
   const [ticker, setTicker] = useState('');
 
   const symbols = ticker.split(/[\s,]+/).map((t) => t.trim().toUpperCase()).filter(Boolean);
@@ -291,6 +343,8 @@ export default function FilingsPage() {
     days,
     escalatedOnly,
     findingsOnly,
+    direction: direction === 'all' ? undefined : direction,
+    sort,
     symbols: symbols.length ? symbols : undefined,
     limit: 200,
   });
@@ -315,7 +369,8 @@ export default function FilingsPage() {
       <p className="hidden md:block" style={{ margin: '0 0 16px', fontSize: 14, color: 'var(--text-secondary)', maxWidth: 760 }}>
         Every new SEC 13D/13G, Form 4 and 8-K is scored 0-100 (by Jev when connected, otherwise by rules), and filings
         with no real impact are filtered out. Only those that clear their type's bar get a written AI read. Low-priority
-        filings are hidden by default.{' '}
+        filings are hidden by default. Each filing also gets a directional signal (bullish or bearish, -100 to +100), an automated
+        reading of public filings and not investment advice.{' '}
         <Link to="/glossary" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent-blue)', fontWeight: 700, textDecoration: 'none' }}>
           <BookOpen size={13} /> What do these filings mean?
         </Link>
@@ -330,6 +385,9 @@ export default function FilingsPage() {
         <Chip active={includeLow} onClick={() => setIncludeLow((v) => !v)}>Include low</Chip>
         <Chip active={escalatedOnly} onClick={() => setEscalatedOnly((v) => !v)}>AI read only</Chip>
         <Chip active={findingsOnly} onClick={() => setFindingsOnly((v) => !v)}>With notes</Chip>
+        <Chip active={direction === 'bullish'} onClick={() => setDirection((v) => (v === 'bullish' ? 'all' : 'bullish'))}>▲ Bullish</Chip>
+        <Chip active={direction === 'bearish'} onClick={() => setDirection((v) => (v === 'bearish' ? 'all' : 'bearish'))}>▼ Bearish</Chip>
+        <Chip active={sort === 'signal'} onClick={() => setSort((v) => (v === 'signal' ? 'priority' : 'signal'))}>Sort: strongest signal</Chip>
         <input
           value={ticker}
           onChange={(e) => setTicker(e.target.value)}

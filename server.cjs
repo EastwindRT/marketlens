@@ -3720,6 +3720,7 @@ app.post('/api/analyze-filing', async (req, res) => {
 const { FILING_TYPES, buildSignal } = require('./filingTriage.cjs');
 const { rulesPriority, extractEightKItems } = require('./filingRules.cjs');
 const { buildMessages, parseModelJson, normalizeLlmReply } = require('./filingLlm.cjs');
+const { attachRatings, CONTEXT_WINDOW_DAYS } = require('./filingRating.cjs');
 
 // Text-aware scoring ("classifier") options, chosen by FILING_TRIAGE_CLASSIFIER or inferred from keys:
 //   jev  = Jev (TypeSafe direct with TYPESAFE_API_KEY, or via OpenRouter's System One route)
@@ -3789,8 +3790,11 @@ async function scoreFilingWithJev(typeKey, state, context = {}) {
 }
 
 // ── OpenRouter chat-model classifier (free models by default) ───────────────
+// Free models only: anything that is not a ':free' variant or the free router is dropped, so a misconfigured
+// OPENROUTER_MODELS can never start spending credits.
+const isFreeOpenRouterModel = (id) => /:free$/.test(id) || id === 'openrouter/free';
 const OPENROUTER_MODELS = (process.env.OPENROUTER_MODELS || 'nvidia/nemotron-3.5-super-vl:free,google/gemma-4-31b-it:free,openrouter/free')
-  .split(',').map((m) => m.trim()).filter(Boolean);
+  .split(',').map((m) => m.trim()).filter(Boolean).filter(isFreeOpenRouterModel);
 // Only filings the rules already rank this high are sent to the model, so the scarce free quota
 // goes to the filings most likely to matter.
 const LLM_MIN_RULE_PRIORITY = Math.min(100, Math.max(0, parseInt(process.env.FILING_TRIAGE_LLM_MIN_PRIORITY || '40', 10) || 40));
@@ -3799,6 +3803,8 @@ const LLM_DAILY_BUDGET = Math.max(0, parseInt(process.env.FILING_TRIAGE_LLM_DAIL
 // Free models allow 20 requests/minute.
 const LLM_MIN_INTERVAL_MS = Math.max(0, parseInt(process.env.FILING_TRIAGE_LLM_INTERVAL_MS || '3200', 10) || 0);
 const llmState = { day: '', calls: 0, nextAt: 0, cooldownUntil: 0, consecutive429: 0 };
+// Per-model pause after an upstream provider rate limit (free models share provider pools), so the next model is tried.
+const llmModelCooldown = new Map();
 const OPENROUTER_CHAT_URL = new URL(`${process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'}/chat/completions`);
 
 function llmBudgetLeft() {
@@ -3826,8 +3832,11 @@ function openRouterChat(model, messages) {
       model,
       messages,
       response_format: { type: 'json_object' },
-      max_tokens: 1500,
+      // Free models are mostly reasoning models: ask for low effort and leave room to finish after thinking,
+      // otherwise they spend the whole budget on reasoning and return no answer.
+      max_tokens: 4000,
       temperature: 0.1,
+      reasoning: { effort: 'low' },
     });
     const transport = OPENROUTER_CHAT_URL.protocol === 'http:' ? require('http') : https;
     const req = transport.request(
@@ -3865,12 +3874,23 @@ async function scoreFilingWithLlm(typeKey, state, context = {}) {
   let lastError = null;
   for (const model of OPENROUTER_MODELS) {
     if (!llmBudgetLeft()) break;
+    if ((llmModelCooldown.get(model) || 0) > Date.now()) continue;
     await reserveLlmSlot();
     llmState.calls += 1;
     try {
       const { status, body } = await openRouterChat(model, messages);
       if (status === 429) {
-        // Rate limit first (short pause); repeated 429s mean the daily cap, so rest until UTC midnight.
+        let upstream = false;
+        try {
+          const meta = JSON.parse(body)?.error?.metadata;
+          upstream = /upstream/i.test(String(meta?.limit_source || '')) || Boolean(meta?.provider_name);
+        } catch { /* body was not JSON */ }
+        if (upstream) {
+          // This model's provider is busy, not our account: skip the model for a minute and try the next one.
+          llmModelCooldown.set(model, Date.now() + 60_000);
+          throw new Error('HTTP 429 provider rate limited');
+        }
+        // Account-level limit: pause briefly; repeated 429s mean the daily cap, so rest until UTC midnight.
         llmState.consecutive429 += 1;
         llmState.cooldownUntil = llmState.consecutive429 >= 3 ? nextUtcMidnightMs() : Date.now() + 90_000;
         throw new Error('HTTP 429 rate limited');
@@ -3878,7 +3898,9 @@ async function scoreFilingWithLlm(typeKey, state, context = {}) {
       if (status >= 400) throw new Error(`HTTP ${status}: ${String(body).slice(0, 120)}`);
       const json = JSON.parse(body);
       if (json.error) throw new Error(String(json.error.message || JSON.stringify(json.error)).slice(0, 160));
-      const { answers, thesis } = normalizeLlmReply(def, parseModelJson(json.choices?.[0]?.message?.content));
+      const choice = json.choices?.[0];
+      if (!choice?.message?.content && choice?.finish_reason === 'length') throw new Error('model ran out of tokens before answering');
+      const { answers, thesis } = normalizeLlmReply(def, parseModelJson(choice?.message?.content));
       llmState.consecutive429 = 0;
       const signal = buildSignal(typeKey, answers, context);
       const usage = json.usage || {};
@@ -4007,6 +4029,33 @@ async function attachFindings(rows) {
   return rows.map((r) => ({ ...r, findings: byAccession.get(r.accession_no) || [] }));
 }
 
+// Adds rating = { score -100..100, label, direction, conviction, reasons, context_flags } to each row, using the
+// last CONTEXT_WINDOW_DAYS of filings on the same tickers as context. Computed at read time (see filingRating.cjs).
+async function attachSignalRatings(rows) {
+  if (!rows.length) return rows;
+  const symbols = [...new Set(rows.map((r) => r.symbol).filter(Boolean))];
+  const history = [];
+  const cutoff = new Date(Date.now() - CONTEXT_WINDOW_DAYS * 864e5).toISOString().slice(0, 10);
+  for (let i = 0; i < symbols.length; i += 100) {
+    const { data, error } = await serverSupabase
+      .from('filing_signals')
+      .select('accession_no,symbol,filing_type,form_type,filed_date,priority,signals')
+      .in('symbol', symbols.slice(i, i + 100))
+      .gte('filed_date', cutoff)
+      .limit(3000);
+    if (error) { console.error('[filing-ratings history]', error.message); break; }
+    history.push(...(data ?? []));
+  }
+  return attachRatings(rows, [...history, ...rows]);
+}
+
+function applyRatingView(rows, { direction = null, sort = null } = {}) {
+  let out = rows;
+  if (direction === 'bullish' || direction === 'bearish') out = out.filter((r) => r.rating && r.rating.direction === direction);
+  if (sort === 'signal') out = [...out].sort((a, b) => Math.abs(b.rating?.score ?? 0) - Math.abs(a.rating?.score ?? 0) || b.priority - a.priority);
+  return out;
+}
+
 async function insertFinding(row) {
   const { data, error } = await serverSupabase.from('filing_findings').insert(row).select(FINDING_COLUMNS).single();
   if (error) throw new Error(`could not save finding: ${error.message}`);
@@ -4049,7 +4098,7 @@ async function getFilingByAccession(accessionNo) {
     .eq('accession_no', accessionNo)
     .maybeSingle();
   if (error) { console.error('[filing-signals by-accession]', error.message); return null; }
-  return data ? (await attachFindings([data]))[0] : null;
+  return data ? (await attachSignalRatings(await attachFindings([data])))[0] : null;
 }
 
 async function getFilingSignals({ types = null, minPriority = 0, tier = null, days = 14, escalatedOnly = false, symbol = null, symbols = null, findingsOnly = false, limit = 100 } = {}) {
@@ -4080,7 +4129,7 @@ async function getFilingSignals({ types = null, minPriority = 0, tier = null, da
   if (symbols && symbols.length) query = query.in('symbol', symbols);
   const { data, error } = await query;
   if (error) { console.error('[filing-signals query]', error.message); return []; }
-  return attachFindings(data ?? []);
+  return attachSignalRatings(await attachFindings(data ?? []));
 }
 
 // ── Coverage settings ────────────────────────────────────────────────────────
@@ -4617,7 +4666,8 @@ app.get('/api/filings/feed', async (req, res) => {
       findingsOnly: req.query.findingsOnly === '1',
       limit: Math.min(parseInt(req.query.limit || '100', 10) || 100, 500),
     });
-    res.json({ schemaVersion: 2, triageMode: FILING_TRIAGE_MODE, classifier: FILING_CLASSIFIER, signals, generatedAt: new Date().toISOString() });
+    const view = applyRatingView(signals, { direction: req.query.direction, sort: req.query.sort });
+    res.json({ schemaVersion: 2, triageMode: FILING_TRIAGE_MODE, classifier: FILING_CLASSIFIER, signals: view, generatedAt: new Date().toISOString() });
   } catch (err) {
     console.error('[api/filings/feed]', err.message);
     res.status(502).json({ schemaVersion: 2, signals: [], generatedAt: new Date().toISOString(), error: err.message });
@@ -4769,6 +4819,9 @@ const MCP_API_KEY = process.env.MCP_API_KEY || '';
 const MCP_INSTRUCTIONS =
   'TARS triages SEC filings (13D/13G ownership, Form 4 insider trades, 8-K events). Each filing has a ' +
   'priority 0-100 (tier: critical >=75, high >=50, medium >=25, low) derived from a fast classifier (Jev). ' +
+  'Each filing also has a rating: a directional signal score from -100 (strong bearish) to +100 (strong bullish) with a label, ' +
+  'conviction, plain-language reasons, and context from other filings on the same ticker in the last 30 days. ' +
+  'The rating is an automated reading of public filings, not investment advice. ' +
   "Filings that cleared their type's escalation rule also carry llm_thesis, a written AI read. " +
   'Start with get_priority_feed, then get_filing for one accession number. Treat filing dates and ' +
   'accession numbers as evidence; separate facts in the filing from inference in llm_thesis. ' +
@@ -4797,6 +4850,8 @@ const MCP_TOOLS = [
         tier: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
         days: { type: 'integer', minimum: 1, maximum: 90, description: 'Look-back window in days. Default 3.' },
         escalated_only: { type: 'boolean', description: 'Only filings that have an AI thesis.' },
+        direction: { type: 'string', enum: ['bullish', 'bearish'], description: 'Only filings leaning this way (see rating).' },
+        sort: { type: 'string', enum: ['priority', 'signal'], description: 'priority (default) or signal = strongest rating first.' },
         limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Default 25.' },
       },
     },
@@ -4811,7 +4866,8 @@ const MCP_TOOLS = [
         escalatedOnly: a.escalated_only === true,
         limit: Math.min(Math.max(parseInt(a.limit ?? 25, 10) || 25, 1), 100),
       });
-      return { count: signals.length, signals, generatedAt: new Date().toISOString() };
+      const view = applyRatingView(signals, { direction: a.direction, sort: a.sort });
+      return { count: view.length, signals: view, generatedAt: new Date().toISOString() };
     },
   },
   {
@@ -4952,7 +5008,7 @@ app.post('/mcp', async (req, res) => {
   }
   try {
     const { status, body } = await handleMcpRequest(req.body, {
-      serverInfo: { name: 'tars-filings', version: '1.1.0' },
+      serverInfo: { name: 'tars-filings', version: '1.2.0' },
       instructions: MCP_INSTRUCTIONS,
       tools: MCP_TOOLS,
       // When MCP_API_KEY is set the request already passed the bearer check above, so it may write.
