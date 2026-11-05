@@ -304,6 +304,16 @@ export default function FilingsPage() {
         </div>
       )}
 
+      {data?.triageMode !== 'rules' && data?.classifier === 'llm' && (
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, padding: 12, marginBottom: 14 }}>
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
+            <strong style={{ color: 'var(--text-primary)' }}>AI scoring on free models.</strong> Rules filter the noise; the highest-ranked
+            filings are then scored and summarized by a free OpenRouter model, which has a small daily quota. Filings beyond it keep their
+            rule-based score.
+          </p>
+        </div>
+      )}
+
       {data?.error && (
         <div style={{ background: 'var(--bg-surface)', border: '1px solid rgba(247, 147, 26, 0.24)', borderRadius: 16, padding: 14, marginBottom: 16 }}>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{data.error}</p>

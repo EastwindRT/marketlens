@@ -46,6 +46,7 @@ export interface FilingSignal {
 export interface FilingsFeedResponse {
   schemaVersion: number;
   triageMode?: 'rules' | 'hybrid' | 'jev';
+  classifier?: 'jev' | 'llm' | 'none';
   signals: FilingSignal[];
   generatedAt: string;
   error?: string;

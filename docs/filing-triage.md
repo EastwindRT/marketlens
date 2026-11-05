@@ -35,15 +35,35 @@ The job drains the backlog with a worker pool (`FILING_TRIAGE_CONCURRENCY`, defa
 picked up first next run; the run summary reports `listed`, `unseen`, `skipped`, `scored`, `escalated` and `deferred`.
 A failed `filing_triage_seen` lookup aborts that type's run rather than risk re-scoring everything.
 
+## Classifiers: Jev or a free OpenRouter model
+
+The text-aware scorer is chosen by `FILING_TRIAGE_CLASSIFIER` (`jev` | `llm` | `none`), or inferred from keys:
+`TYPESAFE_API_KEY` implies `jev`; an `OPENROUTER_API_KEY` alone implies `llm` (free models, never paid Jev); neither means
+`none` (rules only). Set `FILING_TRIAGE_CLASSIFIER=jev` with only an OpenRouter key to use paid Jev through OpenRouter.
+
+**`llm` classifier** (`filingLlm.cjs` + `scoreFilingWithLlm` in `server.cjs`): sends the same typed questions Jev answers, as a
+JSON prompt, to chat models on OpenRouter (`OPENROUTER_MODELS`, default `nvidia/nemotron-3.5-super-vl:free`,
+`google/gemma-4-31b-it:free`, `openrouter/free`, tried in order). The model's answers are normalized into Jev-shaped answers so
+the same priority math applies, and the same call returns a short written read (headline, direction, why it matters), so there
+is no second call for the AI read. Guards for free-tier limits:
+
+- Only filings whose rule priority is at least `FILING_TRIAGE_LLM_MIN_PRIORITY` (default 40) are sent; the rest keep their rule score.
+- `FILING_TRIAGE_LLM_DAILY_BUDGET` (default 45; free accounts get 50 requests/day, 1,000 after a one-time $10 credit; `0` = unlimited).
+- `FILING_TRIAGE_LLM_INTERVAL_MS` (default 3200, about 20 requests/minute).
+- A 429 pauses the classifier for 90 s; three in a row pause it until UTC midnight. Any failure keeps the rule score.
+- Filings skipped for budget are recorded as scored by rules (`signals.llm_skipped`) and are not retried later.
+
+Free models are unaudited for accuracy here: check results with `POST /api/filings/classify` before trusting them.
+
 ## Modes: rules, hybrid, jev
 
-`FILING_TRIAGE_MODE` picks how filings are scored. If unset it is `hybrid` when `TYPESAFE_API_KEY` exists, otherwise `rules`.
+`FILING_TRIAGE_MODE` picks how filings are scored. If unset it is `hybrid` when a classifier is configured, otherwise `rules`.
 
 | Mode | Needs | What happens |
 |---|---|---|
 | `rules` | nothing but Supabase | `filingRules.cjs` ranks each filing from form type, filer, 8-K item codes and trade size, and drops obvious noise. No Jev, no LLM. |
-| `hybrid` | Jev key | Rules drop the noise first (free); Jev scores only what is left; if a Jev call fails the filing keeps its rule-based score. |
-| `jev` | Jev key | Jev scores everything (no pre-filter, no fallback). |
+| `hybrid` | a classifier | Rules drop the noise first (free); the classifier (Jev or `llm`) scores what is left; if a call fails the filing keeps its rule-based score. |
+| `jev` | a classifier | The classifier scores everything (no pre-filter, no fallback). The name predates the `llm` classifier. |
 
 Noise is any filing whose rule priority is below `FILING_TRIAGE_NOISE_FLOOR` (default 15). It is recorded in
 `filing_triage_seen` as skipped and not stored in the feed. Rule priorities (see `filingRules.cjs`):
@@ -77,6 +97,8 @@ Tune thresholds in `filingTriage.cjs`; there is no separate config file.
 - `GET /api/ownership-filings/triage` - legacy 13D/13G view, reads `filing_signals` and flattens ownership fields.
 - `POST /api/filings/run-now[?types=ownership,insider,event]` - admin-only (`x-admin-email` / `VITE_ADMIN_EMAILS`).
 - `POST /api/ownership-filings/run-now` - admin-only, ownership only.
+- `POST /api/filings/classify` `{type, text}` - admin-only: runs the configured classifier on pasted filing text and returns the
+  priority, typed signals and written read. Nothing is written. Use it to verify a key and model.
 - `POST /api/filings/discover[?types=&limit=]` - admin-only **dry run**: lists what the next pass would pick up
   (`listed`, `unseen`, `skipped`, sample rows) without calling Jev or the LLM and without writing. Use it to check coverage.
 
@@ -106,7 +128,11 @@ claude mcp add --transport http tars https://marketlens-jn9s.onrender.com/mcp
 | Var | Purpose | Default |
 |---|---|---|
 | `TYPESAFE_API_KEY` | Jev API key (typesafe.ai); optional, rules mode works without it | none |
-| `OPENROUTER_API_KEY` | Alternative: reach Jev through OpenRouter (`https://openrouter.ai/api/v1/systemone`, model `~typesafe/jev-latest`); no TypeSafe account or waitlist. Ignored if `TYPESAFE_API_KEY` is set | none |
+| `OPENROUTER_API_KEY` | Enables the free-model `llm` classifier. With `FILING_TRIAGE_CLASSIFIER=jev` it instead reaches paid Jev through OpenRouter (`https://openrouter.ai/api/v1/systemone`, model `~typesafe/jev-latest`; no TypeSafe account). A direct `TYPESAFE_API_KEY` wins | none |
+| `FILING_TRIAGE_CLASSIFIER` | `jev`, `llm` or `none` (see Classifiers) | inferred from keys |
+| `OPENROUTER_MODELS` | Comma list of OpenRouter model ids to try in order | nemotron-3.5-super-vl:free, gemma-4-31b-it:free, openrouter/free |
+| `FILING_TRIAGE_LLM_MIN_PRIORITY` / `_DAILY_BUDGET` / `_INTERVAL_MS` | Free-tier guards (see Classifiers) | 40 / 45 / 3200 |
+| `OPENROUTER_BASE_URL` | Override the OpenRouter API base (testing) | `https://openrouter.ai/api/v1` |
 | `JEV_ENDPOINT` | Override the Jev URL | TypeSafe direct, or the OpenRouter URL when only `OPENROUTER_API_KEY` is set |
 | `FILING_TRIAGE_ENABLED` | `1` enables the 20-minute scheduled job (`OWNERSHIP_TRIAGE_ENABLED=1` is still honoured) | `0` |
 | `FILING_TRIAGE_MODE` | `rules`, `hybrid` or `jev` (see Modes) | `hybrid` with a Jev key, else `rules` |

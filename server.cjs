@@ -3697,24 +3697,40 @@ app.post('/api/analyze-filing', async (req, res) => {
 
 const { FILING_TYPES, buildSignal } = require('./filingTriage.cjs');
 const { rulesPriority, extractEightKItems } = require('./filingRules.cjs');
+const { buildMessages, parseModelJson, normalizeLlmReply } = require('./filingLlm.cjs');
 
-// Jev can be reached directly (TYPESAFE_API_KEY) or through OpenRouter (OPENROUTER_API_KEY, no TypeSafe
-// account needed). The direct key wins if both are set. JEV_ENDPOINT / JEV_MODEL override either route.
-const JEV_VIA_OPENROUTER = !process.env.TYPESAFE_API_KEY && Boolean(process.env.OPENROUTER_API_KEY);
-const TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY || process.env.OPENROUTER_API_KEY || '';
+// Text-aware scoring ("classifier") options, chosen by FILING_TRIAGE_CLASSIFIER or inferred from keys:
+//   jev  = Jev (TypeSafe direct with TYPESAFE_API_KEY, or via OpenRouter's System One route)
+//   llm  = a chat model on OpenRouter (free models by default; see OPENROUTER_MODELS)
+//   none = rules only
+// A TypeSafe key implies jev; an OpenRouter key alone implies llm (free), never paid Jev, unless
+// FILING_TRIAGE_CLASSIFIER=jev is set explicitly. JEV_ENDPOINT / JEV_MODEL override the Jev route.
+const HAS_TYPESAFE_KEY = Boolean(process.env.TYPESAFE_API_KEY);
+const HAS_OPENROUTER_KEY = Boolean(process.env.OPENROUTER_API_KEY);
+const FILING_CLASSIFIER = (() => {
+  const requested = String(process.env.FILING_TRIAGE_CLASSIFIER || '').toLowerCase();
+  if (requested === 'none') return 'none';
+  if (requested === 'jev' && (HAS_TYPESAFE_KEY || HAS_OPENROUTER_KEY)) return 'jev';
+  if (requested === 'llm' && HAS_OPENROUTER_KEY) return 'llm';
+  if (HAS_TYPESAFE_KEY) return 'jev';
+  if (HAS_OPENROUTER_KEY) return 'llm';
+  return 'none';
+})();
+const JEV_VIA_OPENROUTER = FILING_CLASSIFIER === 'jev' && !HAS_TYPESAFE_KEY;
+const TYPESAFE_API_KEY = HAS_TYPESAFE_KEY ? process.env.TYPESAFE_API_KEY : (JEV_VIA_OPENROUTER ? process.env.OPENROUTER_API_KEY : '');
 const JEV_ENDPOINT = process.env.JEV_ENDPOINT
   || (JEV_VIA_OPENROUTER ? 'https://openrouter.ai/api/v1/systemone' : 'https://api.typesafe.ai/v1/systemone');
 const FILING_TRIAGE_ENABLED =
   process.env.FILING_TRIAGE_ENABLED === '1' || process.env.OWNERSHIP_TRIAGE_ENABLED === '1';
 const JEV_MODEL = process.env.JEV_MODEL || (JEV_VIA_OPENROUTER ? '~typesafe/jev-latest' : 'jev-latest');
 
-// rules  = free rule-based noise filter + priority, no Jev key needed
-// hybrid = rules drop the obvious noise, Jev scores everything else (default when a key exists)
-// jev    = Jev scores everything
+// rules  = free rule-based noise filter + priority, no classifier needed
+// hybrid = rules drop the obvious noise, the classifier scores the rest (default when one is configured)
+// jev    = the classifier scores everything (no pre-filter, no fallback to rules)
 const FILING_TRIAGE_MODE = (() => {
   const requested = String(process.env.FILING_TRIAGE_MODE || '').toLowerCase();
   if (['rules', 'hybrid', 'jev'].includes(requested)) return requested;
-  return TYPESAFE_API_KEY ? 'hybrid' : 'rules';
+  return FILING_CLASSIFIER !== 'none' ? 'hybrid' : 'rules';
 })();
 const TRIAGE_NOISE_FLOOR = Math.min(100, Math.max(0, parseInt(process.env.FILING_TRIAGE_NOISE_FLOOR || '15', 10) || 15));
 const INSIDER_CLUSTER_MIN = 3;
@@ -3748,6 +3764,118 @@ async function scoreFilingWithJev(typeKey, state, context = {}) {
     tokensUsed: (result.usage?.input_tokens || 0) + (result.usage?.output_tokens || 0),
     msElapsed: Date.now() - started,
   };
+}
+
+// ── OpenRouter chat-model classifier (free models by default) ───────────────
+const OPENROUTER_MODELS = (process.env.OPENROUTER_MODELS || 'nvidia/nemotron-3.5-super-vl:free,google/gemma-4-31b-it:free,openrouter/free')
+  .split(',').map((m) => m.trim()).filter(Boolean);
+// Only filings the rules already rank this high are sent to the model, so the scarce free quota
+// goes to the filings most likely to matter.
+const LLM_MIN_RULE_PRIORITY = Math.min(100, Math.max(0, parseInt(process.env.FILING_TRIAGE_LLM_MIN_PRIORITY || '40', 10) || 40));
+// Free OpenRouter accounts allow 50 requests/day (1,000 after a $10 credit purchase); 0 = unlimited.
+const LLM_DAILY_BUDGET = Math.max(0, parseInt(process.env.FILING_TRIAGE_LLM_DAILY_BUDGET ?? '45', 10) || 0);
+// Free models allow 20 requests/minute.
+const LLM_MIN_INTERVAL_MS = Math.max(0, parseInt(process.env.FILING_TRIAGE_LLM_INTERVAL_MS || '3200', 10) || 0);
+const llmState = { day: '', calls: 0, nextAt: 0, cooldownUntil: 0, consecutive429: 0 };
+const OPENROUTER_CHAT_URL = new URL(`${process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'}/chat/completions`);
+
+function llmBudgetLeft() {
+  const day = new Date().toISOString().slice(0, 10);
+  if (llmState.day !== day) Object.assign(llmState, { day, calls: 0, consecutive429: 0, cooldownUntil: 0 });
+  if (Date.now() < llmState.cooldownUntil) return false;
+  return LLM_DAILY_BUDGET === 0 || llmState.calls < LLM_DAILY_BUDGET;
+}
+
+function nextUtcMidnightMs() {
+  const d = new Date();
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+}
+
+async function reserveLlmSlot() {
+  const now = Date.now();
+  const startAt = Math.max(now, llmState.nextAt);
+  llmState.nextAt = startAt + LLM_MIN_INTERVAL_MS;
+  if (startAt > now) await new Promise((resolve) => setTimeout(resolve, startAt - now));
+}
+
+function openRouterChat(model, messages) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      model,
+      messages,
+      response_format: { type: 'json_object' },
+      max_tokens: 1500,
+      temperature: 0.1,
+    });
+    const transport = OPENROUTER_CHAT_URL.protocol === 'http:' ? require('http') : https;
+    const req = transport.request(
+      {
+        hostname: OPENROUTER_CHAT_URL.hostname,
+        port: OPENROUTER_CHAT_URL.port || undefined,
+        path: OPENROUTER_CHAT_URL.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'https://marketlens-jn9s.onrender.com',
+          'X-Title': 'TARS filing triage',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (c) => (data += c));
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      }
+    );
+    req.on('error', reject);
+    // Free reasoning models can be slow; the shared 20s helper timeout is too short for them.
+    req.setTimeout(90_000, () => { req.destroy(); reject(new Error('OpenRouter timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+
+async function scoreFilingWithLlm(typeKey, state, context = {}) {
+  const started = Date.now();
+  const def = FILING_TYPES[typeKey];
+  const messages = buildMessages(def, state);
+  let lastError = null;
+  for (const model of OPENROUTER_MODELS) {
+    if (!llmBudgetLeft()) break;
+    await reserveLlmSlot();
+    llmState.calls += 1;
+    try {
+      const { status, body } = await openRouterChat(model, messages);
+      if (status === 429) {
+        // Rate limit first (short pause); repeated 429s mean the daily cap, so rest until UTC midnight.
+        llmState.consecutive429 += 1;
+        llmState.cooldownUntil = llmState.consecutive429 >= 3 ? nextUtcMidnightMs() : Date.now() + 90_000;
+        throw new Error('HTTP 429 rate limited');
+      }
+      if (status >= 400) throw new Error(`HTTP ${status}: ${String(body).slice(0, 120)}`);
+      const json = JSON.parse(body);
+      if (json.error) throw new Error(String(json.error.message || JSON.stringify(json.error)).slice(0, 160));
+      const { answers, thesis } = normalizeLlmReply(def, parseModelJson(json.choices?.[0]?.message?.content));
+      llmState.consecutive429 = 0;
+      const signal = buildSignal(typeKey, answers, context);
+      const usage = json.usage || {};
+      return {
+        ...signal,
+        classifier: 'llm',
+        thesis,
+        model: json.model || model,
+        jevRaw: { model: json.model || model, usage },
+        tokensUsed: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0),
+        msElapsed: Date.now() - started,
+      };
+    } catch (err) {
+      lastError = err;
+      console.error(`[filing-triage llm ${model}]`, err.message);
+      if (!llmBudgetLeft()) break;
+    }
+  }
+  throw lastError || new Error('no OpenRouter model available (budget used or cooling down)');
 }
 
 function parseJsonLoose(text) {
@@ -4175,9 +4303,21 @@ async function triageCandidate(typeKey, candidate) {
     return { tokens: 0, escalated: false };
   }
 
+  // Free-model budget guard: filings the rules rank low, or arriving after the daily budget is used,
+  // keep their rule score instead of spending (or failing on) a model call.
+  if (FILING_CLASSIFIER === 'llm' && FILING_TRIAGE_MODE === 'hybrid') {
+    const skipReason = verdict.priority < LLM_MIN_RULE_PRIORITY ? 'below_llm_threshold' : !llmBudgetLeft() ? 'llm_budget' : null;
+    if (skipReason) {
+      await saveTriageRow(typeKey, candidate, { ...rulesRow, signals: { ...ruleSignals, llm_skipped: skipReason } });
+      return { tokens: 0, escalated: false };
+    }
+  }
+
   let signal;
   try {
-    signal = await scoreFilingWithJev(typeKey, stateText, candidate.context);
+    signal = FILING_CLASSIFIER === 'llm'
+      ? await scoreFilingWithLlm(typeKey, stateText, candidate.context)
+      : await scoreFilingWithJev(typeKey, stateText, candidate.context);
   } catch (err) {
     if (FILING_TRIAGE_MODE === 'jev') throw err;
     // Treat Jev as an unreliable provider: keep the filing visible with its rule-based score.
@@ -4188,7 +4328,10 @@ async function triageCandidate(typeKey, candidate) {
   let tokens = signal.tokensUsed;
 
   let llm = null;
-  if (def.shouldEscalate(signal)) {
+  if (signal.classifier === 'llm') {
+    // The model already wrote its read in the same call.
+    llm = signal.thesis ? { thesis: signal.thesis, model: signal.model, tokens: 0 } : null;
+  } else if (def.shouldEscalate(signal)) {
     try {
       llm = await generateFilingThesis(def, stateText);
       if (llm) tokens += llm.tokens || 0;
@@ -4202,9 +4345,9 @@ async function triageCandidate(typeKey, candidate) {
     priority_tier: signal.priorityTier,
     materiality_score: signal.materialityScore,
     materiality_confidence: signal.materialityConfidence,
-    signals: { ...signal.fields, scored_by: 'jev', rule_priority: verdict.priority, rule_reason: verdict.reason },
+    signals: { ...signal.fields, scored_by: signal.classifier || 'jev', rule_priority: verdict.priority, rule_reason: verdict.reason },
     jev_raw: signal.jevRaw,
-    jev_model: signal.jevModel,
+    jev_model: signal.classifier === 'llm' ? null : signal.jevModel,
     escalated: Boolean(llm?.thesis),
     llm_thesis: llm?.thesis ?? null,
     llm_model: llm?.model ?? null,
@@ -4230,7 +4373,7 @@ async function runPool(items, limit, worker, shouldStop) {
 async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3, maxNewPerType = TRIAGE_MAX_PER_TYPE } = {}) {
   const started = Date.now();
   if (!FILING_TRIAGE_ENABLED) return { skipped: true, reason: 'disabled (FILING_TRIAGE_ENABLED != 1)' };
-  if (FILING_TRIAGE_MODE !== 'rules' && !TYPESAFE_API_KEY) return { skipped: true, reason: `No Jev key configured: set TYPESAFE_API_KEY or OPENROUTER_API_KEY (mode ${FILING_TRIAGE_MODE})` };
+  if (FILING_TRIAGE_MODE !== 'rules' && FILING_CLASSIFIER === 'none') return { skipped: true, reason: `No classifier configured: set OPENROUTER_API_KEY or TYPESAFE_API_KEY (mode ${FILING_TRIAGE_MODE})` };
   if (!hasFilingDb()) return { skipped: true, reason: 'no database configured' };
   if (filingTriageRunning) return { skipped: true, reason: 'a triage run is already in progress' };
 
@@ -4280,7 +4423,7 @@ async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3,
     msElapsed: Date.now() - started,
     error: errors.length ? errors.slice(0, 5).join(' | ') : null,
   });
-  return { mode: FILING_TRIAGE_MODE, scored, tokensUsed, byType: summary, errors: errors.slice(0, 20) };
+  return { mode: FILING_TRIAGE_MODE, classifier: FILING_CLASSIFIER, llmCallsToday: llmState.calls, scored, tokensUsed, byType: summary, errors: errors.slice(0, 20) };
 }
 
 function parseSymbolsParam(value) {
@@ -4310,7 +4453,7 @@ app.get('/api/filings/feed', async (req, res) => {
       symbols: parseSymbolsParam(req.query.symbols),
       limit: Math.min(parseInt(req.query.limit || '100', 10) || 100, 500),
     });
-    res.json({ schemaVersion: 2, triageMode: FILING_TRIAGE_MODE, signals, generatedAt: new Date().toISOString() });
+    res.json({ schemaVersion: 2, triageMode: FILING_TRIAGE_MODE, classifier: FILING_CLASSIFIER, signals, generatedAt: new Date().toISOString() });
   } catch (err) {
     console.error('[api/filings/feed]', err.message);
     res.status(502).json({ schemaVersion: 2, signals: [], generatedAt: new Date().toISOString(), error: err.message });
@@ -4358,6 +4501,39 @@ app.post('/api/ownership-filings/run-now', async (req, res) => {
     res.json({ ok: true, ...(await runFilingTriageJob({ types: ['ownership'] })) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Runs the configured classifier on pasted filing text and returns the resulting signal. Nothing is
+// written. Use it to check that a key and model work, e.g. after setting OPENROUTER_API_KEY.
+app.post('/api/filings/classify', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  const typeKey = String(req.body?.type || '');
+  const text = String(req.body?.text || '');
+  if (!FILING_TYPES[typeKey]) return res.status(400).json({ error: `type must be one of ${Object.keys(FILING_TYPES).join(', ')}` });
+  if (text.trim().length < 20) return res.status(400).json({ error: 'text is required' });
+  if (FILING_CLASSIFIER === 'none') return res.status(503).json({ ok: false, classifier: 'none', error: 'No classifier configured (set OPENROUTER_API_KEY or TYPESAFE_API_KEY)' });
+  try {
+    const context = req.body?.context && typeof req.body.context === 'object' ? req.body.context : {};
+    const signal = FILING_CLASSIFIER === 'llm'
+      ? await scoreFilingWithLlm(typeKey, text, context)
+      : await scoreFilingWithJev(typeKey, text, context);
+    res.json({
+      ok: true,
+      classifier: FILING_CLASSIFIER,
+      model: signal.model || signal.jevModel,
+      priority: signal.priority,
+      priorityTier: signal.priorityTier,
+      materialityScore: signal.materialityScore,
+      materialityConfidence: signal.materialityConfidence,
+      signals: signal.fields,
+      thesis: signal.thesis || null,
+      tokensUsed: signal.tokensUsed,
+      msElapsed: signal.msElapsed,
+      llmCallsToday: llmState.calls,
+    });
+  } catch (err) {
+    res.status(502).json({ ok: false, classifier: FILING_CLASSIFIER, error: err.message, llmCallsToday: llmState.calls });
   }
 });
 
@@ -5344,7 +5520,7 @@ function startBackgroundSync() {
   if (FILING_TRIAGE_ENABLED) {
     scheduleRepeatingTask('filing-triage', FILING_TRIAGE_BACKGROUND_SYNC_MS, async () => {
       const result = await runFilingTriageJob();
-      if (!result.skipped) console.log(`[filing-triage sync] mode=${result.mode} scored=${result.scored} tokens=${result.tokensUsed} ${JSON.stringify(result.byType)}`);
+      if (!result.skipped) console.log(`[filing-triage sync] mode=${result.mode} classifier=${result.classifier} scored=${result.scored} tokens=${result.tokensUsed} ${JSON.stringify(result.byType)}`);
     });
     console.log('[background-sync] filing-triage scheduled at 20-min cadence');
   } else {
