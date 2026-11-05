@@ -1,31 +1,24 @@
 # MarketLens / TARS agent guide
 
-MarketLens is a stock-research terminal centered on convergence: where news, social attention, insider activity, congress disclosures, fund/ownership filings, macro events, portfolio context, and watchlists overlap.
+TARS is a filings-intelligence terminal. Every new SEC 13D/13G, Form 4 and 8-K is scored 0-100 for priority by a fast classifier (Jev), and only the material few get a written AI read.
 
 Primary routes:
-- `/dashboard`: convergence command center. Start here for ranked ticker setups.
-- `/stock/:symbol`: stock detail for a ticker.
-- `/news-impact`: scored market-moving headlines and source evidence.
-- `/alerts`: personalized briefing, macro events, convergence alerts, and material filings.
-- `/reddit-trends`: Reddit attention with price/news/filing confirmation.
-- `/x-trends`: curated X/social ticker trends when enabled.
-- `/insiders`: insider activity.
+- `/filings`: unified triaged feed across 13D/13G, Form 4 and 8-K, ranked by priority. Start here.
+- `/ownership-filings`: 13D/13G detail view (investor type, intent, new position, AI thesis).
+- `/news`: raw 13D/13G filing feed with sector filters.
+- `/insiders`: Form 4 insider activity (US) and SEDI (Canada).
 - `/congress`: congressional trading disclosures.
-- `/funds`: fund and ownership changes.
-- `/ownership-filings`: 13D/13G filings triaged by Jev (fast structured classification), with the small escalated slice carrying a full AI thesis. Highlighted on `/dashboard`.
+- `/stock/:symbol`: per-ticker context.
 
-Agent-facing API surfaces:
-- `GET /api/external-collectors/status`: checks optional Printing Press CLI availability.
-- `POST /api/external-collectors/run-now`: admin-only collector trigger for `yahoo-trending`, `hackernews-pulse`, and `creator-trends`.
-- `GET /api/ownership-filings/triage`: ranked 13D/13G signals; `minMateriality`, `investorType`, `days`, `escalatedOnly` filters.
-- `POST /api/ownership-filings/run-now`: admin-only, triggers one triage pass on demand.
+Agent-facing surfaces:
+- MCP server: `POST /mcp` (Streamable HTTP, tools only). Tools: `get_priority_feed`, `get_filing`, `get_ticker_filings`, `get_stock_intelligence`.
+- `GET /api/filings/feed`: ranked triaged filings; `types`, `minPriority`, `tier`, `days`, `escalatedOnly`, `symbol`, `limit` filters.
+- `GET /api/stock-intelligence?symbol=`: normalized per-ticker object (see `docs/stock-intelligence-schema.md`).
 
-How to inspect:
-- Use `/dashboard` first, then open `/stock/:symbol` for detail.
-- Ticker links use predictable `/stock/:symbol` anchors.
-- Key UI regions may expose `data-agent-section` attributes.
-- Freshness appears through the `DataStatus` label near page headers.
-- Treat color as supporting context only; read labels, scores, source counts, and summaries.
+How to read a filing row:
+- `priority` is 0-100; tiers are critical (75+), high (50+), medium (25+), low.
+- `signals` holds the type-specific Jev answers; `llm_thesis` exists only when the filing cleared its type's escalation rule.
+- Treat accession numbers and filing dates as evidence and link to the SEC source. Separate facts in the filing from inference in the thesis.
 
-Core decision question:
-What changed, why does it matter, and which ticker should be inspected next?
+Core question:
+Which filings changed the picture today, why do they matter, and which ticker should be inspected next?

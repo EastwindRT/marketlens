@@ -11,7 +11,6 @@ const importSearch = () => import('./pages/Search')
 const importNews = () => import('./pages/News')
 const importInsiderActivity = () => import('./pages/InsiderActivity')
 const importCongress = () => import('./pages/Congress')
-const importFunds = () => import('./pages/Funds')
 const importOwnershipFilings = () => import('./pages/OwnershipFilings')
 const importFilings = () => import('./pages/Filings')
 
@@ -21,7 +20,6 @@ const Search              = lazyWithAutoReload(importSearch)
 const NewsPage            = lazyWithAutoReload(importNews)
 const InsiderActivityPage = lazyWithAutoReload(importInsiderActivity)
 const CongressPage        = lazyWithAutoReload(importCongress)
-const FundsPage           = lazyWithAutoReload(importFunds)
 const OwnershipFilingsPage = lazyWithAutoReload(importOwnershipFilings)
 const FilingsPage = lazyWithAutoReload(importFilings)
 import { useLeagueStore } from './store/leagueStore'
@@ -255,7 +253,6 @@ export default function App() {
             <Route path="/news" element={<NewsPage />} />
             <Route path="/insiders" element={<InsiderActivityPage />} />
             <Route path="/congress" element={<CongressPage />} />
-            <Route path="/funds" element={<FundsPage />} />
             <Route path="/ownership-filings" element={<OwnershipFilingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

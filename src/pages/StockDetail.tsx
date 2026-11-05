@@ -1037,7 +1037,7 @@ function StockAIChat({ symbol, context }: {
   const SUGGESTIONS = [
     `What is the strongest actionable read on ${symbol} right now?`,
     `What changed recently for ${symbol}, and does it matter?`,
-    `Are trend, volume, insiders, filings, and funds confirming each other for ${symbol}?`,
+    `Are trend, volume, insiders, and filings confirming each other for ${symbol}?`,
     `Give me the bull case, bear case, and invalidation level for ${symbol}.`,
   ];
 

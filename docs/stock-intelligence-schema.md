@@ -22,7 +22,6 @@ Core sections:
 - `insiders`
 - `ownershipFilings`
 - `congress`
-- `funds`
 - `fundamentals`
 - `signals`
 - `explanations`
@@ -33,7 +32,6 @@ Important interpretation notes:
 
 - `congress` is disclosed trade activity, not a guaranteed live holdings ledger.
 - `ownershipFilings` is currently US-only.
-- `funds` is currently US-only and is derived from a curated tracked-fund universe using issuer-name matching against recent 13F holdings.
 - `company.sharesOutstanding` is available when the quote/profile provider exposes it.
 - `fundamentals.shareFloat` and `fundamentals.shortFloatPercent` remain nullable because the current provider stack does not reliably expose them for all names.
 - `dataAvailability.shortInterest` and `optionsPositioning` are still placeholders for future provider-backed expansions.
@@ -43,7 +41,7 @@ Recommended agent workflow:
 
 1. Call `/api/stock-intelligence?symbol=...`
 2. Read `signals`, `events`, and `explanations` first for fast triage.
-3. Inspect `insiders`, `ownershipFilings`, `congress`, and `funds` for supporting evidence.
+3. Inspect `insiders`, `ownershipFilings`, and `congress` for supporting evidence.
 4. Use `sources` and `asOf` to judge freshness and coverage.
 
 Example use cases:

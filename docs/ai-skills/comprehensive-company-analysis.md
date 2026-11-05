@@ -105,8 +105,7 @@ Use carefully, but include when relevant:
 - short interest and days-to-cover when available
 - unusual options activity when available
 - technical picture: moving averages, support/resistance, relative strength
-- Reddit, X, or retail buzz
-- 13F, 13D/13G, insider, and congress activity
+- 13D/13G, Form 4 insider, 8-K, and congress activity
 
 ### 7. Risk Assessment
 
@@ -191,6 +190,6 @@ Output should include:
 - Cite specific numbers from available context
 - Use "not available in current context" instead of inventing data
 - Tie technicals to fundamentals when both are available
-- State whether news, filings, insiders, congress, Reddit, X, and fund activity confirm or contradict the thesis
+- State whether news, filings, insiders, and congress activity confirm or contradict the thesis
 - Avoid generic disclaimers
 - Do not give a trading order; give an analytical recommendation and monitoring plan

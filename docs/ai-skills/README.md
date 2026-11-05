@@ -24,8 +24,6 @@ Use this structure for new skills:
 
 - Stock detail Ask AI: comprehensive company analysis
 - Filing analysis: Schedule 13D, 13D/A, 13G, and 13G/A filing intent
-- Fund filing / 13F change analysis
 - Insider trade analysis
 - Congress trade analysis
-- Reddit and X trend analysis
-- News and alert briefing analysis
+- Form 4 and 8-K filing triage theses (`filingTriage.cjs` prompts)

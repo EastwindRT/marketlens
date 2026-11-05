@@ -1,7 +1,6 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const path = require('path');
-const { execFile } = require('child_process');
 const { createClient: createSupabaseClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -1056,13 +1055,12 @@ function inferOwnershipSignal(filings) {
   return 'neutral';
 }
 
-function summarizeOwnershipConviction({ ownershipFilings, insiderSummary, congressTrades, fundOwnershipSummary, market }) {
+function summarizeOwnershipConviction({ ownershipFilings, insiderSummary, congressTrades, market }) {
   const insiderNet = finiteNumber(insiderSummary?.last30d?.netValue) || 0;
   const insiderBuys = insiderSummary?.last30d?.buyCount || 0;
   const insiderSells = insiderSummary?.last30d?.sellCount || 0;
   const congressBuys = Array.isArray(congressTrades) ? congressTrades.filter((trade) => trade.type === 'purchase').length : 0;
   const congressSells = Array.isArray(congressTrades) ? congressTrades.filter((trade) => trade.type === 'sale').length : 0;
-  const trackedFunds = fundOwnershipSummary?.heldByTrackedFunds || 0;
   const hasActivist = Array.isArray(ownershipFilings) && ownershipFilings.some((filing) => filing.formType === '13D' || filing.formType === '13D/A');
   const hasPassive = Array.isArray(ownershipFilings) && ownershipFilings.some((filing) => filing.formType === '13G' || filing.formType === '13G/A');
 
@@ -1093,16 +1091,6 @@ function summarizeOwnershipConviction({ ownershipFilings, insiderSummary, congre
   } else if (congressSells > congressBuys) {
     score -= 4;
     reasons.push('Congress disclosures lean net-selling.');
-  }
-
-  if (market === 'US' && trackedFunds >= 5) {
-    score += 14;
-    reasons.push('Held broadly across the tracked 13F fund universe.');
-  } else if (market === 'US' && trackedFunds >= 1) {
-    score += 8;
-    reasons.push('Held by at least one tracked 13F fund.');
-  } else if (market === 'US') {
-    reasons.push('No tracked 13F fund holder match in the current universe.');
   }
 
   score = Math.max(0, Math.min(100, score));
@@ -1647,15 +1635,6 @@ async function buildStockIntelligence(symbol) {
     ensureCongressTrades({ tickers: [baseTicker(normalized)], days: 90 }).catch(() => ({ trades: [] })),
   ]);
 
-  let fundOwnershipSummary = null;
-  if (market === 'US') {
-    try {
-      fundOwnershipSummary = await buildFundOwnershipByStock(normalized, marketData.profile?.name || '');
-    } catch (err) {
-      console.error('[stock-intelligence/funds]', err.message);
-    }
-  }
-
   const closeSeries = marketData.candles.map((bar) => finiteNumber(bar.close)).filter((value) => value != null);
   const volumeSeries = marketData.candles.map((bar) => finiteNumber(bar.volume)).filter((value) => value != null);
   const latestClose = closeSeries.length ? closeSeries[closeSeries.length - 1] : finiteNumber(marketData.quote?.c);
@@ -1760,7 +1739,6 @@ async function buildStockIntelligence(symbol) {
     ownershipFilings,
     insiderSummary,
     congressTrades: normalizedCongress,
-    fundOwnershipSummary,
     market,
   });
   const eventPressure = summarizeEventPressure(eventCounts);
@@ -1817,7 +1795,6 @@ async function buildStockIntelligence(symbol) {
       buyCount90d: normalizedCongress.filter((trade) => trade.type === 'purchase').length,
       sellCount90d: normalizedCongress.filter((trade) => trade.type === 'sale').length,
     },
-    funds: fundOwnershipSummary,
     fundamentals: marketData.basics ? {
       peRatio: finiteNumber(marketData.basics.peNormalizedAnnual ?? marketData.basics.peTTM ?? marketData.basics.peBasicExclExtraTTM),
       pegRatio: finiteNumber(marketData.basics.pegRatioTTM),
@@ -1851,13 +1828,6 @@ async function buildStockIntelligence(symbol) {
     dataAvailability: {
       shortInterest: null,
       optionsPositioning: null,
-      fundOwnershipByStock: market === 'US'
-        ? {
-            available: Boolean(fundOwnershipSummary),
-            matchingMethod: 'issuer_name',
-            trackedFundUniverse: KNOWN_FUNDS.length,
-          }
-        : null,
     },
     sources: {
       quote: market === 'CA' ? 'TMX / Yahoo Finance' : 'Finnhub / Yahoo Finance',
@@ -1865,7 +1835,6 @@ async function buildStockIntelligence(symbol) {
       insiders: 'SEC Form 4 cache',
       ownershipFilings: market === 'CA' ? 'Unavailable' : 'SEC EDGAR Schedule 13D/13G',
       congress: 'Quiver',
-      funds: market === 'CA' ? 'Unavailable' : 'SEC EDGAR 13F-HR (curated known funds, issuer-name matched)',
       fundamentals: market === 'CA' ? 'Unavailable' : 'Finnhub',
     },
   };
@@ -1943,15 +1912,6 @@ function buildStockIntelligenceSchema() {
         buyCount90d: 'Purchase count over the last 90 days.',
         sellCount90d: 'Sale count over the last 90 days.',
       },
-      funds: {
-        heldByTrackedFunds: 'Count of curated tracked 13F funds currently matching the issuer name.',
-        trackedFundUniverse: 'Count of curated funds scanned for the match.',
-        matchingMethod: 'How the stock-to-holding match was performed.',
-        totalTrackedValue: 'Sum of matched position value across the tracked fund universe.',
-        totalTrackedShares: 'Sum of matched reported shares across the tracked fund universe when available.',
-        latestFiledAt: 'Most recent 13F filing date among the matched holders.',
-        topHolders: 'Top matched tracked-fund holders by reported position value.',
-      },
       fundamentals: 'Normalized fundamentals object or null when unavailable. May include shareFloat and shortFloatPercent when a provider exposes them.',
       signals: {
         participation: 'Copied qualitative participation label.',
@@ -1970,7 +1930,6 @@ function buildStockIntelligenceSchema() {
       dataAvailability: {
         shortInterest: 'Null until provider is added.',
         optionsPositioning: 'Null until provider is added.',
-        fundOwnershipByStock: 'Null for unsupported markets; otherwise describes tracked-fund coverage and matching method.',
       },
       sources: {
         quote: 'Quote provider label.',
@@ -1978,7 +1937,6 @@ function buildStockIntelligenceSchema() {
         insiders: 'Insider provider label.',
         ownershipFilings: 'Ownership filing provider label.',
         congress: 'Congress provider label.',
-        funds: '13F ownership provider label.',
         fundamentals: 'Fundamentals provider label.',
       },
     },
@@ -1993,12 +1951,11 @@ function buildStockIntelligenceSchema() {
       insiders: { last30d: { buyCount: 2, sellCount: 5, netValue: -2100000 }, recent: [] },
       ownershipFilings: { recent: [], hasActivistSignal: false, hasPassiveStakeSignal: true },
       congress: { recent: [], buyCount90d: 0, sellCount90d: 0 },
-      funds: { heldByTrackedFunds: 4, trackedFundUniverse: 36, matchingMethod: 'issuer_name', totalTrackedValue: 12750000000, totalTrackedShares: 18420000, latestFiledAt: '2026-04-14', topHolders: [] },
       fundamentals: { peRatio: 45.2, pegRatio: 1.9, psRatio: 23.4, epsTTM: 12.3, revenueGrowthYoy: 62.1, epsGrowthYoy: 78.4, grossMargin: 73.2, operatingMargin: 56.1, netMargin: 48.2, roe: 59.7, weeks52high: 980.0, weeks52low: 530.0, shareFloat: null, shortFloatPercent: null },
       signals: { participation: 'high', ownershipSignal: 'passive_stake', eventRisk: 'medium', ownershipConviction: { score: 68, label: 'Constructive', reasons: ['Passive 13G ownership disclosure is present.', 'Held by at least one tracked 13F fund.'] }, eventPressure: { score: 34, label: 'Moderate', reasons: ['Earnings are within the next month.', 'News flow is active.'] }, squeezeRisk: 'unknown', compositeScore: 78 },
       explanations: { whyMoving: ['Trading at 1.78x normal volume', 'Price above key moving averages'], bullCase: ['Trend remains intact'], bearCase: ['Insider selling outweighs buying'] },
-      dataAvailability: { shortInterest: null, optionsPositioning: null, fundOwnershipByStock: { available: true, matchingMethod: 'issuer_name', trackedFundUniverse: 36 } },
-      sources: { quote: 'Finnhub / Yahoo Finance', candles: 'Yahoo Finance', insiders: 'SEC Form 4 cache', ownershipFilings: 'SEC EDGAR Schedule 13D/13G', congress: 'Quiver', funds: 'SEC EDGAR 13F-HR (curated known funds, issuer-name matched)', fundamentals: 'Finnhub' },
+      dataAvailability: { shortInterest: null, optionsPositioning: null },
+      sources: { quote: 'Finnhub / Yahoo Finance', candles: 'Yahoo Finance', insiders: 'SEC Form 4 cache', ownershipFilings: 'SEC EDGAR Schedule 13D/13G', congress: 'Quiver', fundamentals: 'Finnhub' },
     },
   };
 }
@@ -4740,7 +4697,6 @@ function summarizeStockIntelligenceForAsk(intel) {
       insiders: intel.insiders,
       ownershipFilings: intel.ownershipFilings,
       congress: intel.congress,
-      funds: intel.funds,
       fundamentals: intel.fundamentals,
       explanations: intel.explanations,
       dataAvailability: intel.dataAvailability,
@@ -4946,7 +4902,7 @@ RESPONSE FORMAT:
   **Financial drivers**
   **Trend / technicals**
   **News / catalysts**
-  **Filings / insiders / funds**
+  **Filings / insiders**
   **Bull case**
   **Bear case**
   **Risks**
@@ -5014,880 +4970,6 @@ ${ctx.join('\n') || 'No live context — rely on your training knowledge about t
 
 // ── 13F Fund search + holdings ────────────────────────────────────────────────
 
-function classifySector(name) {
-  const n = (name || '').toUpperCase();
-  if (/APPLE|MICROSOFT|NVIDIA|AMD|INTEL|ALPHABET|GOOGLE|META PLATFORM|SALESFORCE|ORACLE|CISCO|QUALCOMM|BROADCOM|TAIWAN SEMI|TSMC|SAMSUNG|SEMICONDUCTOR|SOFTWARE|TECH|DIGITAL|CYBER|SNOWFLAKE|PALANTIR|WORKDAY|ADOBE|SERVICENOW/.test(n)) return 'Technology';
-  if (/AMAZON|WALMART|TARGET|COSTCO|HOME DEPOT|LOWES|STARBUCKS|MCDONALDS|NIKE|TESLA|FORD|GENERAL MOTORS| GM |CONSUMER|RETAIL|LUXURY|LVMH|HERMES/.test(n)) return 'Consumer';
-  if (/PHARMA|BIOTECH|HEALTH|MEDICAL|AMGEN|MERCK|PFIZER|MODERNA|ABBVIE|LILLY|BRISTOL|JOHNSON|UNITEDHEALTH|CVS|ANTHEM|CIGNA|HUMANA|REGENERON|BIOGEN|GILEAD|NOVO NORDISK/.test(n)) return 'Healthcare';
-  if (/BANK|FINANCIAL|GOLDMAN|MORGAN STANLEY|JPMORGAN|WELLS FARGO|CAPITAL ONE|INSURANCE|BERKSHIRE|BLACKROCK|AMERICAN EXPRESS|VISA|MASTERCARD|PAYPAL|CITIGROUP|BANK OF AMER|ASSET MGMT|HEDGE/.test(n)) return 'Financials';
-  if (/EXXON|CHEVRON|CONOCOPHILLIPS|PIONEER|HALLIBURTON|SCHLUMBERGER|BAKER HUGHES|DEVON|ENERGY INC|OIL CORP|GAS CORP/.test(n)) return 'Energy';
-  if (/BOEING|LOCKHEED|RAYTHEON|NORTHROP|GENERAL DYNAMICS|CATERPILLAR|DEERE|HONEYWELL|3M |INDUSTRIAL|AEROSPACE|DEFENSE/.test(n)) return 'Industrials';
-  if (/VERIZON|AT&T|T-MOBILE|COMCAST|CHARTER|DISNEY|NETFLIX|TELECOM|COMMUNICATIONS|MEDIA/.test(n)) return 'Communications';
-  if (/DUKE ENERGY|SOUTHERN CO|NEXTERA|DOMINION|AMERICAN ELECTRIC|UTILITY|UTILITIES|ELECTRIC POWER/.test(n)) return 'Utilities';
-  if (/PROLOGIS|SIMON PROPERTY|CROWN CASTLE|AMERICAN TOWER|EQUITY RESIDENTIAL|REAL ESTATE|REIT/.test(n)) return 'Real Estate';
-  if (/LINDE|AIR PRODUCTS|DOW INC|DUPONT|NUCOR|FREEPORT|NEWMONT|MATERIAL|CHEMICAL|MINING|STEEL|COPPER/.test(n)) return 'Materials';
-  return 'Other';
-}
-
-function parse13FXml(xml) {
-  const holdings = [];
-  const tableRe = /<infoTable>([\s\S]*?)<\/infoTable>/gi;
-  let m;
-  while ((m = tableRe.exec(xml)) !== null) {
-    const block = m[1];
-    const getTag = (tag) => {
-      const r = new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`, 'i');
-      const x = r.exec(block);
-      return x ? x[1].trim() : '';
-    };
-    const name = getTag('nameOfIssuer');
-    const cusip = getTag('cusip');
-    const value = parseInt(getTag('value') || '0', 10); // XML value field is in full USD dollars
-    const shares = parseInt(getTag('sshPrnamt') || '0', 10);
-    const shareType = getTag('sshPrnamtType');
-    const putCall = getTag('putCall') || null;
-    if (name && value > 0) {
-      holdings.push({ name, cusip, value, shares, shareType, putCall, sector: classifySector(name) });
-    }
-  }
-  return holdings.sort((a, b) => b.value - a.value);
-}
-
-async function get13FFilings(cik) {
-  const paddedCik = cik.toString().padStart(10, '0');
-  const data = await httpsGet(`https://data.sec.gov/submissions/CIK${paddedCik}.json`, { 'User-Agent': 'TARS admin@tars.app' });
-  const json = JSON.parse(data);
-  const recent = json.filings?.recent ?? {};
-  const forms = recent.form ?? [];
-  const accessions = recent.accessionNumber ?? [];
-  const dates = recent.filingDate ?? [];
-  const periods = recent.periodOfReport ?? [];
-  const results = [];
-  for (let i = 0; i < forms.length; i++) {
-    if (forms[i] === '13F-HR') {
-      results.push({ accession: accessions[i], filingDate: dates[i], period: periods[i] });
-    }
-  }
-  return { name: json.name, results: results.slice(0, 4) };
-}
-
-async function fetchHoldings(cik, accession) {
-  const cikClean = cik.toString().replace(/^0+/, '');
-  const accClean = accession.replace(/-/g, '');
-  const dirUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/`;
-  let infoTableUrl = null;
-  try {
-    // Scrape the HTML directory listing — reliable for all filers
-    // (the {accession}-index.json file does not exist on EDGAR S3 for most filers)
-    const html = await httpsGet(dirUrl, { 'User-Agent': 'TARS admin@tars.app' });
-    const xmlHrefs = [...html.matchAll(/href="([^"]+\.xml)"/gi)].map(m => m[1]);
-    // Exclude primary_doc.xml (cover page) — info table is the other XML file
-    const infoHref = xmlHrefs.find(h => !h.toLowerCase().includes('primary_doc'));
-    if (infoHref) {
-      const filename = infoHref.split('/').pop();
-      infoTableUrl = `https://www.sec.gov/Archives/edgar/data/${cikClean}/${accClean}/${filename}`;
-    }
-  } catch (e) {
-    console.error('[13f/dir]', e.message);
-  }
-  if (!infoTableUrl) return [];
-  const xml = await httpsGet(infoTableUrl, { 'User-Agent': 'TARS admin@tars.app' });
-  return parse13FXml(xml);
-}
-
-// Search for funds by name — EDGAR CGI company search (atom feed)
-// 13F search — uses SEC company_tickers.json (static file, reliable) filtered to known 13F filers
-// Supplemented by a curated list of institutional funds not in the tickers file
-let tickerCache = null;
-let tickerLastFetch = 0;
-const TICKER_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h
-
-// Well-known institutional funds (private, not in company_tickers.json) with verified CIKs
-const KNOWN_FUNDS = [
-  // Mega / Index
-  { cik: '102909',  name: 'VANGUARD GROUP INC' },
-  { cik: '1315066', name: 'FMR LLC' },
-  { cik: '813672',  name: 'CAPITAL RESEARCH GLOBAL INVESTORS' },
-  { cik: '1067983', name: 'BERKSHIRE HATHAWAY INC' },
-  { cik: '1166559', name: 'BILL & MELINDA GATES FOUNDATION TRUST' },
-  // Quant / Multi-strat
-  { cik: '1037389', name: 'RENAISSANCE TECHNOLOGIES LLC' },
-  { cik: '1273087', name: 'MILLENNIUM MANAGEMENT LLC' },
-  { cik: '1423053', name: 'CITADEL ADVISORS LLC' },
-  { cik: '1275014', name: 'D E SHAW & CO INC' },
-  { cik: '1595882', name: 'TWO SIGMA INVESTMENTS LP' },
-  { cik: '1540159', name: 'POINT72 ASSET MANAGEMENT LP' },
-  { cik: '1167557', name: 'AQR CAPITAL MANAGEMENT LLC' },
-  { cik: '1649339', name: 'MAGNETAR FINANCIAL LLC' },
-  { cik: '1218710', name: 'BALYASNY ASSET MANAGEMENT LP' },
-  { cik: '1612063', name: 'WINTON GROUP LTD' },
-  { cik: '1637460', name: 'MAN GROUP PLC' },
-  // Long / Short Equity
-  { cik: '1350694', name: 'BRIDGEWATER ASSOCIATES LP' },
-  { cik: '1167483', name: 'TIGER GLOBAL MANAGEMENT LLC' },
-  { cik: '1466373', name: 'COATUE MANAGEMENT LLC' },
-  { cik: '1040273', name: 'VIKING GLOBAL INVESTORS LP' },
-  { cik: '1336489', name: 'LONE PINE CAPITAL LLC' },
-  { cik: '1056931', name: 'APPALOOSA MANAGEMENT LP' },
-  { cik: '875956',  name: 'BAUPOST GROUP LLC' },
-  { cik: '1536411', name: 'DUQUESNE FAMILY OFFICE LLC' },
-  { cik: '1318757', name: 'MARSHALL WACE LLP' },
-  { cik: '1602189', name: 'DRAGONEER INVESTMENT GROUP LLC' },
-  { cik: '923093',  name: 'TUDOR INVESTMENT CORP' },
-  // Activist
-  { cik: '1336528', name: 'PERSHING SQUARE CAPITAL MANAGEMENT LP' },
-  { cik: '1040570', name: 'THIRD POINT LLC' },
-  { cik: '1079114', name: 'GREENLIGHT CAPITAL INC' },
-  { cik: '814180',  name: 'ICAHN CAPITAL LP' },
-  { cik: '1162175', name: 'JANA PARTNERS LLC' },
-  { cik: '892416',  name: 'ELLIOTT INVESTMENT MANAGEMENT LP' },
-  { cik: '1486671', name: 'STARBOARD VALUE LP' },
-  // AI / Tech focused
-  { cik: '2045724', name: 'SITUATIONAL AWARENESS LP' },
-];
-
-const FOCUSED_13F_WATCHLIST = [
-  { cik: '1067983', name: 'BERKSHIRE HATHAWAY INC' },
-  { cik: '2045724', name: 'SITUATIONAL AWARENESS LP' },
-  { cik: '1037389', name: 'RENAISSANCE TECHNOLOGIES LLC' },
-];
-
-const FUND_HOLDINGS_TTL = 24 * 60 * 60 * 1000;
-const fundHoldingsCache = new Map();
-const fundHoldingsInFlight = new Map();
-const fundOwnershipByStockCache = new Map();
-const fundOwnershipByStockInFlight = new Map();
-let bigFundChangesCache = null;
-let bigFundChangesFetch = 0;
-let bigFundChangesInFlight = null;
-let bigFundChangesCacheLimit = 0;
-
-function normalizeIssuerName(value) {
-  if (!value) return '';
-  return value
-    .toUpperCase()
-    .replace(/&/g, ' AND ')
-    .replace(/[^A-Z0-9\s]/g, ' ')
-    .replace(/\b(CLASS|CL|SERIES)\s+[A-Z0-9]+\b/g, ' ')
-    .replace(/\b(INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|HOLDINGS|HOLDING|GROUP|PLC|LTD|LIMITED|SA|NV|AG|LLC|LP)\b/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function issuerNamesLookLikeMatch(companyName, holdingName) {
-  const a = normalizeIssuerName(companyName);
-  const b = normalizeIssuerName(holdingName);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  if (a.length >= 6 && b.startsWith(a)) return true;
-  if (b.length >= 6 && a.startsWith(b)) return true;
-
-  const aTokens = a.split(' ').filter((token) => token.length > 2);
-  const bTokens = b.split(' ').filter((token) => token.length > 2);
-  if (!aTokens.length || !bTokens.length) return false;
-  if (aTokens[0] !== bTokens[0]) return false;
-
-  const overlap = aTokens.filter((token) => bTokens.includes(token));
-  return overlap.length >= Math.min(2, aTokens.length, bTokens.length);
-}
-
-async function getLatestFundHoldingsCached(fund) {
-  const cached = fundHoldingsCache.get(fund.cik);
-  if (cached && isCacheFresh(cached.ts, FUND_HOLDINGS_TTL)) {
-    return cached.payload;
-  }
-  if (fundHoldingsInFlight.has(fund.cik)) {
-    return fundHoldingsInFlight.get(fund.cik);
-  }
-
-  const build = (async () => {
-    const { results: filings } = await get13FFilings(fund.cik);
-    if (!filings.length) {
-      const empty = {
-        fund: fund.name,
-        cik: fund.cik,
-        filingDate: null,
-        period: null,
-        totalValue: 0,
-        holdings: [],
-      };
-      fundHoldingsCache.set(fund.cik, { ts: Date.now(), payload: empty });
-      return empty;
-    }
-
-    const latest = filings[0];
-    const holdings = await fetchHoldings(fund.cik, latest.accession);
-    const totalValue = holdings.reduce((sum, holding) => sum + (finiteNumber(holding.value) || 0), 0);
-    const payload = {
-      fund: fund.name,
-      cik: fund.cik,
-      filingDate: latest.filingDate || null,
-      period: latest.period || null,
-      totalValue,
-      holdings,
-    };
-    fundHoldingsCache.set(fund.cik, { ts: Date.now(), payload });
-    return payload;
-  })().finally(() => {
-    fundHoldingsInFlight.delete(fund.cik);
-  });
-
-  fundHoldingsInFlight.set(fund.cik, build);
-  return build;
-}
-
-async function buildFundOwnershipByStock(symbol, companyName) {
-  const normalized = normalizeSymbol(symbol);
-  const cacheKey = `${normalized}::${normalizeIssuerName(companyName)}`;
-  const cached = fundOwnershipByStockCache.get(cacheKey);
-  if (cached && isCacheFresh(cached.ts, FUND_HOLDINGS_TTL)) {
-    return cached.payload;
-  }
-  if (fundOwnershipByStockInFlight.has(cacheKey)) {
-    return fundOwnershipByStockInFlight.get(cacheKey);
-  }
-
-  const build = (async () => {
-    const holders = [];
-    const batchSize = 4;
-    for (let i = 0; i < KNOWN_FUNDS.length; i += batchSize) {
-      const batch = KNOWN_FUNDS.slice(i, i + batchSize);
-      const results = await Promise.allSettled(batch.map((fund) => getLatestFundHoldingsCached(fund)));
-      for (const result of results) {
-        if (result.status !== 'fulfilled') continue;
-        const fundData = result.value;
-        const matched = fundData.holdings.find((holding) => issuerNamesLookLikeMatch(companyName, holding.name));
-        if (!matched) continue;
-        const value = finiteNumber(matched.value) || 0;
-        const shares = finiteNumber(matched.shares);
-        holders.push({
-          fund: fundData.fund,
-          cik: fundData.cik,
-          filedAt: fundData.filingDate,
-          period: fundData.period,
-          issuer: matched.name,
-          value,
-          shares,
-          pctOfFund: fundData.totalValue > 0 ? (value / fundData.totalValue) * 100 : null,
-          sector: matched.sector || null,
-        });
-      }
-    }
-
-    holders.sort((a, b) => b.value - a.value);
-    const payload = {
-      heldByTrackedFunds: holders.length,
-      trackedFundUniverse: KNOWN_FUNDS.length,
-      matchingMethod: 'issuer_name',
-      totalTrackedValue: holders.reduce((sum, holder) => sum + (finiteNumber(holder.value) || 0), 0),
-      totalTrackedShares: holders.reduce((sum, holder) => sum + (finiteNumber(holder.shares) || 0), 0),
-      latestFiledAt: holders
-        .map((holder) => holder.filedAt)
-        .filter(Boolean)
-        .sort((a, b) => b.localeCompare(a))[0] || null,
-      topHolders: holders.slice(0, 10),
-    };
-    fundOwnershipByStockCache.set(cacheKey, { ts: Date.now(), payload });
-    return payload;
-  })().finally(() => {
-    fundOwnershipByStockInFlight.delete(cacheKey);
-  });
-
-  fundOwnershipByStockInFlight.set(cacheKey, build);
-  return build;
-}
-
-// Cached recent-filers response
-let recentFilersCache = null;
-let recentFilersFetch = 0;
-let recentFilersInFlight = null;
-const RECENT_FILERS_TTL = 6 * 60 * 60 * 1000; // 6h
-
-function isCacheFresh(lastFetch, ttl) {
-  return Boolean(lastFetch) && Date.now() - lastFetch < ttl;
-}
-
-async function buildRecentFilersCache() {
-  const categories = {
-    '102909':  'Index / Mega', '1315066': 'Index / Mega', '813672': 'Index / Mega',
-    '1067983': 'Value',         '1166559': 'Foundation',
-    '1037389': 'Quant',         '1273087': 'Multi-Strat',  '1423053': 'Multi-Strat',
-    '1275014': 'Quant',         '1595882': 'Quant',         '1540159': 'Multi-Strat',
-    '1167557': 'Quant',         '1649339': 'Quant',         '1218710': 'Multi-Strat',
-    '1612063': 'Quant',         '1637460': 'Multi-Strat',
-    '1350694': 'Macro',         '1167483': 'Long/Short',    '1466373': 'Long/Short',
-    '1040273': 'Long/Short',    '1336489': 'Long/Short',    '1056931': 'Long/Short',
-    '875956':  'Long/Short',    '1536411': 'Family Office', '1318757': 'Long/Short',
-    '1602189': 'Growth',        '923093':  'Macro',
-    '1336528': 'Activist',      '1040570': 'Activist',      '1079114': 'Activist',
-    '814180':  'Activist',      '1162175': 'Activist',      '892416':  'Activist',
-    '1486671': 'Activist',      '2045724': 'AI / Tech',
-  };
-
-  async function getLatestDate(cik) {
-    try {
-      const pad = cik.padStart(10, '0');
-      const data = await httpsGet(`https://data.sec.gov/submissions/CIK${pad}.json`, { 'User-Agent': 'TARS admin@tars.app' });
-      const json = JSON.parse(data);
-      const forms = json.filings?.recent?.form ?? [];
-      const dates = json.filings?.recent?.filingDate ?? [];
-      for (let i = 0; i < forms.length; i++) {
-        if (forms[i] === '13F-HR') return dates[i] ?? '';
-      }
-    } catch {}
-    return '';
-  }
-
-  const batchSize = 5;
-  const results = [];
-  for (let i = 0; i < KNOWN_FUNDS.length; i += batchSize) {
-    const batch = KNOWN_FUNDS.slice(i, i + batchSize);
-    const batchResults = await Promise.all(
-      batch.map(async f => ({
-        cik: f.cik,
-        name: f.name,
-        lastFiled: await getLatestDate(f.cik),
-        category: categories[f.cik] || 'Other',
-      }))
-    );
-    results.push(...batchResults);
-  }
-
-  results.sort((a, b) => b.lastFiled.localeCompare(a.lastFiled));
-  recentFilersCache = { funds: results };
-  recentFilersFetch = Date.now();
-  return recentFilersCache;
-}
-
-function ensureRecentFilersCache(force = false) {
-  if (!force && recentFilersCache && isCacheFresh(recentFilersFetch, RECENT_FILERS_TTL)) {
-    return Promise.resolve(recentFilersCache);
-  }
-  if (recentFilersInFlight) return recentFilersInFlight;
-  recentFilersInFlight = buildRecentFilersCache()
-    .catch((err) => {
-      if (recentFilersCache) return recentFilersCache;
-      throw err;
-    })
-    .finally(() => {
-      recentFilersInFlight = null;
-    });
-  return recentFilersInFlight;
-}
-
-app.get('/api/13f/recent-filers', async (req, res) => {
-  try {
-    if (recentFilersCache && isCacheFresh(recentFilersFetch, RECENT_FILERS_TTL)) {
-      return res.json(recentFilersCache);
-    }
-    if (recentFilersCache) {
-      void ensureRecentFilersCache(true);
-      return res.json(recentFilersCache);
-    }
-    res.json(await ensureRecentFilersCache(true));
-  } catch (err) {
-    console.error('[13f/recent-filers]', err.message);
-    res.status(502).json({ error: err.message, funds: [] });
-  }
-});
-
-// ── Recent 13F-HR filings via EDGAR daily index (cloud-safe) ─────────────────
-// Scans last 60 days of daily-index .idx files for 13F-HR entries.
-// Deduplicates by CIK so each fund appears once (most recent filing).
-// recent13FCaches and recent13FFetchTimes declared in the route handler below
-const RECENT_13F_TTL = 24 * 60 * 60 * 1000; // 24h
-
-async function fetchRecent13FFilings(daysBack = 60) {
-  const entries = [];
-  const seenCik = new Set();
-
-  for (let i = 0; i < daysBack; i++) {
-    const date = new Date();
-    date.setUTCDate(date.getUTCDate() - i);
-    const { y, ymd, qtr } = formatIndexDate(date);
-    const url = `https://www.sec.gov/Archives/edgar/daily-index/${y}/QTR${qtr}/company.${ymd}.idx`;
-
-    try {
-      const idx = await httpsGet(url, { 'User-Agent': SEC_UA, Accept: 'text/plain' });
-      const lines = idx.split(/\r?\n/);
-      for (const line of lines) {
-        if (line.length < 100) continue;
-        const m = line.match(/^(.{62})(.*?)\s+(\d{6,10})\s+(\d{8})\s+(edgar\/\S+)/);
-        if (!m) continue;
-        const companyName = m[1].trim();
-        const formType = m[2].trim();
-        const cik = m[3];
-        const dateRaw = m[4];
-        if (formType !== '13F-HR' && formType !== '13F-HR/A') continue;
-        if (seenCik.has(cik)) continue; // keep only most recent per fund
-        seenCik.add(cik);
-        const filedDate = `${dateRaw.slice(0, 4)}-${dateRaw.slice(4, 6)}-${dateRaw.slice(6, 8)}`;
-        entries.push({ name: companyName, cik, filedDate });
-      }
-    } catch {
-      // Non-trading days simply won't have an index file.
-    }
-  }
-
-  return entries;
-}
-
-const recent13FCaches = {};  // keyed by daysBack
-const recent13FFetchTimes = {};
-const recent13FInFlight = {};
-
-async function ensureRecent13FCache(daysBack, force = false) {
-  if (!force && recent13FCaches[daysBack] && isCacheFresh(recent13FFetchTimes[daysBack], RECENT_13F_TTL)) {
-    return recent13FCaches[daysBack];
-  }
-  if (recent13FInFlight[daysBack]) return recent13FInFlight[daysBack];
-  recent13FInFlight[daysBack] = fetchRecent13FFilings(daysBack)
-    .then((filings) => {
-      recent13FCaches[daysBack] = filings;
-      recent13FFetchTimes[daysBack] = Date.now();
-      return filings;
-    })
-    .catch((err) => {
-      if (recent13FCaches[daysBack]) return recent13FCaches[daysBack];
-      throw err;
-    })
-    .finally(() => {
-      delete recent13FInFlight[daysBack];
-    });
-  return recent13FInFlight[daysBack];
-}
-
-function compare13FHoldings(current, previous, latestFiling) {
-  const totalValue = current.reduce((s, h) => s + (finiteNumber(h.value) || 0), 0);
-  const prevMap = new Map();
-  for (const h of (previous ?? [])) {
-    if (h.cusip) prevMap.set(h.cusip, h);
-    if (h.name) prevMap.set(h.name.toUpperCase(), h);
-  }
-
-  const currentWithFlags = current.map((h) => {
-    const key = h.cusip || h.name.toUpperCase();
-    const prev = prevMap.get(key);
-    let changeType = 'unchanged';
-    let changePct = 0;
-    if (!previous) {
-      changeType = 'unknown';
-    } else if (!prev) {
-      changeType = 'new';
-    } else {
-      changePct = prev.shares > 0 ? ((h.shares - prev.shares) / prev.shares) * 100 : 0;
-      if (changePct > 1) changeType = 'increased';
-      else if (changePct < -1) changeType = 'decreased';
-    }
-    return {
-      ...h,
-      isNew: changeType === 'new',
-      changeType,
-      changePct,
-      pctOfPortfolio: totalValue > 0 ? ((finiteNumber(h.value) || 0) / totalValue) * 100 : 0,
-    };
-  });
-
-  const currentKeys = new Set(current.flatMap(h => [h.cusip, h.name?.toUpperCase()].filter(Boolean)));
-  const exited = (previous ?? [])
-    .filter(h => !currentKeys.has(h.cusip) && !currentKeys.has(h.name?.toUpperCase()))
-    .map(h => ({ ...h, changeType: 'exited', changePct: -100, isNew: false, pctOfPortfolio: 0 }));
-
-  return {
-    filingDate: latestFiling.filingDate,
-    period: latestFiling.period,
-    totalValue,
-    positionCount: current.length,
-    newCount: currentWithFlags.filter(h => h.changeType === 'new').length,
-    increasedCount: currentWithFlags.filter(h => h.changeType === 'increased').length,
-    decreasedCount: currentWithFlags.filter(h => h.changeType === 'decreased').length,
-    exitedCount: exited.length,
-    currentWithFlags,
-    exited,
-  };
-}
-
-async function buildBigFundChanges(limit = FOCUSED_13F_WATCHLIST.length) {
-  const selectedFunds = FOCUSED_13F_WATCHLIST.slice(0, Math.min(limit, FOCUSED_13F_WATCHLIST.length));
-  const results = [];
-  const batchSize = 2;
-
-  for (let i = 0; i < selectedFunds.length; i += batchSize) {
-    const batch = selectedFunds.slice(i, i + batchSize);
-    const settled = await Promise.allSettled(batch.map(async (fund) => {
-      const { results: filings } = await get13FFilings(fund.cik);
-      if (!filings.length) return null;
-      const [latestFiling, prevFiling] = filings;
-      const [current, previous] = await Promise.all([
-        fetchHoldings(fund.cik, latestFiling.accession),
-        prevFiling ? fetchHoldings(fund.cik, prevFiling.accession) : Promise.resolve(null),
-      ]);
-      const compared = compare13FHoldings(current, previous, latestFiling);
-      const topChanged = [
-        ...compared.currentWithFlags.filter(h => h.changeType === 'new'),
-        ...compared.currentWithFlags.filter(h => h.changeType === 'increased'),
-        ...compared.currentWithFlags.filter(h => h.changeType === 'decreased'),
-        ...compared.exited,
-      ]
-        .filter(h => (finiteNumber(h.value) || 0) > 0)
-        .sort((a, b) => (finiteNumber(b.value) || 0) - (finiteNumber(a.value) || 0))
-        .slice(0, 8)
-        .map(h => ({
-          name: h.name,
-          cusip: h.cusip,
-          value: finiteNumber(h.value) || 0,
-          shares: finiteNumber(h.shares) || 0,
-          changeType: h.changeType,
-          changePct: finiteNumber(h.changePct) || 0,
-          putCall: h.putCall || null,
-          sector: h.sector || null,
-        }));
-
-      return {
-        cik: fund.cik,
-        fund: fund.name,
-        filingDate: compared.filingDate,
-        period: compared.period,
-        totalValue: compared.totalValue,
-        positionCount: compared.positionCount,
-        newCount: compared.newCount,
-        increasedCount: compared.increasedCount,
-        decreasedCount: compared.decreasedCount,
-        exitedCount: compared.exitedCount,
-        topChanged,
-      };
-    }));
-
-    for (const item of settled) {
-      if (item.status === 'fulfilled' && item.value) results.push(item.value);
-    }
-  }
-
-  results.sort((a, b) => String(b.filingDate || '').localeCompare(String(a.filingDate || '')));
-  return {
-    funds: results,
-    trackedFundUniverse: FOCUSED_13F_WATCHLIST.length,
-    watchlist: FOCUSED_13F_WATCHLIST.map((fund) => ({ cik: fund.cik, name: fund.name })),
-    generatedAt: new Date().toISOString(),
-  };
-}
-
-function ensureBigFundChangesCache(limit, force = false) {
-  if (!force && bigFundChangesCache && bigFundChangesCacheLimit >= limit && isCacheFresh(bigFundChangesFetch, FUND_HOLDINGS_TTL)) {
-    return Promise.resolve(bigFundChangesCache);
-  }
-  if (bigFundChangesInFlight) return bigFundChangesInFlight;
-  bigFundChangesInFlight = buildBigFundChanges(limit)
-    .then((payload) => {
-      bigFundChangesCache = payload;
-      bigFundChangesFetch = Date.now();
-      bigFundChangesCacheLimit = limit;
-      return payload;
-    })
-    .catch((err) => {
-      if (bigFundChangesCache) return bigFundChangesCache;
-      throw err;
-    })
-    .finally(() => {
-      bigFundChangesInFlight = null;
-    });
-  return bigFundChangesInFlight;
-}
-
-app.get('/api/13f/recent-filings', async (req, res) => {
-  const daysBack = Math.min(60, Math.max(7, Number(req.query.days) || 14));
-  try {
-    if (recent13FCaches[daysBack] && isCacheFresh(recent13FFetchTimes[daysBack], RECENT_13F_TTL)) {
-      return res.json({ filings: recent13FCaches[daysBack] });
-    }
-    if (recent13FCaches[daysBack]) {
-      void ensureRecent13FCache(daysBack, true);
-      return res.json({ filings: recent13FCaches[daysBack] });
-    }
-    res.json({ filings: await ensureRecent13FCache(daysBack, true) });
-  } catch (err) {
-    console.error('[13f/recent-filings]', err.message);
-    res.status(502).json({ error: err.message, filings: [] });
-  }
-});
-
-app.get('/api/13f/big-fund-changes', async (req, res) => {
-  const limit = Math.min(FOCUSED_13F_WATCHLIST.length, Math.max(1, Number(req.query.limit) || FOCUSED_13F_WATCHLIST.length));
-  try {
-    if (bigFundChangesCache && bigFundChangesCacheLimit >= limit && isCacheFresh(bigFundChangesFetch, FUND_HOLDINGS_TTL)) {
-      return res.json(bigFundChangesCache);
-    }
-    if (bigFundChangesCache && bigFundChangesCacheLimit >= limit) {
-      void ensureBigFundChangesCache(limit, true);
-      return res.json(bigFundChangesCache);
-    }
-    res.json(await ensureBigFundChangesCache(limit, true));
-  } catch (err) {
-    console.error('[13f/big-fund-changes]', err.message);
-    res.status(502).json({ error: err.message, funds: [] });
-  }
-});
-
-app.get('/api/13f/search', async (req, res) => {
-  const q = (req.query.q || '').trim();
-  if (!q || q.length < 2) return res.json({ funds: [] });
-  const qUpper = q.toUpperCase();
-
-  try {
-    // Helper: get latest 13F-HR filing date for a CIK from EDGAR submissions API
-    async function getLatest13FDate(cik) {
-      try {
-        const padded = cik.padStart(10, '0');
-        const data = await httpsGet(`https://data.sec.gov/submissions/CIK${padded}.json`, { 'User-Agent': 'TARS admin@tars.app' });
-        const json = JSON.parse(data);
-        const recent = json.filings?.recent ?? {};
-        const forms = recent.form ?? [];
-        const dates = recent.filingDate ?? [];
-        for (let i = 0; i < forms.length; i++) {
-          if (forms[i] === '13F-HR') return dates[i] ?? '';
-        }
-      } catch {}
-      return '';
-    }
-
-    // 1. Search the curated known-funds list + fetch latest filing dates in parallel
-    const knownBase = KNOWN_FUNDS.filter(f => f.name.includes(qUpper));
-    const knownMatches = await Promise.all(
-      knownBase.map(async f => ({ ...f, lastFiled: await getLatest13FDate(f.cik) }))
-    );
-    // Sort known matches by most-recent filing first
-    knownMatches.sort((a, b) => b.lastFiled.localeCompare(a.lastFiled));
-
-    // 2. Fetch + cache SEC company_tickers.json (all public companies)
-    const now = Date.now();
-    if (!tickerCache || now - tickerLastFetch > TICKER_CACHE_TTL) {
-      try {
-        const raw = await httpsGet('https://www.sec.gov/files/company_tickers.json', { 'User-Agent': 'TARS admin@tars.app' });
-        tickerCache = Object.values(JSON.parse(raw)); // [{cik_str, ticker, title}, ...]
-        tickerLastFetch = now;
-      } catch (e) {
-        console.error('[13f/tickers]', e.message);
-        tickerCache = [];
-      }
-    }
-
-    const tickerMatches = tickerCache
-      .filter(c => (c.title || '').toUpperCase().includes(qUpper))
-      .slice(0, 20)
-      .map(c => ({ cik: String(c.cik_str), name: c.title, lastFiled: '' }));
-
-    // 3. EDGAR CGI company search — catches private hedge funds not in tickers file
-    //    Use default browser UA (TARS UA is blocked by EDGAR CGI, data.sec.gov UA isn't)
-    let edgarMatches = [];
-    try {
-      const edgarUrl = `https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(q)}&CIK=&type=13F-HR&dateb=&owner=include&count=20&search_text=&action=getcompany&output=atom`;
-      const xml = await httpsGet(edgarUrl); // default Mozilla/Chrome UA — do NOT override
-      const decode = s => s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#(\d+);/g,(_,c)=>String.fromCharCode(+c));
-      const getTag = (block, tag) => { const r=new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`,'i'); const x=r.exec(block); if(!x)return''; const raw=x[1].trim(); const cd=raw.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/); return decode(cd?cd[1].trim():raw); };
-      const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
-      let m;
-      while ((m = entryRe.exec(xml)) !== null) {
-        const block = m[1];
-        const title = getTag(block, 'title');
-        const updated = getTag(block, 'updated').slice(0, 10);
-        const linkRaw = /<link[^>]+href="([^"]+)"/.exec(block);
-        const href = linkRaw ? decode(linkRaw[1]) : '';
-        const cikMatch = href.match(/[?&]CIK=0*(\d+)/i);
-        const cik = cikMatch ? cikMatch[1] : '';
-        const nameMatch = title.match(/^[\w\/\-]+\s+-\s+(.+?)\s+\(\d+\)/);
-        const name = nameMatch ? nameMatch[1].trim() : '';
-        if (cik && name) edgarMatches.push({ cik, name, lastFiled: updated });
-      }
-      console.log(`[13f/search] EDGAR CGI: xml=${xml.length}b entries=${edgarMatches.length}`);
-    } catch (e) {
-      console.error('[13f/edgar]', e.message);
-    }
-
-    // Merge all three sources (known list → public tickers → EDGAR CGI), deduplicate by CIK
-    // Known list is pre-sorted by lastFiled desc; others follow after
-    const seen = new Set();
-    const funds = [];
-    for (const f of [...knownMatches, ...tickerMatches, ...edgarMatches]) {
-      if (!seen.has(f.cik)) { seen.add(f.cik); funds.push(f); }
-      if (funds.length >= 15) break;
-    }
-
-    console.log(`[13f/search] q="${q}" known=${knownMatches.length} tickers=${tickerMatches.length} edgar=${edgarMatches.length}`);
-    res.json({ funds });
-  } catch (err) {
-    console.error('[13f/search]', err.message);
-    res.status(502).json({ error: err.message, funds: [] });
-  }
-});
-
-// Get 13F holdings for a fund CIK — latest + previous for QoQ change detection
-app.get('/api/13f/holdings', async (req, res) => {
-  const cik = (req.query.cik || '').trim().replace(/^0+/, '');
-  if (!cik) return res.status(400).json({ error: 'Missing cik' });
-  try {
-    const { name, results: filings } = await get13FFilings(cik);
-    if (!filings.length) return res.json({ fund: name, current: [], previous: null, meta: {} });
-    const [latestFiling, prevFiling] = filings;
-    const [current, previous] = await Promise.all([
-      fetchHoldings(cik, latestFiling.accession),
-      prevFiling ? fetchHoldings(cik, prevFiling.accession) : Promise.resolve(null),
-    ]);
-
-    const compared = compare13FHoldings(current, previous, latestFiling);
-
-    res.json({
-      fund: name,
-      meta: {
-        filingDate: compared.filingDate,
-        period: compared.period,
-        totalValue: compared.totalValue,
-        positionCount: compared.positionCount,
-        newCount: compared.newCount,
-        increasedCount: compared.increasedCount,
-        decreasedCount: compared.decreasedCount,
-        exitedCount: compared.exitedCount,
-      },
-      current: compared.currentWithFlags,
-      exited: compared.exited,
-      previous: previous ? previous.map(h => ({ name: h.name, cusip: h.cusip, shares: h.shares, value: h.value })) : null,
-    });
-  } catch (err) {
-    console.error('[13f/holdings]', err.message);
-    res.status(502).json({ error: err.message, current: [] });
-  }
-});
-
-// Fund AI chat
-app.post('/api/ask-fund', async (req, res) => {
-  const { question, fund, holdings, meta } = req.body ?? {};
-  if (!question) return res.status(400).json({ error: 'Missing question' });
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) return res.status(503).json({ error: 'AI not configured' });
-
-  const cacheKey = aiCacheKey({ route: 'ask-fund', fund, period: meta?.period, positions: meta?.positionCount, question });
-  const cached = aiCacheGet(cacheKey);
-  if (cached) return res.json({ answer: cached, cached: true });
-
-  const topH = (holdings || []).slice(0, 30).map((h, i) =>
-    `${i + 1}. ${h.name}${h.putCall ? ` (${h.putCall})` : ''}${h.isNew ? ' [NEW]' : ''}: $${(h.value / 1e6).toFixed(1)}M (${(h.pctOfPortfolio || 0).toFixed(1)}%) — ${(h.shares || 0).toLocaleString()} shares`
-  ).join('\n');
-
-  const sectorMap = {};
-  for (const h of (holdings || [])) sectorMap[h.sector] = (sectorMap[h.sector] || 0) + h.value;
-  const totalVal = Object.values(sectorMap).reduce((a, b) => a + b, 0);
-  const sectorStr = Object.entries(sectorMap).sort((a, b) => b[1] - a[1])
-    .map(([s, v]) => `${s}: ${((v / totalVal) * 100).toFixed(1)}%`).join(', ');
-
-  const systemPrompt = `You are a senior portfolio analyst specialising in institutional fund analysis and 13F filings. Deep knowledge of hedge fund strategies, portfolio construction, and regulatory disclosures.
-
-FUND: ${fund || 'Unknown'}
-PORTFOLIO: ${meta?.positionCount || 0} positions · $${((meta?.totalValue || 0) / 1e9).toFixed(2)}B AUM · period ending ${meta?.period || 'unknown'}
-SECTOR BREAKDOWN: ${sectorStr || 'unavailable'}
-
-TOP HOLDINGS (by market value):
-${topH || 'No data'}
-
-RESPONSE FORMAT:
-- Lead with the direct answer in the first sentence
-- Use bullet points (•) for 3+ items
-- Bold key numbers and names with **markdown**
-- End analytical answers with a "Bottom line:" sentence
-- Under 200 words unless depth is genuinely needed
-- No generic disclaimers`;
-
-  try {
-    const body = JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      max_tokens: 600,
-      temperature: 0.4,
-      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: question }],
-    });
-    const answer = await new Promise((resolve, reject) => {
-      const r = https.request({
-        hostname: 'api.groq.com', path: '/openai/v1/chat/completions', method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`, 'Content-Length': Buffer.byteLength(body) },
-      }, res2 => {
-        let d = '';
-        res2.on('data', c => d += c);
-        res2.on('end', () => {
-          try { resolve(JSON.parse(d).choices?.[0]?.message?.content || 'No response'); }
-          catch { reject(new Error('Parse error')); }
-        });
-      });
-      r.on('error', reject);
-      r.setTimeout(30000, () => { r.destroy(); reject(new Error('Timeout')); });
-      r.write(body);
-      r.end();
-    });
-    aiCacheSet(cacheKey, answer);
-    res.json({ answer });
-  } catch (err) {
-    console.error('[ask-fund]', err.message);
-    res.status(502).json({ error: err.message });
-  }
-});
-
-// ── Cross-fund options scan ───────────────────────────────────────────────────
-// Pre-fetches options positions (putCall != null) from all curated KNOWN_FUNDS.
-// Runs in background on startup + cached 24h. Returns {positions, loading}.
-let optionsScanCache = null;
-let optionsScanLastFetch = 0;
-let optionsScanBuilding = false;
-const OPTIONS_SCAN_TTL = 24 * 60 * 60 * 1000;
-
-async function buildOptionsScan() {
-  if (optionsScanBuilding) return;
-  optionsScanBuilding = true;
-  try {
-    const all = [];
-    const batchSize = 3;
-    for (let i = 0; i < KNOWN_FUNDS.length; i += batchSize) {
-      const batch = KNOWN_FUNDS.slice(i, i + batchSize);
-      const results = await Promise.allSettled(batch.map(async (fund) => {
-        try {
-          const { results: filings } = await get13FFilings(fund.cik);
-          if (!filings.length) return [];
-          const holdings = await fetchHoldings(fund.cik, filings[0].accession);
-          return holdings
-            .filter(h => h.putCall)
-            .map(h => ({
-              fund: fund.name,
-              fundCik: fund.cik,
-              name: h.name,
-              cusip: h.cusip,
-              putCall: h.putCall,
-              value: h.value,
-              shares: h.shares,
-              sector: h.sector,
-            }));
-        } catch { return []; }
-      }));
-      for (const r of results) {
-        if (r.status === 'fulfilled') all.push(...r.value);
-      }
-    }
-    optionsScanCache = all.sort((a, b) => b.value - a.value);
-    optionsScanLastFetch = Date.now();
-    console.log(`[options-scan] built: ${optionsScanCache.length} positions across ${KNOWN_FUNDS.length} funds`);
-  } catch (e) {
-    console.error('[options-scan]', e.message);
-  } finally {
-    optionsScanBuilding = false;
-  }
-}
-
-app.get('/api/13f/options-scan', async (_req, res) => {
-  const now = Date.now();
-  if (optionsScanCache && now - optionsScanLastFetch < OPTIONS_SCAN_TTL) {
-    return res.json({ positions: optionsScanCache, loading: false });
-  }
-  if (!optionsScanBuilding) buildOptionsScan(); // fire-and-forget refresh
-  if (optionsScanCache) {
-    return res.json({ positions: optionsScanCache, loading: true }); // stale while refreshing
-  }
-  res.json({ positions: [], loading: true }); // first load — still building
-});
-
 // Background warming/sync keeps the slowest research feeds hot so users do not
 // pay the full cold-build cost after restarts or TTL expiry.
 function scheduleRepeatingTask(label, intervalMs, task) {
@@ -5905,57 +4987,11 @@ function scheduleRepeatingTask(label, intervalMs, task) {
 // News Impact + Agent Alerts  (Phase 1 — schema helpers + stub endpoints)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const REDDIT_SNAPSHOT_MIN_GAP_MS = 30 * 60 * 1000;
 
 // ── Supabase helpers ─────────────────────────────────────────────────────────
 
 function hasNewsDb() {
   return Boolean(serverSupabase);
-}
-
-async function writeSocialTrendSnapshots(source, filter, items) {
-  if (!hasNewsDb() || !Array.isArray(items) || items.length === 0) return;
-  const sampledAt = new Date().toISOString();
-  const settingKey = `social_trend_snapshot_last_${source}_${String(filter || 'default').replace(/[^a-zA-Z0-9:_-]/g, '_')}`;
-  try {
-    const lastSnapshotAt = await getAppSetting(settingKey);
-    const lastMs = lastSnapshotAt ? Date.parse(String(lastSnapshotAt)) : 0;
-    if (Number.isFinite(lastMs) && Date.now() - lastMs < REDDIT_SNAPSHOT_MIN_GAP_MS) return;
-  } catch {}
-
-  const rows = items
-    .slice(0, 120)
-    .map((item) => {
-      const symbol = normalizeSymbol(item.symbol || item.ticker || '');
-      if (!symbol) return null;
-      return {
-        source,
-        filter: String(filter || 'default'),
-        symbol,
-        sampled_at: sampledAt,
-        mentions: Math.max(0, Math.round(Number(item.mentions) || 0)),
-        rank: Number.isFinite(Number(item.rank)) ? Math.round(Number(item.rank)) : null,
-        upvotes: Number.isFinite(Number(item.upvotes)) ? Math.round(Number(item.upvotes)) : null,
-        unique_accounts: Number.isFinite(Number(item.uniqueAccounts)) ? Math.round(Number(item.uniqueAccounts)) : null,
-        engagement_score: Number.isFinite(Number(item.engagementScore)) ? Number(item.engagementScore) : 0,
-        raw: {
-          name: item.name || null,
-          previousMentions: item.previousMentions ?? item.mentions24hAgo ?? null,
-          mentionChange: item.mentionChange ?? null,
-          mentionChangePct: item.mentionChangePct ?? null,
-        },
-      };
-    })
-    .filter(Boolean);
-  if (!rows.length) return;
-
-  try {
-    const { error } = await serverSupabase.from('social_trend_snapshots').insert(rows);
-    if (error) throw error;
-    await setAppSetting(settingKey, sampledAt).catch(() => {});
-  } catch (err) {
-    console.warn(`[social-trend-snapshots/write:${source}]`, err.message);
-  }
 }
 
 async function logAgentRun({ job, itemsProcessed, tokensUsed, msElapsed, error = null }) {
@@ -5969,185 +5005,6 @@ async function logAgentRun({ job, itemsProcessed, tokensUsed, msElapsed, error =
   });
   if (dbErr) console.error('[agent-run-log insert]', dbErr.message);
 }
-
-async function getAppSetting(key) {
-  if (!hasNewsDb()) return null;
-  const { data } = await serverSupabase
-    .from('app_settings').select('value').eq('key', key).maybeSingle();
-  return data?.value ?? null;
-}
-
-async function setAppSetting(key, value) {
-  if (!hasNewsDb()) return;
-  const { error } = await serverSupabase
-    .from('app_settings')
-    .upsert({ key, value }, { onConflict: 'key' });
-  if (error) throw error;
-}
-
-// ── Stub endpoints (Phase 1) — return correct shape, empty data ───────────────
-// Real ingestion wired in Phase 2. Codex can build against these immediately.
-
-// ── Phase 2: Headline fetchers + dedup + Claude scoring + job ────────────────
-
-// Optional Printing Press CLI collectors. They enrich MarketLens caches when
-// installed, but dashboard/API reads never depend on the external binaries.
-const PP_YAHOO_FINANCE_CLI = process.env.PP_YAHOO_FINANCE_CLI || 'yahoo-finance-pp-cli';
-const PP_HACKERNEWS_CLI = process.env.PP_HACKERNEWS_CLI || 'hackernews-pp-cli';
-const PP_SCRAPE_CREATORS_CLI = process.env.PP_SCRAPE_CREATORS_CLI || 'scrape-creators-pp-cli';
-const EXTERNAL_COLLECTOR_TIMEOUT_MS = Math.min(
-  120000,
-  Math.max(5000, parseInt(process.env.EXTERNAL_COLLECTOR_TIMEOUT_MS || '45000', 10) || 45000)
-);
-const DEFAULT_HN_TOPICS = (process.env.HACKERNEWS_TREND_TOPICS || 'AI agents,semiconductors,Nvidia,datacenter,robotics')
-  .split(',')
-  .map((topic) => topic.trim())
-  .filter(Boolean)
-  .slice(0, 12);
-
-function runExternalCli(command, args = [], { timeoutMs = EXTERNAL_COLLECTOR_TIMEOUT_MS } = {}) {
-  return new Promise((resolve) => {
-    const startedAt = Date.now();
-    let child;
-    const finish = (error, stdout = '', stderr = '') => {
-      resolve({
-        ok: !error,
-        command,
-        args,
-        exitCode: Number.isFinite(error?.code) ? error.code : (error ? 1 : 0),
-        timedOut: Boolean(error?.killed || /timed out/i.test(String(error?.message || ''))),
-        msElapsed: Date.now() - startedAt,
-        stdout: String(stdout || '').trim(),
-        stderr: String(stderr || '').trim(),
-        error: error ? String(error.message || error) : null,
-      });
-    };
-    try {
-      child = execFile(command, args, { timeout: timeoutMs, maxBuffer: 5 * 1024 * 1024, windowsHide: true }, finish);
-      child.on('error', (error) => finish(error));
-    } catch (error) {
-      finish(error);
-    }
-  });
-}
-
-function parseCliJson(stdout) {
-  const text = String(stdout || '').trim();
-  if (!text) return null;
-  try { return JSON.parse(text); } catch {}
-  const firstJson = text.search(/[\[{]/);
-  if (firstJson < 0) return null;
-  try { return JSON.parse(text.slice(firstJson)); } catch {}
-  return null;
-}
-
-function compactCliResult(result) {
-  return {
-    ok: result.ok,
-    exitCode: result.exitCode,
-    timedOut: result.timedOut,
-    msElapsed: result.msElapsed,
-    error: result.error,
-    stderr: result.stderr ? result.stderr.slice(0, 1200) : '',
-  };
-}
-
-async function checkExternalCollectorStatus({ live = false } = {}) {
-  const checks = [
-    { id: 'yahoo-finance', label: 'Yahoo Finance', command: PP_YAHOO_FINANCE_CLI, install: 'npx -y @mvanhorn/printing-press install yahoo-finance --cli-only', args: live ? ['doctor', '--json'] : ['--help'] },
-    { id: 'hackernews', label: 'Hacker News', command: PP_HACKERNEWS_CLI, install: 'npx -y @mvanhorn/printing-press install hackernews --cli-only', args: live ? ['doctor', '--json'] : ['--help'] },
-    { id: 'scrape-creators', label: 'Scrape Creators', command: PP_SCRAPE_CREATORS_CLI, install: 'npx -y @mvanhorn/printing-press install scrape-creators --cli-only', args: ['--help'], configured: Boolean(process.env.SCRAPE_CREATORS_API_KEY), note: process.env.SCRAPE_CREATORS_API_KEY ? 'API key configured' : 'Set SCRAPE_CREATORS_API_KEY before live social pulls' },
-  ];
-  const collectors = await Promise.all(checks.map(async (check) => {
-    const result = await runExternalCli(check.command, check.args, { timeoutMs: live ? 20000 : 5000 });
-    return { id: check.id, label: check.label, available: result.ok, configured: check.configured ?? true, command: check.command, install: check.install, note: check.note || null, check: compactCliResult(result) };
-  }));
-  return { schemaVersion: 1, generatedAt: new Date().toISOString(), live, collectors };
-}
-
-function arrayFromCliPayload(payload) {
-  if (Array.isArray(payload)) return payload;
-  for (const key of ['items', 'results', 'stories', 'quotes', 'symbols', 'data']) {
-    if (Array.isArray(payload?.[key])) return payload[key];
-  }
-  if (Array.isArray(payload?.data?.items)) return payload.data.items;
-  if (Array.isArray(payload?.data?.results)) return payload.data.results;
-  return [];
-}
-
-function normalizeYahooTrendingItem(item, index) {
-  const symbol = normalizeSymbol(item?.symbol || item?.ticker || item?.quote?.symbol || '');
-  if (!symbol || !/^[A-Z0-9.^-]{1,12}$/.test(symbol)) return null;
-  return {
-    rank: finiteNumber(item.rank) || index + 1,
-    ticker: symbol,
-    symbol,
-    name: String(item.shortName || item.longName || item.name || symbol),
-    mentions: Math.max(1, 101 - Math.min(100, index + 1)),
-    upvotes: 0,
-    uniqueAccounts: 0,
-    engagementScore: finiteNumber(item.regularMarketChangePercent) || 0,
-    raw: item,
-  };
-}
-
-async function runYahooTrendingCollector({ region = 'US', limit = 50 } = {}) {
-  const result = await runExternalCli(PP_YAHOO_FINANCE_CLI, ['trending', String(region || 'US'), '--json', '--compact', '--no-color']);
-  const payload = parseCliJson(result.stdout);
-  const items = arrayFromCliPayload(payload).map((item, index) => normalizeYahooTrendingItem(item, index)).filter(Boolean).slice(0, Math.min(100, Math.max(5, Number(limit) || 50)));
-  if (items.length) await writeSocialTrendSnapshots('yahoo_trending', String(region || 'US'), items);
-  const normalized = { collector: 'yahoo-trending', source: 'Printing Press Yahoo Finance CLI', generatedAt: new Date().toISOString(), region: String(region || 'US'), count: items.length, items };
-  await setAppSetting('external_collector_last_yahoo_trending', normalized).catch(() => {});
-  return { ...compactCliResult(result), payload: normalized };
-}
-
-function normalizeHackerNewsPulse(payload, topic) {
-  const rows = arrayFromCliPayload(payload);
-  const totals = rows.reduce((acc, row) => {
-    acc.mentions += finiteNumber(row.mentions ?? row.count ?? row.hits) || 0;
-    acc.score += finiteNumber(row.score ?? row.points ?? row.avg_score) || 0;
-    acc.comments += finiteNumber(row.comments ?? row.comment_count ?? row.num_comments) || 0;
-    return acc;
-  }, { mentions: 0, score: 0, comments: 0 });
-  return { topic, mentions: Math.round(totals.mentions), score: Math.round(totals.score), comments: Math.round(totals.comments), rows };
-}
-
-async function runHackerNewsPulseCollector({ topics = DEFAULT_HN_TOPICS, days = 7 } = {}) {
-  const cleanTopics = (Array.isArray(topics) ? topics : String(topics || '').split(',')).map((topic) => String(topic || '').trim()).filter(Boolean).slice(0, 12);
-  const cleanDays = Math.min(30, Math.max(1, Number(days) || 7));
-  const results = [];
-  for (const topic of cleanTopics) {
-    const result = await runExternalCli(PP_HACKERNEWS_CLI, ['pulse', topic, '--days', String(cleanDays), '--agent']);
-    const payload = parseCliJson(result.stdout);
-    results.push({ topic, cli: compactCliResult(result), pulse: normalizeHackerNewsPulse(payload, topic) });
-  }
-  const normalized = { collector: 'hackernews-pulse', source: 'Printing Press Hacker News CLI', generatedAt: new Date().toISOString(), days: cleanDays, topics: results };
-  await setAppSetting('external_collector_last_hackernews_pulse', normalized).catch(() => {});
-  return normalized;
-}
-
-function symbolFromTrendQuery(query) {
-  const match = String(query || '').toUpperCase().match(/\$([A-Z]{1,5})\b/);
-  return match ? match[1] : '';
-}
-
-async function runCreatorTrendCollector({ query = 'AI agents', platform = '', days = 7 } = {}) {
-  if (!process.env.SCRAPE_CREATORS_API_KEY) return { ok: false, collector: 'creator-trends', error: 'SCRAPE_CREATORS_API_KEY is not configured', generatedAt: new Date().toISOString() };
-  const cleanQuery = String(query || 'AI agents').trim().slice(0, 80);
-  const cleanPlatform = String(platform || '').trim();
-  const args = ['trends', cleanPlatform ? 'delta' : 'triangulate', cleanQuery, '--json'];
-  if (cleanPlatform) args.push('--platform', cleanPlatform, '--days', String(Math.min(30, Math.max(1, Number(days) || 7))));
-  const result = await runExternalCli(PP_SCRAPE_CREATORS_CLI, args, { timeoutMs: Math.max(EXTERNAL_COLLECTOR_TIMEOUT_MS, 60000) });
-  const payload = parseCliJson(result.stdout);
-  const symbol = symbolFromTrendQuery(cleanQuery);
-  if (symbol && result.ok) {
-    await writeSocialTrendSnapshots('creator_trends', cleanPlatform || 'triangulate', [{ symbol, ticker: symbol, rank: 1, mentions: finiteNumber(payload?.mentions ?? payload?.count ?? payload?.videoCount) || 1, upvotes: finiteNumber(payload?.engagement ?? payload?.likes ?? payload?.score) || 0, engagementScore: finiteNumber(payload?.engagement ?? payload?.score) || 0, raw: payload }]);
-  }
-  const normalized = { collector: 'creator-trends', source: 'Printing Press Scrape Creators CLI', generatedAt: new Date().toISOString(), query: cleanQuery, platform: cleanPlatform || 'triangulate', symbol: symbol || null, cli: compactCliResult(result), payload };
-  await setAppSetting('external_collector_last_creator_trends', normalized).catch(() => {});
-  return normalized;
-}
-
 
 // callClaudeRaw: like callClaude but also returns raw usage object for token counting.
 // NOTE: httpsPost calls JSON.stringify() internally, so pass the object directly.
@@ -6172,60 +5029,6 @@ async function callClaudeRaw(systemPrompt, userPrompt, { model = CLAUDE_MODEL_FU
 }
 
 
-// ── Phase 3: Material Form 4 filter + Agent Briefing job ─────────────────────
-
-app.get('/api/external-collectors/status', async (req, res) => {
-  try {
-    const payload = await checkExternalCollectorStatus({ live: req.query.live === '1' });
-    res.json(payload);
-  } catch (err) {
-    console.error('[api/external-collectors/status]', err.message);
-    res.status(502).json({ schemaVersion: 1, generatedAt: new Date().toISOString(), error: err.message, collectors: [] });
-  }
-});
-
-app.post('/api/external-collectors/run-now', async (req, res) => {
-  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
-  const collector = String(req.body?.collector || req.query.collector || '').trim();
-  try {
-    let result;
-    if (collector === 'yahoo-trending') {
-      result = await runYahooTrendingCollector({
-        region: req.body?.region || req.query.region || 'US',
-        limit: req.body?.limit || req.query.limit || 50,
-      });
-    } else if (collector === 'hackernews-pulse') {
-      result = await runHackerNewsPulseCollector({
-        topics: req.body?.topics || req.query.topics || DEFAULT_HN_TOPICS,
-        days: req.body?.days || req.query.days || 7,
-      });
-    } else if (collector === 'creator-trends') {
-      result = await runCreatorTrendCollector({
-        query: req.body?.query || req.query.query || 'AI agents',
-        platform: req.body?.platform || req.query.platform || '',
-        days: req.body?.days || req.query.days || 7,
-      });
-    } else {
-      return res.status(400).json({
-        error: 'collector must be one of yahoo-trending, hackernews-pulse, creator-trends',
-      });
-    }
-    await logAgentRun({
-      job: `external-${collector}`,
-      itemsProcessed: Number(result?.payload?.count ?? result?.topics?.length ?? 0) || 0,
-      tokensUsed: 0,
-      msElapsed: Number(result?.msElapsed ?? 0) || 0,
-      error: result?.error || result?.cli?.error || null,
-    });
-    res.json({ ok: !result?.error, collector, result });
-  } catch (err) {
-    console.error('[api/external-collectors/run-now]', err.message);
-    await logAgentRun({ job: `external-${collector || 'unknown'}`, itemsProcessed: 0, tokensUsed: 0, msElapsed: 0, error: err.message });
-    res.status(502).json({ ok: false, collector, error: err.message });
-  }
-});
-
-
 function adminEmails() {
   return (process.env.VITE_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 }
@@ -6236,24 +5039,6 @@ function isAdminRequest(req) {
   return emails.length === 0 || emails.includes(callerEmail);
 }
 
-app.get('/llms.txt', (req, res) => {
-  res.type('text/plain').send(`TARS agent interface - SEC filing triage
-
-Purpose:
-TARS ingests SEC filings (13D/13G ownership, Form 4 insider trades, 8-K events), scores each with a fast
-typed classifier (Jev) for materiality and intent, and escalates only the material few to an LLM for a written impact thesis.
-
-Endpoints:
-- GET /api/ownership-filings/triage?minMateriality=&investorType=&days=&escalatedOnly=&limit=
-  Ranked 13D/13G filings with Jev scores and, when escalated, an AI thesis.
-- GET /api/stock-intelligence?symbol={symbol}
-  Per-ticker filing, insider, congress and fund context.
-
-Use rules:
-- Treat filing dates and accession numbers as part of the evidence; link to the SEC source.
-- Separate facts from inference.
-`);
-});
 // ── Background scheduler ──────────────
 
 const FILING_TRIAGE_BACKGROUND_SYNC_MS = 20 * 60 * 1000; // 20 minutes
@@ -6263,8 +5048,6 @@ function startBackgroundSync() {
     console.log('[background-sync] disabled');
     return;
   }
-
-  setTimeout(() => buildOptionsScan().catch(e => console.error('[options-scan init]', e.message)), 8000);
 
   scheduleRepeatingTask('congress', CONGRESS_BACKGROUND_SYNC_MS, async () => {
     await refreshCongressTradesFromSource();
