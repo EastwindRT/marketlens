@@ -4655,6 +4655,10 @@ function parseTypesParam(value) {
 
 app.get('/api/filings/feed', async (req, res) => {
   try {
+    const wantLimit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
+    // Direction filter and signal sort act on the computed rating, so fetch a wide pool first and trim afterwards;
+    // limiting by priority first would hide bullish rows behind a wall of high-priority bearish ones.
+    const needsPool = req.query.direction === 'bullish' || req.query.direction === 'bearish' || req.query.sort === 'signal';
     const signals = await getFilingSignals({
       types: parseTypesParam(req.query.types),
       minPriority: Math.max(0, Number(req.query.minPriority ?? 0) || 0),
@@ -4664,9 +4668,9 @@ app.get('/api/filings/feed', async (req, res) => {
       symbol: req.query.symbol ? normalizeSymbol(String(req.query.symbol)) : null,
       symbols: parseSymbolsParam(req.query.symbols),
       findingsOnly: req.query.findingsOnly === '1',
-      limit: Math.min(parseInt(req.query.limit || '100', 10) || 100, 500),
+      limit: needsPool ? 500 : wantLimit,
     });
-    const view = applyRatingView(signals, { direction: req.query.direction, sort: req.query.sort });
+    const view = applyRatingView(signals, { direction: req.query.direction, sort: req.query.sort }).slice(0, wantLimit);
     res.json({ schemaVersion: 2, triageMode: FILING_TRIAGE_MODE, classifier: FILING_CLASSIFIER, signals: view, generatedAt: new Date().toISOString() });
   } catch (err) {
     console.error('[api/filings/feed]', err.message);
@@ -4857,6 +4861,7 @@ const MCP_TOOLS = [
     },
     handler: async (a) => {
       const types = Array.isArray(a.types) ? a.types.filter((t) => FILING_TYPES[t]) : null;
+      const wantLimit = Math.min(Math.max(parseInt(a.limit ?? 25, 10) || 25, 1), 100);
       const signals = await getFilingSignals({
         types: types && types.length ? types : null,
         symbols: parseSymbolsParam(a.symbols),
@@ -4864,9 +4869,9 @@ const MCP_TOOLS = [
         tier: ['critical', 'high', 'medium', 'low'].includes(a.tier) ? a.tier : null,
         days: Math.min(Math.max(parseInt(a.days ?? 3, 10) || 3, 1), 90),
         escalatedOnly: a.escalated_only === true,
-        limit: Math.min(Math.max(parseInt(a.limit ?? 25, 10) || 25, 1), 100),
+        limit: a.direction || a.sort === 'signal' ? 500 : wantLimit,
       });
-      const view = applyRatingView(signals, { direction: a.direction, sort: a.sort });
+      const view = applyRatingView(signals, { direction: a.direction, sort: a.sort }).slice(0, wantLimit);
       return { count: view.length, signals: view, generatedAt: new Date().toISOString() };
     },
   },
