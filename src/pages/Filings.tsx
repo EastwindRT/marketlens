@@ -61,6 +61,11 @@ function formatUsd(value: number): string {
 function describeSignal(s: FilingSignal): { summary: string; flags: string[] } {
   const f = s.signals || {};
   const flags: string[] = [];
+  if (f.scored_by === 'rules') {
+    if (f.cluster_buy) flags.push('Cluster buy');
+    if (f.is_executive) flags.push('Executive');
+    return { summary: String(f.rule_reason || 'Rule-based score'), flags };
+  }
   if (s.filing_type === 'ownership') {
     if ((num(f.board_or_strategic_intent) ?? 0) >= 0.6) flags.push('Board / strategic intent');
     if ((num(f.new_position) ?? 0) >= 0.6) flags.push('New position');
@@ -228,14 +233,14 @@ export default function FilingsPage() {
   const [escalatedOnly, setEscalatedOnly] = useState(false);
   const [ticker, setTicker] = useState('');
 
-  const symbol = ticker.trim().toUpperCase();
+  const symbols = ticker.split(/[\s,]+/).map((t) => t.trim().toUpperCase()).filter(Boolean);
   const { data, error, isLoading, isFetching, dataUpdatedAt } = useFilingsFeed({
     types: type === 'all' ? undefined : [type],
     tier: tier === 'all' ? undefined : tier,
     minPriority: includeLow || tier !== 'all' ? undefined : 25,
     days,
     escalatedOnly,
-    symbol: symbol || undefined,
+    symbols: symbols.length ? symbols : undefined,
     limit: 200,
   });
 
@@ -257,8 +262,9 @@ export default function FilingsPage() {
         <DataStatus updatedAt={generatedAt} refreshing={isFetching} />
       </div>
       <p className="hidden md:block" style={{ margin: '0 0 16px', fontSize: 14, color: 'var(--text-secondary)', maxWidth: 760 }}>
-        Every new SEC 13D/13G, Form 4 and 8-K is scored 0-100 by Jev. Only the filings that clear their type's
-        bar get a written AI read. Low-priority filings are hidden by default.{' '}
+        Every new SEC 13D/13G, Form 4 and 8-K is scored 0-100 (by Jev when connected, otherwise by rules), and filings
+        with no real impact are filtered out. Only those that clear their type's bar get a written AI read. Low-priority
+        filings are hidden by default.{' '}
         <Link to="/glossary" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent-blue)', fontWeight: 700, textDecoration: 'none' }}>
           <BookOpen size={13} /> What do these filings mean?
         </Link>
@@ -275,9 +281,9 @@ export default function FilingsPage() {
         <input
           value={ticker}
           onChange={(e) => setTicker(e.target.value)}
-          placeholder="Ticker"
-          aria-label="Filter by ticker"
-          style={{ width: 90, padding: '7px 12px', borderRadius: 999, border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 12, fontWeight: 700 }}
+          placeholder="Tickers, e.g. NVDA, TSLA"
+          aria-label="Filter by tickers"
+          style={{ width: 190, padding: '7px 12px', borderRadius: 999, border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 12, fontWeight: 700 }}
         />
       </div>
 
@@ -287,6 +293,16 @@ export default function FilingsPage() {
         <Metric label="High" value={counts.high} color="#F7931A" />
         <Metric label="AI read" value={counts.ai} color="var(--accent-blue)" />
       </div>
+
+      {data?.triageMode === 'rules' && (
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, padding: 12, marginBottom: 14 }}>
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
+            <strong style={{ color: 'var(--text-primary)' }}>Rule-based scoring.</strong> No Jev key is connected, so obvious noise
+            (routine 8-K items, small or mechanical insider trades, passive 13G filings from index funds) is filtered by rules and the rest
+            is ranked by form type, item codes and trade size. Add a Jev key for text-aware scoring and AI reads.
+          </p>
+        </div>
+      )}
 
       {data?.error && (
         <div style={{ background: 'var(--bg-surface)', border: '1px solid rgba(247, 147, 26, 0.24)', borderRadius: 16, padding: 14, marginBottom: 16 }}>

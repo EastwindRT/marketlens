@@ -35,6 +35,31 @@ The job drains the backlog with a worker pool (`FILING_TRIAGE_CONCURRENCY`, defa
 picked up first next run; the run summary reports `listed`, `unseen`, `skipped`, `scored`, `escalated` and `deferred`.
 A failed `filing_triage_seen` lookup aborts that type's run rather than risk re-scoring everything.
 
+## Modes: rules, hybrid, jev
+
+`FILING_TRIAGE_MODE` picks how filings are scored. If unset it is `hybrid` when `TYPESAFE_API_KEY` exists, otherwise `rules`.
+
+| Mode | Needs | What happens |
+|---|---|---|
+| `rules` | nothing but Supabase | `filingRules.cjs` ranks each filing from form type, filer, 8-K item codes and trade size, and drops obvious noise. No Jev, no LLM. |
+| `hybrid` | Jev key | Rules drop the noise first (free); Jev scores only what is left; if a Jev call fails the filing keeps its rule-based score. |
+| `jev` | Jev key | Jev scores everything (no pre-filter, no fallback). |
+
+Noise is any filing whose rule priority is below `FILING_TRIAGE_NOISE_FLOOR` (default 15). It is recorded in
+`filing_triage_seen` as skipped and not stored in the feed. Rule priorities (see `filingRules.cjs`):
+
+| Type | Rule examples |
+|---|---|
+| 13D/13G | new 13D 70, 13D/A 55, new 13G 25, 13G/A 12, 13G from a large passive manager (BlackRock, Vanguard, ...) 5 |
+| Form 4 | cluster buy 75-80; open-market buy 20-65 by size (+10 for an executive); sales 5-40 by size (a $10M+ sale 40) |
+| 8-K | highest item present: 1.03/4.02 85; 2.04/3.01 80; 1.05/5.01 75; 1.01/2.01 55; 5.02 40; 2.02 35; 8.01 25; 7.01/9.01/5.07 3 |
+
+Limits of rules: they cannot read the text, so most 8-Ks survive (nearly all carry a substantive item), Form 4 sales cannot
+be told apart from 10b5-1 plan sales, and a 13D's intent is not read. That is the gap Jev closes. Rule-scored rows carry
+`signals.scored_by = 'rules'` and a `rule_reason`; Jev-scored rows keep `rule_priority` for comparison.
+
+`POST /api/filings/discover?preview=1` shows, for real discovered filings, what the rules would keep and drop (no writes).
+
 ## Per-type rules
 
 | Type | Jev questions | Priority floor | Escalates when |
@@ -47,7 +72,8 @@ Tune thresholds in `filingTriage.cjs`; there is no separate config file.
 
 ## Endpoints
 
-- `GET /api/filings/feed?types=&minPriority=&tier=&days=&escalatedOnly=&symbol=&limit=` - public read, schemaVersion 2.
+- `GET /api/filings/feed?types=&minPriority=&tier=&days=&escalatedOnly=&symbol=&symbols=&limit=` - public read, schemaVersion 2.
+  `symbols` is a comma list (your watchlist, up to 50); the response includes `triageMode`.
 - `GET /api/ownership-filings/triage` - legacy 13D/13G view, reads `filing_signals` and flattens ownership fields.
 - `POST /api/filings/run-now[?types=ownership,insider,event]` - admin-only (`x-admin-email` / `VITE_ADMIN_EMAILS`).
 - `POST /api/ownership-filings/run-now` - admin-only, ownership only.
@@ -63,7 +89,7 @@ dependency. Optional `MCP_API_KEY`: when set, clients must send `Authorization: 
 
 | Tool | Purpose |
 |---|---|
-| `get_priority_feed` | Ranked filings; filter by types, min_priority (default 50), tier, days (default 3), escalated_only, limit |
+| `get_priority_feed` | Ranked filings; filter by types, symbols (your tickers), min_priority (default 50), tier, days (default 3), escalated_only, limit |
 | `get_filing` | One filing by accession number, with typed signals and AI thesis |
 | `get_ticker_filings` | Everything triaged for one ticker |
 | `get_stock_intelligence` | Per-ticker context (price/trend, insiders, 13D/G, congress, funds, fundamentals) |
@@ -79,8 +105,10 @@ claude mcp add --transport http tars https://marketlens-jn9s.onrender.com/mcp
 
 | Var | Purpose | Default |
 |---|---|---|
-| `TYPESAFE_API_KEY` | Jev API key (typesafe.ai) | none - job no-ops |
+| `TYPESAFE_API_KEY` | Jev API key (typesafe.ai); optional, rules mode works without it | none |
 | `FILING_TRIAGE_ENABLED` | `1` enables the 20-minute scheduled job (`OWNERSHIP_TRIAGE_ENABLED=1` is still honoured) | `0` |
+| `FILING_TRIAGE_MODE` | `rules`, `hybrid` or `jev` (see Modes) | `hybrid` with a Jev key, else `rules` |
+| `FILING_TRIAGE_NOISE_FLOOR` | Rule priority below this is dropped as noise | `15` |
 | `JEV_MODEL` | Jev model alias | `jev-latest` |
 | `ANTHROPIC_API_KEY` | Required for Form 4 and 8-K theses | none |
 | `GROQ_API_KEY` | Ownership thesis (optional; Claude is the fallback) | none |

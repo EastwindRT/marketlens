@@ -3696,11 +3696,22 @@ app.post('/api/analyze-filing', async (req, res) => {
 // See docs/filing-triage.md for the full design.
 
 const { FILING_TYPES, buildSignal } = require('./filingTriage.cjs');
+const { rulesPriority, extractEightKItems } = require('./filingRules.cjs');
 
 const TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY || '';
 const FILING_TRIAGE_ENABLED =
   process.env.FILING_TRIAGE_ENABLED === '1' || process.env.OWNERSHIP_TRIAGE_ENABLED === '1';
 const JEV_MODEL = process.env.JEV_MODEL || 'jev-latest';
+
+// rules  = free rule-based noise filter + priority, no Jev key needed
+// hybrid = rules drop the obvious noise, Jev scores everything else (default when a key exists)
+// jev    = Jev scores everything
+const FILING_TRIAGE_MODE = (() => {
+  const requested = String(process.env.FILING_TRIAGE_MODE || '').toLowerCase();
+  if (['rules', 'hybrid', 'jev'].includes(requested)) return requested;
+  return TYPESAFE_API_KEY ? 'hybrid' : 'rules';
+})();
+const TRIAGE_NOISE_FLOOR = Math.min(100, Math.max(0, parseInt(process.env.FILING_TRIAGE_NOISE_FLOOR || '15', 10) || 15));
 const INSIDER_CLUSTER_MIN = 3;
 const EVENT_ROUTINE_ITEMS = new Set(['9.01', '7.01', '5.07']);
 
@@ -3786,7 +3797,7 @@ async function getFilingByAccession(accessionNo) {
   return data ?? null;
 }
 
-async function getFilingSignals({ types = null, minPriority = 0, tier = null, days = 14, escalatedOnly = false, symbol = null, limit = 100 } = {}) {
+async function getFilingSignals({ types = null, minPriority = 0, tier = null, days = 14, escalatedOnly = false, symbol = null, symbols = null, limit = 100 } = {}) {
   if (!hasFilingDb()) return [];
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   let query = serverSupabase
@@ -3801,6 +3812,7 @@ async function getFilingSignals({ types = null, minPriority = 0, tier = null, da
   if (tier) query = query.eq('priority_tier', tier);
   if (escalatedOnly) query = query.eq('escalated', true);
   if (symbol) query = query.eq('symbol', symbol);
+  if (symbols && symbols.length) query = query.in('symbol', symbols);
   const { data, error } = await query;
   if (error) { console.error('[filing-signals query]', error.message); return []; }
   return data ?? [];
@@ -3893,6 +3905,7 @@ async function discoverOwnershipCandidates({ days, maxNew, dryRun }) {
       sector: f.sector || null,
       industry: f.industry || null,
       context: {},
+      ruleInput: { formType: f.formType, filerName: f.filerName },
       loadState: () => fetchEdgarFilingText(f.edgarUrl),
     })),
   };
@@ -3990,6 +4003,12 @@ async function discoverInsiderCandidates({ maxNew, dryRun }) {
       sector: null,
       industry: null,
       context: { clusterBuy, totalValue },
+      ruleInput: {
+        buyValue: buys.reduce((sum, t) => sum + (t.totalValue || 0), 0),
+        sellValue: trades.filter((t) => t.type === 'SELL').reduce((sum, t) => sum + (t.totalValue || 0), 0),
+        clusterBuy,
+        isExecutive: /chief|\bceo\b|\bcfo\b|\bcoo\b|president|chair/i.test(first.title || ''),
+      },
       loadState: async () => state,
     };
   });
@@ -4070,6 +4089,7 @@ async function discoverEventCandidates({ maxNew, dryRun }) {
         sector: null,
         industry: null,
         context: {},
+        itemCodes: i.itemCodes,
         loadState: async () => {
           const text = await fetchEdgarFilingText(i.href);
           const head = i.itemCodes.length ? `Items reported: ${i.itemCodes.join(', ')}\n` : '';
@@ -4086,10 +4106,80 @@ const FILING_DISCOVERERS = {
   event: discoverEventCandidates,
 };
 
+async function saveTriageRow(typeKey, candidate, row) {
+  const savedId = await upsertFilingSignal({
+    accession_no: candidate.accessionNo,
+    filing_type: typeKey,
+    form_type: candidate.formType,
+    symbol: candidate.symbol,
+    subject_company: candidate.subjectCompany,
+    subject_cik: candidate.subjectCik,
+    filer_name: candidate.filerName,
+    filed_date: candidate.filedDate,
+    filing_url: candidate.filingUrl,
+    sector: candidate.sector,
+    industry: candidate.industry,
+    updated_at: new Date().toISOString(),
+    ...row,
+  });
+  if (!savedId) throw new Error('failed to persist signal');
+  await markAccessionsSeen([{ accession_no: candidate.accessionNo, filing_type: typeKey, outcome: 'scored' }]);
+}
+
+function buildRuleVerdict(typeKey, candidate, stateText) {
+  const input = typeKey === 'event'
+    ? { itemCodes: candidate.itemCodes && candidate.itemCodes.length ? candidate.itemCodes : extractEightKItems(String(stateText).slice(0, 60000)) }
+    : candidate.ruleInput || {};
+  const verdict = rulesPriority(typeKey, input);
+  const signals = { scored_by: 'rules', rule_reason: verdict.reason, rule_priority: verdict.priority };
+  if (typeKey === 'insider') {
+    signals.cluster_buy = Boolean(input.clusterBuy);
+    signals.is_executive = Boolean(input.isExecutive);
+    signals.total_value = Math.round((input.buyValue || 0) + (input.sellValue || 0)) || null;
+  }
+  if (typeKey === 'event') signals.items = (input.itemCodes || []).join(',');
+  return { verdict, signals };
+}
+
 async function triageCandidate(typeKey, candidate) {
   const def = FILING_TYPES[typeKey];
   const stateText = await candidate.loadState();
-  const signal = await scoreFilingWithJev(typeKey, stateText, candidate.context);
+  const { verdict, signals: ruleSignals } = buildRuleVerdict(typeKey, candidate, stateText);
+
+  // Noise: recorded as seen so it is never re-fetched, but not stored in the feed.
+  if (FILING_TRIAGE_MODE !== 'jev' && verdict.priority < TRIAGE_NOISE_FLOOR) {
+    await markAccessionsSeen([{ accession_no: candidate.accessionNo, filing_type: typeKey, outcome: 'skipped' }]);
+    return { tokens: 0, escalated: false, noise: true };
+  }
+
+  const rulesRow = {
+    priority: verdict.priority,
+    priority_tier: verdict.priorityTier,
+    materiality_score: null,
+    materiality_confidence: null,
+    signals: ruleSignals,
+    jev_raw: null,
+    jev_model: null,
+    escalated: false,
+    llm_thesis: null,
+    llm_model: null,
+  };
+
+  if (FILING_TRIAGE_MODE === 'rules') {
+    await saveTriageRow(typeKey, candidate, rulesRow);
+    return { tokens: 0, escalated: false };
+  }
+
+  let signal;
+  try {
+    signal = await scoreFilingWithJev(typeKey, stateText, candidate.context);
+  } catch (err) {
+    if (FILING_TRIAGE_MODE === 'jev') throw err;
+    // Treat Jev as an unreliable provider: keep the filing visible with its rule-based score.
+    console.error(`[filing-triage jev ${candidate.accessionNo}] using rules instead:`, err.message);
+    await saveTriageRow(typeKey, candidate, { ...rulesRow, signals: { ...ruleSignals, jev_error: String(err.message).slice(0, 160) } });
+    return { tokens: 0, escalated: false };
+  }
   let tokens = signal.tokensUsed;
 
   let llm = null;
@@ -4102,32 +4192,18 @@ async function triageCandidate(typeKey, candidate) {
     }
   }
 
-  const savedId = await upsertFilingSignal({
-    accession_no: candidate.accessionNo,
-    filing_type: typeKey,
-    form_type: candidate.formType,
-    symbol: candidate.symbol,
-    subject_company: candidate.subjectCompany,
-    subject_cik: candidate.subjectCik,
-    filer_name: candidate.filerName,
-    filed_date: candidate.filedDate,
-    filing_url: candidate.filingUrl,
+  await saveTriageRow(typeKey, candidate, {
     priority: signal.priority,
     priority_tier: signal.priorityTier,
     materiality_score: signal.materialityScore,
     materiality_confidence: signal.materialityConfidence,
-    signals: signal.fields,
+    signals: { ...signal.fields, scored_by: 'jev', rule_priority: verdict.priority, rule_reason: verdict.reason },
     jev_raw: signal.jevRaw,
     jev_model: signal.jevModel,
     escalated: Boolean(llm?.thesis),
     llm_thesis: llm?.thesis ?? null,
     llm_model: llm?.model ?? null,
-    sector: candidate.sector,
-    industry: candidate.industry,
-    updated_at: new Date().toISOString(),
   });
-  if (!savedId) throw new Error('failed to persist signal');
-  await markAccessionsSeen([{ accession_no: candidate.accessionNo, filing_type: typeKey, outcome: 'scored' }]);
   return { tokens, escalated: Boolean(llm?.thesis) };
 }
 
@@ -4149,7 +4225,7 @@ async function runPool(items, limit, worker, shouldStop) {
 async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3, maxNewPerType = TRIAGE_MAX_PER_TYPE } = {}) {
   const started = Date.now();
   if (!FILING_TRIAGE_ENABLED) return { skipped: true, reason: 'disabled (FILING_TRIAGE_ENABLED != 1)' };
-  if (!TYPESAFE_API_KEY) return { skipped: true, reason: 'TYPESAFE_API_KEY not configured' };
+  if (FILING_TRIAGE_MODE !== 'rules' && !TYPESAFE_API_KEY) return { skipped: true, reason: `TYPESAFE_API_KEY not configured (mode ${FILING_TRIAGE_MODE})` };
   if (!hasFilingDb()) return { skipped: true, reason: 'no database configured' };
   if (filingTriageRunning) return { skipped: true, reason: 'a triage run is already in progress' };
 
@@ -4162,7 +4238,7 @@ async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3,
     for (const typeKey of types) {
       const discover = FILING_DISCOVERERS[typeKey];
       if (!discover) continue;
-      const stats = { listed: 0, unseen: 0, skipped: 0, candidates: 0, scored: 0, escalated: 0, deferred: 0 };
+      const stats = { listed: 0, unseen: 0, skipped: 0, candidates: 0, scored: 0, noise: 0, escalated: 0, deferred: 0 };
       summary[typeKey] = stats;
       let found;
       try {
@@ -4176,7 +4252,8 @@ async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3,
         try {
           const result = await triageCandidate(typeKey, candidate);
           tokensUsed += result.tokens;
-          stats.scored += 1;
+          if (result.noise) stats.noise += 1;
+          else stats.scored += 1;
           if (result.escalated) stats.escalated += 1;
         } catch (err) {
           errors.push(`${typeKey} ${candidate.accessionNo}: ${err.message}`);
@@ -4198,7 +4275,16 @@ async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3,
     msElapsed: Date.now() - started,
     error: errors.length ? errors.slice(0, 5).join(' | ') : null,
   });
-  return { scored, tokensUsed, byType: summary, errors: errors.slice(0, 20) };
+  return { mode: FILING_TRIAGE_MODE, scored, tokensUsed, byType: summary, errors: errors.slice(0, 20) };
+}
+
+function parseSymbolsParam(value) {
+  if (!value) return null;
+  const list = (Array.isArray(value) ? value : String(value).split(/[\s,]+/))
+    .map((v) => normalizeSymbol(String(v)))
+    .filter(Boolean)
+    .slice(0, 50);
+  return list.length ? list : null;
 }
 
 function parseTypesParam(value) {
@@ -4216,9 +4302,10 @@ app.get('/api/filings/feed', async (req, res) => {
       days: Math.min(Math.max(parseInt(req.query.days || '7', 10), 1), 90),
       escalatedOnly: req.query.escalatedOnly === '1',
       symbol: req.query.symbol ? normalizeSymbol(String(req.query.symbol)) : null,
+      symbols: parseSymbolsParam(req.query.symbols),
       limit: Math.min(parseInt(req.query.limit || '100', 10) || 100, 500),
     });
-    res.json({ schemaVersion: 2, signals, generatedAt: new Date().toISOString() });
+    res.json({ schemaVersion: 2, triageMode: FILING_TRIAGE_MODE, signals, generatedAt: new Date().toISOString() });
   } catch (err) {
     console.error('[api/filings/feed]', err.message);
     res.status(502).json({ schemaVersion: 2, signals: [], generatedAt: new Date().toISOString(), error: err.message });
@@ -4283,6 +4370,27 @@ app.post('/api/filings/discover', async (req, res) => {
         ...stats,
         sample: candidates.slice(0, 5).map((c) => ({ accessionNo: c.accessionNo, formType: c.formType, filedDate: c.filedDate, symbol: c.symbol, company: c.subjectCompany })),
       };
+      if (req.query.preview === '1') {
+        // Score the candidates with the rules only (no Jev, no writes) to show what rules mode would keep.
+        const scored = [];
+        await runPool(candidates, TRIAGE_CONCURRENCY, async (c) => {
+          try {
+            const { verdict } = buildRuleVerdict(typeKey, c, await c.loadState());
+            scored.push({ symbol: c.symbol, company: c.subjectCompany, form: c.formType, priority: verdict.priority, tier: verdict.priorityTier, keep: verdict.priority >= TRIAGE_NOISE_FLOOR, reason: verdict.reason });
+          } catch (err) {
+            scored.push({ company: c.subjectCompany, form: c.formType, error: err.message });
+          }
+        }, () => false);
+        scored.sort((a, b) => (b.priority ?? -1) - (a.priority ?? -1));
+        byType[typeKey].preview = {
+          mode: FILING_TRIAGE_MODE,
+          noiseFloor: TRIAGE_NOISE_FLOOR,
+          previewed: scored.length,
+          keptAsSignal: scored.filter((r) => r.keep).length,
+          droppedAsNoise: scored.filter((r) => r.keep === false).length,
+          rows: scored,
+        };
+      }
     }
     res.json({ ok: true, dryRun: true, byType });
   } catch (err) {
@@ -4314,6 +4422,7 @@ const MCP_TOOLS = [
       type: 'object',
       properties: {
         types: { type: 'array', items: { type: 'string', enum: MCP_FILING_TYPES }, description: 'ownership = 13D/13G, insider = Form 4, event = 8-K. Default: all.' },
+        symbols: { type: 'array', items: { type: 'string' }, maxItems: 50, description: 'Only these tickers (your watchlist). Default: all.' },
         min_priority: { type: 'integer', minimum: 0, maximum: 100, description: 'Default 50 (high and critical only).' },
         tier: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
         days: { type: 'integer', minimum: 1, maximum: 90, description: 'Look-back window in days. Default 3.' },
@@ -4325,6 +4434,7 @@ const MCP_TOOLS = [
       const types = Array.isArray(a.types) ? a.types.filter((t) => FILING_TYPES[t]) : null;
       const signals = await getFilingSignals({
         types: types && types.length ? types : null,
+        symbols: parseSymbolsParam(a.symbols),
         minPriority: a.min_priority === undefined ? 50 : Math.max(0, Number(a.min_priority) || 0),
         tier: ['critical', 'high', 'medium', 'low'].includes(a.tier) ? a.tier : null,
         days: Math.min(Math.max(parseInt(a.days ?? 3, 10) || 3, 1), 90),
@@ -5229,7 +5339,7 @@ function startBackgroundSync() {
   if (FILING_TRIAGE_ENABLED) {
     scheduleRepeatingTask('filing-triage', FILING_TRIAGE_BACKGROUND_SYNC_MS, async () => {
       const result = await runFilingTriageJob();
-      if (!result.skipped) console.log(`[filing-triage sync] scored=${result.scored} tokens=${result.tokensUsed} ${JSON.stringify(result.byType)}`);
+      if (!result.skipped) console.log(`[filing-triage sync] mode=${result.mode} scored=${result.scored} tokens=${result.tokensUsed} ${JSON.stringify(result.byType)}`);
     });
     console.log('[background-sync] filing-triage scheduled at 20-min cadence');
   } else {

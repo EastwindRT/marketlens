@@ -45,6 +45,7 @@ export interface FilingSignal {
 
 export interface FilingsFeedResponse {
   schemaVersion: number;
+  triageMode?: 'rules' | 'hybrid' | 'jev';
   signals: FilingSignal[];
   generatedAt: string;
   error?: string;
@@ -56,7 +57,7 @@ export interface FilingsFeedParams {
   tier?: PriorityTier;
   days?: number;
   escalatedOnly?: boolean;
-  symbol?: string;
+  symbols?: string[];
   limit?: number;
 }
 
@@ -67,7 +68,7 @@ export async function fetchFilingsFeed(params: FilingsFeedParams = {}): Promise<
   if (params.tier) qs.set('tier', params.tier);
   if (params.days !== undefined) qs.set('days', String(params.days));
   if (params.escalatedOnly) qs.set('escalatedOnly', '1');
-  if (params.symbol) qs.set('symbol', params.symbol);
+  if (params.symbols?.length) qs.set('symbols', params.symbols.join(','));
   if (params.limit !== undefined) qs.set('limit', String(params.limit));
 
   const res = await fetch(`/api/filings/feed?${qs.toString()}`);
