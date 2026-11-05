@@ -2671,7 +2671,7 @@ async function fetchLiveUsInsiderFallback(days, limit) {
   return payload;
 }
 
-async function fetchRecentForm4Entries(daysBack = 7) {
+async function fetchDailyIndexEntries(daysBack, accepts) {
   const entries = [];
 
   for (let i = 0; i < daysBack; i += 1) {
@@ -2694,7 +2694,7 @@ async function fetchRecentForm4Entries(daysBack = 7) {
         const cik = m[3];
         const dateRaw = m[4];
         const filename = m[5];
-        if (formType !== '4' && formType !== '4/A') continue;
+        if (!accepts(formType)) continue;
         const filedDate = `${dateRaw.slice(0, 4)}-${dateRaw.slice(4, 6)}-${dateRaw.slice(6, 8)}`;
         const accession = filename.split('/').pop()?.replace(/\.txt$/i, '');
         if (!accession) continue;
@@ -2713,8 +2713,12 @@ async function fetchRecentForm4Entries(daysBack = 7) {
   });
 }
 
-async function fetchCurrentForm4AtomEntries() {
-  const url = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=include&count=100&output=atom';
+async function fetchRecentForm4Entries(daysBack = 7) {
+  return fetchDailyIndexEntries(daysBack, (form) => form === '4' || form === '4/A');
+}
+
+async function fetchCurrentForm4AtomEntries(start = 0) {
+  const url = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=include&count=100&start=${start}&output=atom`;
   const atom = await httpsGet(url, { 'User-Agent': SEC_UA, Accept: 'application/atom+xml,application/xml,text/xml' });
   const entries = [];
   for (const match of atom.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)) {
@@ -3767,20 +3771,6 @@ async function upsertFilingSignal(row) {
   return data?.id ?? null;
 }
 
-async function getScoredAccessionNumbers(accessionNos) {
-  if (!hasFilingDb() || !accessionNos.length) return new Set();
-  const scored = new Set();
-  for (let i = 0; i < accessionNos.length; i += 150) {
-    const { data, error } = await serverSupabase
-      .from('filing_signals')
-      .select('accession_no')
-      .in('accession_no', accessionNos.slice(i, i + 150));
-    if (error) { console.error('[filing-signals scored-lookup]', error.message); return new Set(); }
-    for (const r of data ?? []) scored.add(r.accession_no);
-  }
-  return scored;
-}
-
 const FILING_SIGNAL_COLUMNS =
   'id,accession_no,filing_type,form_type,symbol,subject_company,subject_cik,filer_name,filed_date,filing_url,' +
   'priority,priority_tier,materiality_score,materiality_confidence,signals,escalated,llm_thesis,llm_model,sector,industry,created_at';
@@ -3816,17 +3806,82 @@ async function getFilingSignals({ types = null, minPriority = 0, tier = null, da
   return data ?? [];
 }
 
-// ── Discovery: each returns candidates { accessionNo, formType, filedDate,
-// filingUrl, symbol, subjectCompany, subjectCik, filerName, sector, industry,
-// context, loadState() } for filings not yet scored.
+// ── Coverage settings ────────────────────────────────────────────────────────
+// Live "current filings" atom feeds only show the latest entries and the daily
+// index only exists for completed days, so discovery combines both: paged atom
+// feeds for today plus the daily index for the previous TRIAGE_INDEX_DAYS days.
+// A real day is ~400 8-Ks and ~1,600 Form 4s, far more than one 100-entry page.
 
-async function discoverOwnershipCandidates({ days, maxNew }) {
+const TRIAGE_ATOM_PAGE_SIZE = 100;
+const TRIAGE_ATOM_MAX_PAGES = Math.min(12, Math.max(1, parseInt(process.env.TRIAGE_ATOM_MAX_PAGES || '8', 10) || 8));
+const TRIAGE_INDEX_DAYS = Math.min(7, Math.max(1, parseInt(process.env.TRIAGE_INDEX_DAYS || '3', 10) || 3));
+const TRIAGE_MAX_PER_TYPE = Math.min(1000, Math.max(10, parseInt(process.env.FILING_TRIAGE_MAX_PER_TYPE || '250', 10) || 250));
+const TRIAGE_CONCURRENCY = Math.min(8, Math.max(1, parseInt(process.env.FILING_TRIAGE_CONCURRENCY || '4', 10) || 4));
+const TRIAGE_BUDGET_MS = Math.max(30_000, parseInt(process.env.FILING_TRIAGE_BUDGET_MS || String(8 * 60 * 1000), 10) || 8 * 60 * 1000);
+
+// ── Seen-set: every accession number already handled (scored or deliberately
+// skipped), so skipped filings are never re-downloaded. Memoized in-process;
+// filing_triage_seen is the durable copy.
+
+const triageSeenMemo = new Set();
+const triageEmptyAttempts = new Map();
+
+async function getSeenAccessionNumbers(accessionNos) {
+  const seen = new Set();
+  const unknown = [];
+  for (const acc of accessionNos) {
+    if (triageSeenMemo.has(acc)) seen.add(acc);
+    else unknown.push(acc);
+  }
+  if (!unknown.length || !hasFilingDb()) return seen;
+  for (let i = 0; i < unknown.length; i += 150) {
+    const { data, error } = await serverSupabase
+      .from('filing_triage_seen')
+      .select('accession_no')
+      .in('accession_no', unknown.slice(i, i + 150));
+    // Throw rather than guess: treating a failed lookup as "nothing seen" would re-score everything.
+    if (error) throw new Error(`filing_triage_seen lookup failed: ${error.message}`);
+    for (const row of data ?? []) {
+      seen.add(row.accession_no);
+      triageSeenMemo.add(row.accession_no);
+    }
+  }
+  return seen;
+}
+
+async function markAccessionsSeen(rows) {
+  if (!rows.length || !hasFilingDb()) return;
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = rows.slice(i, i + 500);
+    const { error } = await serverSupabase
+      .from('filing_triage_seen')
+      .upsert(chunk.map((r) => ({ ...r, seen_at: new Date().toISOString() })), { onConflict: 'accession_no' });
+    if (error) { console.error('[filing-triage-seen upsert]', error.message); continue; }
+    for (const r of chunk) triageSeenMemo.add(r.accession_no);
+  }
+  if (triageSeenMemo.size > 100_000) triageSeenMemo.clear();
+}
+
+function indexPageUrl(entry) {
+  return `https://www.sec.gov/Archives/edgar/data/${Number(entry.cik)}/${entry.accession.replace(/-/g, '')}/${entry.accession}-index.htm`;
+}
+
+function byNewest(a, b) {
+  return String(b.filedDate).localeCompare(String(a.filedDate));
+}
+
+// ── Discovery: each returns { candidates, stats } where candidates are
+// { accessionNo, formType, filedDate, filingUrl, symbol, subjectCompany,
+// subjectCik, filerName, sector, industry, context, loadState() } for filings
+// not yet seen, newest first. With dryRun, nothing is written.
+
+async function discoverOwnershipCandidates({ days, maxNew, dryRun }) {
   const filings = (await fetchMarketFilings(days)).filter((f) => f.accessionNo);
-  const scored = await getScoredAccessionNumbers(filings.map((f) => f.accessionNo));
-  return filings
-    .filter((f) => !scored.has(f.accessionNo))
-    .slice(0, maxNew)
-    .map((f) => ({
+  const seen = await getSeenAccessionNumbers(filings.map((f) => f.accessionNo));
+  const unseen = filings.filter((f) => !seen.has(f.accessionNo)).sort(byNewest);
+  return {
+    stats: { listed: filings.length, unseen: unseen.length, skipped: 0 },
+    candidates: unseen.slice(0, maxNew).map((f) => ({
       accessionNo: f.accessionNo,
       formType: f.formType,
       filedDate: f.filedDate,
@@ -3839,7 +3894,8 @@ async function discoverOwnershipCandidates({ days, maxNew }) {
       industry: f.industry || null,
       context: {},
       loadState: () => fetchEdgarFilingText(f.edgarUrl),
-    }));
+    })),
+  };
 }
 
 function describeInsiderTransaction(t) {
@@ -3849,24 +3905,56 @@ function describeInsiderTransaction(t) {
   return `- ${t.transactionDate} | code ${t.transactionCode} (${kind}) | ${Math.round(t.shares).toLocaleString('en-US')} shares${price}${value}`;
 }
 
-async function discoverInsiderCandidates({ maxNew }) {
-  let entries = [];
-  try { entries = await fetchCurrentForm4AtomEntries(); } catch (err) { console.error('[triage insider atom]', err.message); }
-  if (!entries.length) entries = (await fetchRecentForm4Entries(2)).slice(0, maxNew * 2);
+async function collectForm4Entries() {
+  const merged = new Map();
+  for (let page = 0; page < TRIAGE_ATOM_MAX_PAGES; page += 1) {
+    let batch = [];
+    try {
+      batch = await fetchCurrentForm4AtomEntries(page * TRIAGE_ATOM_PAGE_SIZE);
+    } catch (err) {
+      console.error(`[triage form4 atom page ${page}]`, err.message);
+      break;
+    }
+    if (!batch.length) break;
+    for (const e of batch) merged.set(e.accession, e);
+  }
+  const indexed = await fetchDailyIndexEntries(TRIAGE_INDEX_DAYS, (form) => form === '4' || form === '4/A').catch(() => []);
+  for (const e of indexed) if (!merged.has(e.accession)) merged.set(e.accession, e);
+  return [...merged.values()].sort(byNewest);
+}
 
-  const unique = [...new Map(entries.map((e) => [e.accession, e])).values()];
-  const scored = await getScoredAccessionNumbers(unique.map((e) => e.accession));
-  const fresh = unique.filter((e) => !scored.has(e.accession)).slice(0, maxNew * 2);
+async function discoverInsiderCandidates({ maxNew, dryRun }) {
+  const entries = await collectForm4Entries();
+  const seen = await getSeenAccessionNumbers(entries.map((e) => e.accession));
+  const unseen = entries.filter((e) => !seen.has(e.accession));
+  const toParse = unseen.slice(0, maxNew * 3);
 
   const parsed = [];
-  for (let i = 0; i < fresh.length; i += 6) {
-    const batch = await Promise.allSettled(fresh.slice(i, i + 6).map(async (entry) => ({ entry, trades: await fetchSecInsiderActivityItem(entry) })));
+  for (let i = 0; i < toParse.length; i += 6) {
+    const batch = await Promise.allSettled(toParse.slice(i, i + 6).map(async (entry) => ({ entry, trades: await fetchSecInsiderActivityItem(entry) })));
     for (const r of batch) if (r.status === 'fulfilled') parsed.push(r.value);
   }
 
-  // Mechanical-only filings (grants, tax withholding, exercises) are skipped:
-  // they carry no discretionary signal and would only spend Jev calls.
-  const discretionary = parsed.filter(({ trades }) => trades.some((t) => t.type === 'BUY' || t.type === 'SELL'));
+  // Mechanical-only filings (grants, tax withholding, exercises) carry no
+  // discretionary signal; they are recorded as seen so they are never re-parsed.
+  // An empty result is ambiguous (derivative-only filing or a transient SEC
+  // error), so it is only recorded after a second empty attempt.
+  const skipped = [];
+  const discretionary = [];
+  for (const { entry, trades } of parsed) {
+    if (!trades.length) {
+      const attempts = (triageEmptyAttempts.get(entry.accession) || 0) + 1;
+      triageEmptyAttempts.set(entry.accession, attempts);
+      if (attempts >= 2) skipped.push({ accession_no: entry.accession, filing_type: 'insider', outcome: 'skipped' });
+      continue;
+    }
+    if (!trades.some((t) => t.type === 'BUY' || t.type === 'SELL')) {
+      skipped.push({ accession_no: entry.accession, filing_type: 'insider', outcome: 'skipped' });
+      continue;
+    }
+    discretionary.push({ entry, trades });
+  }
+  if (!dryRun) await markAccessionsSeen(skipped);
 
   const buyersBySymbol = new Map();
   for (const { trades } of discretionary) {
@@ -3876,7 +3964,7 @@ async function discoverInsiderCandidates({ maxNew }) {
     }
   }
 
-  return discretionary.slice(0, maxNew).map(({ entry, trades }) => {
+  const candidates = discretionary.slice(0, maxNew).map(({ entry, trades }) => {
     const first = trades[0];
     const buys = trades.filter((t) => t.type === 'BUY');
     const totalValue = trades.reduce((sum, t) => sum + (t.type === 'BUY' || t.type === 'SELL' ? t.totalValue || 0 : 0), 0);
@@ -3905,34 +3993,68 @@ async function discoverInsiderCandidates({ maxNew }) {
       loadState: async () => state,
     };
   });
+  return { candidates, stats: { listed: entries.length, unseen: unseen.length, skipped: skipped.length } };
 }
 
-async function discoverEventCandidates({ maxNew }) {
-  const atom = await httpsGet(
-    'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&owner=include&count=100&output=atom',
-    { 'User-Agent': SEC_UA, Accept: 'application/atom+xml,application/xml,text/xml' }
-  );
-  const directory = await loadSecCompanyTickerDirectory().catch(() => null);
-  const items = [];
-  for (const match of atom.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)) {
-    const block = match[1];
-    const title = htmlDecode(block.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '');
-    const href = htmlDecode(block.match(/<link[^>]*href="([^"]+)"/i)?.[1] || '');
-    const summary = htmlDecode(block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i)?.[1] || '').replace(/<[^>]+>/g, ' ');
-    const t = title.match(/^(8-K(?:\/A)?)\s+-\s+(.+?)\s+\((\d{6,10})\)/i);
-    if (!t) continue;
-    const accessionNo = summary.match(/AccNo:\s*([\d-]+)/i)?.[1];
-    const filedDate = summary.match(/Filed:\s*(\d{4}-\d{2}-\d{2})/i)?.[1];
-    if (!accessionNo || !filedDate || !href) continue;
-    const itemCodes = [...summary.matchAll(/Item\s+(\d\.\d{2})/gi)].map((m) => m[1]);
-    if (itemCodes.length && itemCodes.every((c) => EVENT_ROUTINE_ITEMS.has(c))) continue;
-    items.push({ accessionNo, formType: t[1].toUpperCase(), company: t[2].trim(), cik: t[3], filedDate, href, itemCodes });
-  }
+function parseEightKAtomBlock(block) {
+  const title = htmlDecode(block.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '');
+  const href = htmlDecode(block.match(/<link[^>]*href="([^"]+)"/i)?.[1] || '');
+  const summary = htmlDecode(block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i)?.[1] || '').replace(/<[^>]+>/g, ' ');
+  const t = title.match(/^(8-K(?:\/A)?)\s+-\s+(.+?)\s+\((\d{6,10})\)/i);
+  if (!t) return null;
+  const accessionNo = summary.match(/AccNo:\s*([\d-]+)/i)?.[1];
+  const filedDate = summary.match(/Filed:\s*(\d{4}-\d{2}-\d{2})/i)?.[1];
+  if (!accessionNo || !filedDate || !href) return null;
+  const itemCodes = [...summary.matchAll(/Item\s+(\d\.\d{2})/gi)].map((m) => m[1]);
+  return { accessionNo, formType: t[1].toUpperCase(), company: t[2].trim(), cik: t[3], filedDate, href, itemCodes };
+}
 
-  const unique = [...new Map(items.map((i) => [i.accessionNo, i])).values()];
-  const scored = await getScoredAccessionNumbers(unique.map((i) => i.accessionNo));
-  return unique
-    .filter((i) => !scored.has(i.accessionNo))
+async function collectEightKItems() {
+  const merged = new Map();
+  for (let page = 0; page < TRIAGE_ATOM_MAX_PAGES; page += 1) {
+    let atom;
+    try {
+      atom = await httpsGet(
+        `https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&owner=include&count=${TRIAGE_ATOM_PAGE_SIZE}&start=${page * TRIAGE_ATOM_PAGE_SIZE}&output=atom`,
+        { 'User-Agent': SEC_UA, Accept: 'application/atom+xml,application/xml,text/xml' }
+      );
+    } catch (err) {
+      console.error(`[triage 8-K atom page ${page}]`, err.message);
+      break;
+    }
+    const blocks = [...atom.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)].map((m) => m[1]);
+    if (!blocks.length) break;
+    for (const block of blocks) {
+      const item = parseEightKAtomBlock(block);
+      if (item) merged.set(item.accessionNo, item);
+    }
+    if (blocks.length < TRIAGE_ATOM_PAGE_SIZE) break;
+  }
+  // The index has no item codes, so these cannot be pre-filtered as routine;
+  // Jev classifies them (event_category "routine") instead.
+  const indexed = await fetchDailyIndexEntries(TRIAGE_INDEX_DAYS, (form) => form === '8-K' || form === '8-K/A').catch(() => []);
+  for (const e of indexed) {
+    if (merged.has(e.accession)) continue;
+    merged.set(e.accession, {
+      accessionNo: e.accession, formType: e.formType.toUpperCase(), company: e.companyName, cik: e.cik,
+      filedDate: e.filedDate, href: indexPageUrl(e), itemCodes: [],
+    });
+  }
+  return [...merged.values()].sort(byNewest);
+}
+
+async function discoverEventCandidates({ maxNew, dryRun }) {
+  const items = await collectEightKItems();
+  const directory = await loadSecCompanyTickerDirectory().catch(() => null);
+  const seen = await getSeenAccessionNumbers(items.map((i) => i.accessionNo));
+  const unseen = items.filter((i) => !seen.has(i.accessionNo));
+
+  const routine = unseen.filter((i) => i.itemCodes.length && i.itemCodes.every((c) => EVENT_ROUTINE_ITEMS.has(c)));
+  if (!dryRun) await markAccessionsSeen(routine.map((i) => ({ accession_no: i.accessionNo, filing_type: 'event', outcome: 'skipped' })));
+  const routineSet = new Set(routine.map((i) => i.accessionNo));
+
+  const candidates = unseen
+    .filter((i) => !routineSet.has(i.accessionNo))
     .slice(0, maxNew)
     .map((i) => {
       const match = directory?.byCik?.get(String(i.cik)) || directory?.byCik?.get(String(Number(i.cik))) || null;
@@ -3955,6 +4077,7 @@ async function discoverEventCandidates({ maxNew }) {
         },
       };
     });
+  return { candidates, stats: { listed: items.length, unseen: unseen.length, skipped: routine.length } };
 }
 
 const FILING_DISCOVERERS = {
@@ -3979,7 +4102,7 @@ async function triageCandidate(typeKey, candidate) {
     }
   }
 
-  await upsertFilingSignal({
+  const savedId = await upsertFilingSignal({
     accession_no: candidate.accessionNo,
     filing_type: typeKey,
     form_type: candidate.formType,
@@ -4003,12 +4126,27 @@ async function triageCandidate(typeKey, candidate) {
     industry: candidate.industry,
     updated_at: new Date().toISOString(),
   });
+  if (!savedId) throw new Error('failed to persist signal');
+  await markAccessionsSeen([{ accession_no: candidate.accessionNo, filing_type: typeKey, outcome: 'scored' }]);
   return { tokens, escalated: Boolean(llm?.thesis) };
 }
 
 let filingTriageRunning = false;
 
-async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3, maxNewPerType = 40 } = {}) {
+async function runPool(items, limit, worker, shouldStop) {
+  let next = 0;
+  async function lane() {
+    while (next < items.length && !shouldStop()) {
+      const item = items[next];
+      next += 1;
+      await worker(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return items.length - next;
+}
+
+async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3, maxNewPerType = TRIAGE_MAX_PER_TYPE } = {}) {
   const started = Date.now();
   if (!FILING_TRIAGE_ENABLED) return { skipped: true, reason: 'disabled (FILING_TRIAGE_ENABLED != 1)' };
   if (!TYPESAFE_API_KEY) return { skipped: true, reason: 'TYPESAFE_API_KEY not configured' };
@@ -4019,21 +4157,22 @@ async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3,
   const summary = {};
   let tokensUsed = 0;
   const errors = [];
+  const outOfTime = () => Date.now() - started > TRIAGE_BUDGET_MS;
   try {
     for (const typeKey of types) {
       const discover = FILING_DISCOVERERS[typeKey];
       if (!discover) continue;
-      const stats = { candidates: 0, scored: 0, escalated: 0 };
+      const stats = { listed: 0, unseen: 0, skipped: 0, candidates: 0, scored: 0, escalated: 0, deferred: 0 };
       summary[typeKey] = stats;
-      let candidates = [];
+      let found;
       try {
-        candidates = await discover({ days, maxNew: maxNewPerType });
+        found = await discover({ days, maxNew: maxNewPerType, dryRun: false });
       } catch (err) {
         errors.push(`${typeKey} discovery: ${err.message}`);
         continue;
       }
-      stats.candidates = candidates.length;
-      for (const candidate of candidates) {
+      Object.assign(stats, found.stats, { candidates: found.candidates.length });
+      stats.deferred = await runPool(found.candidates, TRIAGE_CONCURRENCY, async (candidate) => {
         try {
           const result = await triageCandidate(typeKey, candidate);
           tokensUsed += result.tokens;
@@ -4042,7 +4181,10 @@ async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3,
         } catch (err) {
           errors.push(`${typeKey} ${candidate.accessionNo}: ${err.message}`);
         }
-      }
+      }, outOfTime);
+      // Anything unscored (over the per-run cap or out of time) stays unseen
+      // and is picked up first on the next run.
+      stats.deferred += Math.max(0, stats.unseen - stats.skipped - stats.candidates);
     }
   } finally {
     filingTriageRunning = false;
@@ -4056,7 +4198,7 @@ async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3,
     msElapsed: Date.now() - started,
     error: errors.length ? errors.slice(0, 5).join(' | ') : null,
   });
-  return { scored, tokensUsed, byType: summary, errors };
+  return { scored, tokensUsed, byType: summary, errors: errors.slice(0, 20) };
 }
 
 function parseTypesParam(value) {
@@ -4122,6 +4264,27 @@ app.post('/api/ownership-filings/run-now', async (req, res) => {
   if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
   try {
     res.json({ ok: true, ...(await runFilingTriageJob({ types: ['ownership'] })) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Dry run: lists what the next triage pass would pick up (and how much is
+// already handled) without calling Jev, the LLM, or writing anything.
+app.post('/api/filings/discover', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  try {
+    const types = parseTypesParam(req.query.types) || Object.keys(FILING_TYPES);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || '25', 10) || 25, 1), 100);
+    const byType = {};
+    for (const typeKey of types) {
+      const { candidates, stats } = await FILING_DISCOVERERS[typeKey]({ days: 3, maxNew: limit, dryRun: true });
+      byType[typeKey] = {
+        ...stats,
+        sample: candidates.slice(0, 5).map((c) => ({ accessionNo: c.accessionNo, formType: c.formType, filedDate: c.filedDate, symbol: c.symbol, company: c.subjectCompany })),
+      };
+    }
+    res.json({ ok: true, dryRun: true, byType });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

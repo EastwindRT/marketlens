@@ -692,3 +692,9 @@
 
 **Observation:** Cutting routes and jobs from an 8,000-line `server.cjs` left chains of helpers that only they used (Reddit, news-item DB, convergence).
 **Rule:** Remove by whole blocks, then run `eslint --no-eslintrc` with `no-undef` and `no-unused-vars` and iterate until clean. `node --check` alone will not catch a dangling reference.
+
+## Lesson: 2026-11-05 - Size a polling pipeline against the real daily volume, not the feed's page size
+
+**Observation:** The triage job polled "current filings" feeds that return 100 entries per page and capped itself at 40 filings per run. A completed day actually had 390 8-Ks and 1,599 Form 4s, so the pipeline would have silently scored only a fraction of the filings while looking healthy.
+**Root cause:** Throughput was never compared to the real daily volume, and there was no way to see coverage.
+**Rule:** Before calling an ingest pipeline "complete", measure the upstream's real volume (the daily index here), page every feed, record skipped items durably so they are not re-fetched, and expose a dry-run that reports listed vs. handled counts. Probe upstream assumptions (pagination, index availability, required User-Agent) with curl before coding against them.
