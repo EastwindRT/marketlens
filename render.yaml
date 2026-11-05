@@ -32,7 +32,7 @@ services:
       - key: TYPESAFE_API_KEY
         sync: false
       - key: FILING_TRIAGE_ENABLED
-        value: "0"
+        value: "1"
       - key: JEV_MODEL
         value: "jev-latest"
       - key: MCP_API_KEY
