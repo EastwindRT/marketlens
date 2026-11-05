@@ -106,10 +106,12 @@ claude mcp add --transport http tars https://marketlens-jn9s.onrender.com/mcp
 | Var | Purpose | Default |
 |---|---|---|
 | `TYPESAFE_API_KEY` | Jev API key (typesafe.ai); optional, rules mode works without it | none |
+| `OPENROUTER_API_KEY` | Alternative: reach Jev through OpenRouter (`https://openrouter.ai/api/v1/systemone`, model `~typesafe/jev-latest`); no TypeSafe account or waitlist. Ignored if `TYPESAFE_API_KEY` is set | none |
+| `JEV_ENDPOINT` | Override the Jev URL | TypeSafe direct, or the OpenRouter URL when only `OPENROUTER_API_KEY` is set |
 | `FILING_TRIAGE_ENABLED` | `1` enables the 20-minute scheduled job (`OWNERSHIP_TRIAGE_ENABLED=1` is still honoured) | `0` |
 | `FILING_TRIAGE_MODE` | `rules`, `hybrid` or `jev` (see Modes) | `hybrid` with a Jev key, else `rules` |
 | `FILING_TRIAGE_NOISE_FLOOR` | Rule priority below this is dropped as noise | `15` |
-| `JEV_MODEL` | Jev model alias | `jev-latest` |
+| `JEV_MODEL` | Jev model id | `jev-latest` (direct) or `~typesafe/jev-latest` (OpenRouter) |
 | `ANTHROPIC_API_KEY` | Required for Form 4 and 8-K theses | none |
 | `GROQ_API_KEY` | Ownership thesis (optional; Claude is the fallback) | none |
 | `MCP_API_KEY` | Optional bearer key for `/mcp` | none (open, matches the public feed) |

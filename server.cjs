@@ -3698,10 +3698,15 @@ app.post('/api/analyze-filing', async (req, res) => {
 const { FILING_TYPES, buildSignal } = require('./filingTriage.cjs');
 const { rulesPriority, extractEightKItems } = require('./filingRules.cjs');
 
-const TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY || '';
+// Jev can be reached directly (TYPESAFE_API_KEY) or through OpenRouter (OPENROUTER_API_KEY, no TypeSafe
+// account needed). The direct key wins if both are set. JEV_ENDPOINT / JEV_MODEL override either route.
+const JEV_VIA_OPENROUTER = !process.env.TYPESAFE_API_KEY && Boolean(process.env.OPENROUTER_API_KEY);
+const TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY || process.env.OPENROUTER_API_KEY || '';
+const JEV_ENDPOINT = process.env.JEV_ENDPOINT
+  || (JEV_VIA_OPENROUTER ? 'https://openrouter.ai/api/v1/systemone' : 'https://api.typesafe.ai/v1/systemone');
 const FILING_TRIAGE_ENABLED =
   process.env.FILING_TRIAGE_ENABLED === '1' || process.env.OWNERSHIP_TRIAGE_ENABLED === '1';
-const JEV_MODEL = process.env.JEV_MODEL || 'jev-latest';
+const JEV_MODEL = process.env.JEV_MODEL || (JEV_VIA_OPENROUTER ? '~typesafe/jev-latest' : 'jev-latest');
 
 // rules  = free rule-based noise filter + priority, no Jev key needed
 // hybrid = rules drop the obvious noise, Jev scores everything else (default when a key exists)
@@ -3720,9 +3725,9 @@ function hasFilingDb() {
 }
 
 async function callJev(state, questions) {
-  if (!TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY not configured');
+  if (!TYPESAFE_API_KEY) throw new Error('No Jev key configured (set TYPESAFE_API_KEY or OPENROUTER_API_KEY)');
   const raw = await httpsPost(
-    'https://api.typesafe.ai/v1/systemone',
+    JEV_ENDPOINT,
     { state, model: JEV_MODEL, questions },
     { Authorization: `Bearer ${TYPESAFE_API_KEY}` }
   );
@@ -4225,7 +4230,7 @@ async function runPool(items, limit, worker, shouldStop) {
 async function runFilingTriageJob({ types = Object.keys(FILING_TYPES), days = 3, maxNewPerType = TRIAGE_MAX_PER_TYPE } = {}) {
   const started = Date.now();
   if (!FILING_TRIAGE_ENABLED) return { skipped: true, reason: 'disabled (FILING_TRIAGE_ENABLED != 1)' };
-  if (FILING_TRIAGE_MODE !== 'rules' && !TYPESAFE_API_KEY) return { skipped: true, reason: `TYPESAFE_API_KEY not configured (mode ${FILING_TRIAGE_MODE})` };
+  if (FILING_TRIAGE_MODE !== 'rules' && !TYPESAFE_API_KEY) return { skipped: true, reason: `No Jev key configured: set TYPESAFE_API_KEY or OPENROUTER_API_KEY (mode ${FILING_TRIAGE_MODE})` };
   if (!hasFilingDb()) return { skipped: true, reason: 'no database configured' };
   if (filingTriageRunning) return { skipped: true, reason: 'a triage run is already in progress' };
 
