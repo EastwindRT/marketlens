@@ -17,7 +17,8 @@ function toolCatalog(tools) {
   return tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
 }
 
-async function handleMessage(msg, { serverInfo, instructions, tools }) {
+async function handleMessage(msg, config) {
+  const { serverInfo, instructions, tools } = config;
   if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
     return rpcError(msg?.id, -32600, 'Invalid request');
   }
@@ -42,7 +43,7 @@ async function handleMessage(msg, { serverInfo, instructions, tools }) {
       const tool = tools.find((t) => t.name === msg.params?.name);
       if (!tool) return rpcError(msg.id, -32602, `Unknown tool: ${msg.params?.name}`);
       try {
-        const data = await tool.handler(msg.params?.arguments || {});
+        const data = await tool.handler(msg.params?.arguments || {}, config.context);
         return rpcResult(msg.id, {
           content: [{ type: 'text', text: JSON.stringify(data) }],
           isError: false,

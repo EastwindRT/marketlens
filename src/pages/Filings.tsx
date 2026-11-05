@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { BookOpen, ExternalLink, Layers, Sparkles } from 'lucide-react';
+import { BookOpen, ExternalLink, Layers, NotebookPen, Sparkles } from 'lucide-react';
 import { DataStatus } from '../components/ui/DataStatus';
 import { useFilingsFeed } from '../hooks/useFilingsFeed';
-import type { FilingSignal, FilingThesis, FilingType, PriorityTier } from '../api/filings';
+import type { Finding, FindingVerdict, FilingSignal, FilingThesis, FilingType, PriorityTier } from '../api/filings';
 
 type TypeFilter = FilingType | 'all';
 type TierFilter = PriorityTier | 'all';
@@ -99,6 +99,43 @@ function glossaryAnchor(s: FilingSignal): string {
   return s.form_type.toUpperCase().includes('13G') ? 'sch-13g' : 'sch-13d';
 }
 
+const VERDICT_META: Record<FindingVerdict, { label: string; color: string }> = {
+  bullish: { label: 'Bullish', color: '#079A6A' },
+  bearish: { label: 'Bearish', color: '#F6465D' },
+  watch: { label: 'Watch', color: '#F7931A' },
+  neutral: { label: 'Neutral', color: 'var(--text-secondary)' },
+  dismiss: { label: 'Dismissed', color: 'var(--text-tertiary)' },
+};
+
+function FindingNote({ finding }: { finding: Finding }) {
+  const verdict = finding.verdict ? VERDICT_META[finding.verdict] : null;
+  const edited = finding.updated_at && finding.updated_at !== finding.created_at;
+  return (
+    <div style={{ background: 'var(--bg-elevated)', borderRadius: 10, padding: 12, marginTop: 8 }}>
+      <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 4 }}>
+        {verdict && <span style={{ fontSize: 11, fontWeight: 800, color: verdict.color }}>{verdict.label}</span>}
+        {finding.confidence != null && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{Math.round(finding.confidence * 100)}% confident</span>}
+        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+          {finding.author} - {formatFiledDate(finding.created_at)}{edited ? ' (edited)' : ''}
+        </span>
+      </div>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.45 }}>{finding.summary}</p>
+      {finding.details && (
+        <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>{finding.details}</p>
+      )}
+      {finding.sources.length > 0 && (
+        <div className="flex flex-wrap gap-2" style={{ marginTop: 6 }}>
+          {finding.sources.map((url) => (
+            <a key={url} href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent-blue)' }}>
+              Source <ExternalLink size={10} style={{ display: 'inline' }} />
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function formatFiledDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -142,6 +179,8 @@ function PriorityBadge({ priority, tier }: { priority: number; tier: PriorityTie
 
 function FilingRow({ signal }: { signal: FilingSignal }) {
   const [open, setOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const findings = signal.findings ?? [];
   const type = TYPE_META[signal.filing_type];
   const { summary, flags } = describeSignal(signal);
   const thesis = signal.llm_thesis ? thesisText(signal.llm_thesis) : null;
@@ -175,11 +214,19 @@ function FilingRow({ signal }: { signal: FilingSignal }) {
             {signal.subject_company}
           </p>
           <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>{summary}</p>
-          {(flags.length > 0 || signal.escalated) && (
+          {(flags.length > 0 || signal.escalated || findings.length > 0) && (
             <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 6 }}>
               {flags.map((flag) => (
                 <span key={flag} style={{ fontSize: 11, fontWeight: 700, color: '#F7931A' }}>{flag}</span>
               ))}
+              {findings.length > 0 && (
+                <button
+                  onClick={() => setNotesOpen((v) => !v)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: '#079A6A', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
+                >
+                  <NotebookPen size={12} /> {notesOpen ? 'Hide notes' : `Notes (${findings.length})`}
+                </button>
+              )}
               {signal.escalated && (
                 <button
                   onClick={() => setOpen((v) => !v)}
@@ -195,6 +242,8 @@ function FilingRow({ signal }: { signal: FilingSignal }) {
           <ExternalLink size={14} />
         </a>
       </div>
+
+      {notesOpen && findings.map((f) => <FindingNote key={f.id} finding={f} />)}
 
       {open && thesis && (
         <div style={{ background: 'var(--bg-elevated)', borderRadius: 10, padding: 12, marginTop: 10 }}>
@@ -231,6 +280,7 @@ export default function FilingsPage() {
   const [days, setDays] = useState<1 | 3 | 7 | 14 | 30>(3);
   const [includeLow, setIncludeLow] = useState(false);
   const [escalatedOnly, setEscalatedOnly] = useState(false);
+  const [findingsOnly, setFindingsOnly] = useState(false);
   const [ticker, setTicker] = useState('');
 
   const symbols = ticker.split(/[\s,]+/).map((t) => t.trim().toUpperCase()).filter(Boolean);
@@ -240,6 +290,7 @@ export default function FilingsPage() {
     minPriority: includeLow || tier !== 'all' ? undefined : 25,
     days,
     escalatedOnly,
+    findingsOnly,
     symbols: symbols.length ? symbols : undefined,
     limit: 200,
   });
@@ -278,6 +329,7 @@ export default function FilingsPage() {
         {([1, 3, 7, 14, 30] as const).map((d) => <Chip key={d} active={days === d} onClick={() => setDays(d)}>{d}D</Chip>)}
         <Chip active={includeLow} onClick={() => setIncludeLow((v) => !v)}>Include low</Chip>
         <Chip active={escalatedOnly} onClick={() => setEscalatedOnly((v) => !v)}>AI read only</Chip>
+        <Chip active={findingsOnly} onClick={() => setFindingsOnly((v) => !v)}>With notes</Chip>
         <input
           value={ticker}
           onChange={(e) => setTicker(e.target.value)}

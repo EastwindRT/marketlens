@@ -3941,6 +3941,106 @@ const FILING_SIGNAL_COLUMNS =
   'id,accession_no,filing_type,form_type,symbol,subject_company,subject_cik,filer_name,filed_date,filing_url,' +
   'priority,priority_tier,materiality_score,materiality_confidence,signals,escalated,llm_thesis,llm_model,sector,industry,created_at';
 
+// ── Findings: notes saved against a filing by a person or by Claude Code over MCP. They are stored
+// separately from the automatic score and never change it.
+const FINDING_COLUMNS = 'id,accession_no,author,verdict,confidence,summary,details,sources,created_at,updated_at';
+const FINDING_VERDICTS = ['bullish', 'bearish', 'neutral', 'watch', 'dismiss'];
+const ACCESSION_RE = /^\d{10}-\d{2}-\d{6}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function cleanText(value, max) {
+  return String(value ?? '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, max);
+}
+
+function cleanSources(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => cleanText(v, 300))
+    .filter((v) => /^https:\/\/[^\s]+$/i.test(v))
+    .slice(0, 5);
+}
+
+// Validates and normalizes finding fields. With partial=true only the provided fields are returned.
+function cleanFindingFields(a, { partial }) {
+  const out = {};
+  if (!partial || a.summary !== undefined) {
+    const summary = cleanText(a.summary, 1000);
+    if (!summary) throw new Error('summary is required (max 1000 characters)');
+    out.summary = summary;
+  }
+  if (a.details !== undefined) out.details = cleanText(a.details, 8000) || null;
+  if (a.verdict !== undefined && a.verdict !== null) {
+    if (!FINDING_VERDICTS.includes(a.verdict)) throw new Error(`verdict must be one of ${FINDING_VERDICTS.join(', ')}`);
+    out.verdict = a.verdict;
+  }
+  if (a.confidence !== undefined && a.confidence !== null) {
+    const c = Number(a.confidence);
+    if (!Number.isFinite(c) || c < 0 || c > 1) throw new Error('confidence must be between 0 and 1');
+    out.confidence = c;
+  }
+  if (a.sources !== undefined) out.sources = cleanSources(a.sources);
+  return out;
+}
+
+async function getFindingsByAccession(accessionNos, perFiling = 3) {
+  const byAccession = new Map();
+  if (!hasFilingDb() || !accessionNos.length) return byAccession;
+  for (let i = 0; i < accessionNos.length; i += 150) {
+    const { data, error } = await serverSupabase
+      .from('filing_findings')
+      .select(FINDING_COLUMNS)
+      .in('accession_no', accessionNos.slice(i, i + 150))
+      .order('created_at', { ascending: false });
+    if (error) { console.error('[filing-findings lookup]', error.message); return byAccession; }
+    for (const row of data ?? []) {
+      const list = byAccession.get(row.accession_no) || [];
+      if (list.length < perFiling) list.push(row);
+      byAccession.set(row.accession_no, list);
+    }
+  }
+  return byAccession;
+}
+
+async function attachFindings(rows) {
+  if (!rows.length) return rows;
+  const byAccession = await getFindingsByAccession(rows.map((r) => r.accession_no));
+  return rows.map((r) => ({ ...r, findings: byAccession.get(r.accession_no) || [] }));
+}
+
+async function insertFinding(row) {
+  const { data, error } = await serverSupabase.from('filing_findings').insert(row).select(FINDING_COLUMNS).single();
+  if (error) throw new Error(`could not save finding: ${error.message}`);
+  return data;
+}
+
+async function updateFindingById(id, patch) {
+  const { data, error } = await serverSupabase
+    .from('filing_findings')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select(FINDING_COLUMNS)
+    .maybeSingle();
+  if (error) throw new Error(`could not update finding: ${error.message}`);
+  if (!data) throw new Error(`no finding with id ${id}`);
+  return data;
+}
+
+async function listFindings({ accessionNo = null, symbol = null, limit = 25 } = {}) {
+  if (!hasFilingDb()) return [];
+  let query = serverSupabase.from('filing_findings').select(FINDING_COLUMNS).order('created_at', { ascending: false }).limit(Math.min(limit, 100));
+  if (accessionNo) query = query.eq('accession_no', accessionNo);
+  if (symbol) {
+    const { data: filings, error: filingsError } = await serverSupabase.from('filing_signals').select('accession_no').eq('symbol', symbol).limit(500);
+    if (filingsError) throw new Error(filingsError.message);
+    const accs = (filings ?? []).map((r) => r.accession_no);
+    if (!accs.length) return [];
+    query = query.in('accession_no', accs);
+  }
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
 async function getFilingByAccession(accessionNo) {
   if (!hasFilingDb()) return null;
   const { data, error } = await serverSupabase
@@ -3949,19 +4049,29 @@ async function getFilingByAccession(accessionNo) {
     .eq('accession_no', accessionNo)
     .maybeSingle();
   if (error) { console.error('[filing-signals by-accession]', error.message); return null; }
-  return data ?? null;
+  return data ? (await attachFindings([data]))[0] : null;
 }
 
-async function getFilingSignals({ types = null, minPriority = 0, tier = null, days = 14, escalatedOnly = false, symbol = null, symbols = null, limit = 100 } = {}) {
+async function getFilingSignals({ types = null, minPriority = 0, tier = null, days = 14, escalatedOnly = false, symbol = null, symbols = null, findingsOnly = false, limit = 100 } = {}) {
   if (!hasFilingDb()) return [];
-  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   let query = serverSupabase
     .from('filing_signals')
     .select(FILING_SIGNAL_COLUMNS)
-    .gte('filed_date', cutoff)
     .order('priority', { ascending: false })
     .order('filed_date', { ascending: false })
     .limit(Math.min(limit, 500));
+  if (findingsOnly) {
+    // Filings with notes stay visible regardless of the date window.
+    const { data: noted, error: notedError } = await serverSupabase
+      .from('filing_findings').select('accession_no').order('created_at', { ascending: false }).limit(1000);
+    if (notedError) { console.error('[filing-findings noted]', notedError.message); return []; }
+    const accs = [...new Set((noted ?? []).map((r) => r.accession_no))];
+    if (!accs.length) return [];
+    query = query.in('accession_no', accs);
+  } else {
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    query = query.gte('filed_date', cutoff);
+  }
   if (types?.length) query = query.in('filing_type', types);
   if (minPriority > 0) query = query.gte('priority', minPriority);
   if (tier) query = query.eq('priority_tier', tier);
@@ -3970,7 +4080,7 @@ async function getFilingSignals({ types = null, minPriority = 0, tier = null, da
   if (symbols && symbols.length) query = query.in('symbol', symbols);
   const { data, error } = await query;
   if (error) { console.error('[filing-signals query]', error.message); return []; }
-  return data ?? [];
+  return attachFindings(data ?? []);
 }
 
 // ── Coverage settings ────────────────────────────────────────────────────────
@@ -4504,12 +4614,29 @@ app.get('/api/filings/feed', async (req, res) => {
       escalatedOnly: req.query.escalatedOnly === '1',
       symbol: req.query.symbol ? normalizeSymbol(String(req.query.symbol)) : null,
       symbols: parseSymbolsParam(req.query.symbols),
+      findingsOnly: req.query.findingsOnly === '1',
       limit: Math.min(parseInt(req.query.limit || '100', 10) || 100, 500),
     });
     res.json({ schemaVersion: 2, triageMode: FILING_TRIAGE_MODE, classifier: FILING_CLASSIFIER, signals, generatedAt: new Date().toISOString() });
   } catch (err) {
     console.error('[api/filings/feed]', err.message);
     res.status(502).json({ schemaVersion: 2, signals: [], generatedAt: new Date().toISOString(), error: err.message });
+  }
+});
+
+app.get('/api/filings/findings', async (req, res) => {
+  try {
+    const accession = req.query.accession_no ? String(req.query.accession_no) : null;
+    if (accession && !ACCESSION_RE.test(accession)) return res.status(400).json({ error: 'accession_no must look like 0001104659-26-120752' });
+    const findings = await listFindings({
+      accessionNo: accession,
+      symbol: req.query.symbol ? normalizeSymbol(String(req.query.symbol)) : null,
+      limit: Math.min(Math.max(parseInt(req.query.limit || '50', 10) || 50, 1), 100),
+    });
+    res.json({ schemaVersion: 1, findings, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('[api/filings/findings]', err.message);
+    res.status(502).json({ schemaVersion: 1, findings: [], error: err.message });
   }
 });
 
@@ -4644,7 +4771,16 @@ const MCP_INSTRUCTIONS =
   'priority 0-100 (tier: critical >=75, high >=50, medium >=25, low) derived from a fast classifier (Jev). ' +
   "Filings that cleared their type's escalation rule also carry llm_thesis, a written AI read. " +
   'Start with get_priority_feed, then get_filing for one accession number. Treat filing dates and ' +
-  'accession numbers as evidence; separate facts in the filing from inference in llm_thesis.';
+  'accession numbers as evidence; separate facts in the filing from inference in llm_thesis. ' +
+  'After analyzing a filing, record the conclusion with add_finding (a short summary, a verdict, and source URLs); ' +
+  'call list_findings first to avoid duplicates and update_finding to revise one. Findings are notes shown on the page ' +
+  'next to the filing; they never change its automatic priority. Writing needs the server to have MCP_API_KEY set.';
+
+const MCP_WRITE_DISABLED = 'Write tools are disabled: set MCP_API_KEY on the server and send it as an Authorization: Bearer header.';
+function requireWrite(ctx) {
+  if (!ctx || !ctx.writeAllowed) throw new Error(MCP_WRITE_DISABLED);
+  if (!hasFilingDb()) throw new Error('database not configured');
+}
 
 const MCP_FILING_TYPES = Object.keys(FILING_TYPES);
 
@@ -4719,6 +4855,78 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: 'list_findings',
+    description: 'Findings (notes) saved against filings, newest first. Filter by one filing (accession_no) or by ticker.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        accession_no: { type: 'string', description: 'Accession number with dashes.' },
+        symbol: { type: 'string', description: 'Ticker; returns findings on that ticker\'s filings.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Default 25.' },
+      },
+    },
+    handler: async (a) => {
+      const accession = a.accession_no ? String(a.accession_no).trim() : null;
+      if (accession && !ACCESSION_RE.test(accession)) throw new Error('accession_no must look like 0001104659-26-120752');
+      const findings = await listFindings({
+        accessionNo: accession,
+        symbol: a.symbol ? normalizeSymbol(String(a.symbol)) : null,
+        limit: Math.min(Math.max(parseInt(a.limit ?? 25, 10) || 25, 1), 100),
+      });
+      return { count: findings.length, findings };
+    },
+  },
+  {
+    name: 'add_finding',
+    description: 'Save a finding (your analysis) against a triaged filing so it appears on the page next to that filing. Does not change the automatic priority. Requires the server write key.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        accession_no: { type: 'string', description: 'Accession number of a triaged filing.' },
+        summary: { type: 'string', maxLength: 1000, description: 'One or two sentences: what you concluded.' },
+        details: { type: 'string', maxLength: 8000, description: 'Optional longer reasoning, facts, and caveats.' },
+        verdict: { type: 'string', enum: FINDING_VERDICTS, description: 'dismiss = reviewed and not worth acting on.' },
+        confidence: { type: 'number', minimum: 0, maximum: 1 },
+        sources: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'https URLs supporting the finding.' },
+      },
+      required: ['accession_no', 'summary'],
+    },
+    handler: async (a, ctx) => {
+      requireWrite(ctx);
+      const accession = String(a.accession_no || '').trim();
+      if (!ACCESSION_RE.test(accession)) throw new Error('accession_no must look like 0001104659-26-120752');
+      const filing = await getFilingByAccession(accession);
+      if (!filing) throw new Error(`No triaged filing found for ${accession}; findings can only be added to filings in the feed`);
+      const fields = cleanFindingFields(a, { partial: false });
+      const finding = await insertFinding({ accession_no: accession, author: 'claude-code', ...fields });
+      return { saved: true, finding };
+    },
+  },
+  {
+    name: 'update_finding',
+    description: 'Revise an existing finding by id (from list_findings or add_finding). Only the fields you pass change. Requires the server write key.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Finding id (UUID).' },
+        summary: { type: 'string', maxLength: 1000 },
+        details: { type: 'string', maxLength: 8000 },
+        verdict: { type: 'string', enum: FINDING_VERDICTS },
+        confidence: { type: 'number', minimum: 0, maximum: 1 },
+        sources: { type: 'array', items: { type: 'string' }, maxItems: 5 },
+      },
+      required: ['id'],
+    },
+    handler: async (a, ctx) => {
+      requireWrite(ctx);
+      const id = String(a.id || '').trim();
+      if (!UUID_RE.test(id)) throw new Error('id must be a finding UUID');
+      const fields = cleanFindingFields(a, { partial: true });
+      if (!Object.keys(fields).length) throw new Error('nothing to update: pass summary, details, verdict, confidence or sources');
+      return { updated: true, finding: await updateFindingById(id, fields) };
+    },
+  },
+  {
     name: 'get_stock_intelligence',
     description: 'Per-ticker context: price and trend, insider flow, 13D/13G filings, congress trades, tracked fund holders, fundamentals and derived signals.',
     inputSchema: {
@@ -4744,9 +4952,11 @@ app.post('/mcp', async (req, res) => {
   }
   try {
     const { status, body } = await handleMcpRequest(req.body, {
-      serverInfo: { name: 'tars-filings', version: '1.0.0' },
+      serverInfo: { name: 'tars-filings', version: '1.1.0' },
       instructions: MCP_INSTRUCTIONS,
       tools: MCP_TOOLS,
+      // When MCP_API_KEY is set the request already passed the bearer check above, so it may write.
+      context: { writeAllowed: Boolean(MCP_API_KEY) },
     });
     if (body === undefined) return res.status(status).end();
     res.status(status).json(body);

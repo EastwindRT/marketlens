@@ -22,6 +22,21 @@ export interface FilingThesis {
   what_to_check_next?: string[];
 }
 
+export type FindingVerdict = 'bullish' | 'bearish' | 'neutral' | 'watch' | 'dismiss';
+
+export interface Finding {
+  id: string;
+  accession_no: string;
+  author: string;
+  verdict: FindingVerdict | null;
+  confidence: number | null;
+  summary: string;
+  details: string | null;
+  sources: string[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface FilingSignal {
   id: string;
   accession_no: string;
@@ -41,6 +56,7 @@ export interface FilingSignal {
   llm_thesis: FilingThesis | null;
   llm_model: string | null;
   sector: string | null;
+  findings?: Finding[];
 }
 
 export interface FilingsFeedResponse {
@@ -59,6 +75,7 @@ export interface FilingsFeedParams {
   days?: number;
   escalatedOnly?: boolean;
   symbols?: string[];
+  findingsOnly?: boolean;
   limit?: number;
 }
 
@@ -70,6 +87,7 @@ export async function fetchFilingsFeed(params: FilingsFeedParams = {}): Promise<
   if (params.days !== undefined) qs.set('days', String(params.days));
   if (params.escalatedOnly) qs.set('escalatedOnly', '1');
   if (params.symbols?.length) qs.set('symbols', params.symbols.join(','));
+  if (params.findingsOnly) qs.set('findingsOnly', '1');
   if (params.limit !== undefined) qs.set('limit', String(params.limit));
 
   const res = await fetch(`/api/filings/feed?${qs.toString()}`);

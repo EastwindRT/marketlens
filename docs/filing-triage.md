@@ -114,13 +114,28 @@ dependency. Optional `MCP_API_KEY`: when set, clients must send `Authorization: 
 | `get_priority_feed` | Ranked filings; filter by types, symbols (your tickers), min_priority (default 50), tier, days (default 3), escalated_only, limit |
 | `get_filing` | One filing by accession number, with typed signals and AI thesis |
 | `get_ticker_filings` | Everything triaged for one ticker |
-| `get_stock_intelligence` | Per-ticker context (price/trend, insiders, 13D/G, congress, funds, fundamentals) |
+| `get_stock_intelligence` | Per-ticker context (price/trend, insiders, 13D/G, congress, fundamentals) |
+| `list_findings` | Notes saved against filings, newest first; filter by `accession_no` or `symbol` |
+| `add_finding` | Save your analysis against a triaged filing: `summary`, optional `details`, `verdict` (bullish/bearish/neutral/watch/dismiss), `confidence`, `sources` (https URLs). **Needs the write key.** |
+| `update_finding` | Revise a finding by `id`; only passed fields change. **Needs the write key.** |
+
+### Findings (notes written back from Claude Code)
+
+Findings live in `filing_findings` (migration applied to the live project; DDL in `supabase_migration_filing_findings.sql`).
+They are shown on `/filings` next to each filing ("Notes (n)", plus a "With notes" filter) and returned in the feed as
+`findings` (latest 3 per filing) and by `GET /api/filings/findings`. They never change the automatic priority or signals.
+
+- **Write access requires `MCP_API_KEY`.** If it is unset the write tools return an error; reads stay open. When it is set,
+  every `/mcp` call (reads included) must send `Authorization: Bearer <key>`.
+- `add_finding` only accepts filings that exist in the feed; `verdict` is one of five values; `summary` is required
+  (max 1,000 chars), `details` max 8,000, `sources` keeps up to 5 `https://` URLs.
+- Findings are public to anyone who can call the public feed API (like the rest of the data). Do not store anything private in them.
+- There is no delete tool by design; use `verdict: "dismiss"` for "reviewed, not worth acting on".
 
 Connect from Claude Code:
 
 ```bash
-claude mcp add --transport http tars https://marketlens-jn9s.onrender.com/mcp
-# with a key: add --header "Authorization: Bearer <MCP_API_KEY>"
+claude mcp add --transport http --scope user tars https://marketlens-jn9s.onrender.com/mcp --header "Authorization: Bearer <MCP_API_KEY>"
 ```
 
 ## Environment
