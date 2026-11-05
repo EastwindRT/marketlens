@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Layers, Sparkles } from 'lucide-react';
+import { BookOpen, ExternalLink, Layers, Sparkles } from 'lucide-react';
 import { DataStatus } from '../components/ui/DataStatus';
 import { useFilingsFeed } from '../hooks/useFilingsFeed';
 import type { FilingSignal, FilingThesis, FilingType, PriorityTier } from '../api/filings';
@@ -88,6 +88,12 @@ function thesisText(t: FilingThesis): { head: string | null; body: string | null
   };
 }
 
+function glossaryAnchor(s: FilingSignal): string {
+  if (s.filing_type === 'insider') return 'form-4';
+  if (s.filing_type === 'event') return 'form-8k';
+  return s.form_type.toUpperCase().includes('13G') ? 'sch-13g' : 'sch-13d';
+}
+
 function formatFiledDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -151,9 +157,13 @@ function FilingRow({ signal }: { signal: FilingSignal }) {
                 {signal.symbol}
               </Link>
             ) : null}
-            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6, color: type.color, border: `1px solid ${type.color}33`, background: `${type.color}14` }}>
+            <Link
+              to={`/glossary#${glossaryAnchor(signal)}`}
+              title={`What is a ${type.label}?`}
+              style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6, color: type.color, border: `1px solid ${type.color}33`, background: `${type.color}14`, textDecoration: 'none' }}
+            >
               {type.label}{signal.form_type.includes('/A') ? ' /A' : ''}
-            </span>
+            </Link>
             <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{formatFiledDate(signal.filed_date)}</span>
           </div>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -186,7 +196,7 @@ function FilingRow({ signal }: { signal: FilingSignal }) {
           {thesis.head && <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{thesis.head}</p>}
           {thesis.body && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.45 }}>{thesis.body}</p>}
           {thesis.facts.length > 0 && (
-            <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 12, color: 'var(--text-secondary)' }}>
+            <ul style={{ margin: '8px 0 0', paddingLeft: 16, listStyle: 'disc', fontSize: 12, color: 'var(--text-secondary)' }}>
               {thesis.facts.map((fact) => <li key={fact}>{fact}</li>)}
             </ul>
           )}
@@ -248,7 +258,10 @@ export default function FilingsPage() {
       </div>
       <p className="hidden md:block" style={{ margin: '0 0 16px', fontSize: 14, color: 'var(--text-secondary)', maxWidth: 760 }}>
         Every new SEC 13D/13G, Form 4 and 8-K is scored 0-100 by Jev. Only the filings that clear their type's
-        bar get a written AI read. Low-priority filings are hidden by default.
+        bar get a written AI read. Low-priority filings are hidden by default.{' '}
+        <Link to="/glossary" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent-blue)', fontWeight: 700, textDecoration: 'none' }}>
+          <BookOpen size={13} /> What do these filings mean?
+        </Link>
       </p>
 
       <div data-agent-section="filings-filters" className="flex flex-wrap items-center gap-2" style={{ marginBottom: 10 }}>

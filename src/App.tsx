@@ -13,6 +13,7 @@ const importInsiderActivity = () => import('./pages/InsiderActivity')
 const importCongress = () => import('./pages/Congress')
 const importOwnershipFilings = () => import('./pages/OwnershipFilings')
 const importFilings = () => import('./pages/Filings')
+const importGlossary = () => import('./pages/Glossary')
 
 // Lazy-load heavy pages to reduce initial bundle size
 const StockDetail         = lazyWithAutoReload(importStockDetail)
@@ -22,6 +23,7 @@ const InsiderActivityPage = lazyWithAutoReload(importInsiderActivity)
 const CongressPage        = lazyWithAutoReload(importCongress)
 const OwnershipFilingsPage = lazyWithAutoReload(importOwnershipFilings)
 const FilingsPage = lazyWithAutoReload(importFilings)
+const GlossaryPage = lazyWithAutoReload(importGlossary)
 import { useLeagueStore } from './store/leagueStore'
 import { useWatchlistStore } from './store/watchlistStore'
 import { supabase, ensurePlayerForSession, touchPlayerActivity } from './api/supabase'
@@ -248,6 +250,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/filings" replace />} />
             <Route path="/filings" element={<FilingsPage />} />
+            <Route path="/glossary" element={<GlossaryPage />} />
             <Route path="/stock/:symbol" element={<StockDetail />} />
             <Route path="/search" element={<Search />} />
             <Route path="/news" element={<NewsPage />} />

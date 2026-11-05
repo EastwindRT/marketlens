@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
-import { Minus, Star, X, Newspaper, Building2, CircleDollarSign, Radar, Layers } from 'lucide-react';
+import { Minus, Star, X, Newspaper, Building2, CircleDollarSign, Radar, Layers, BookOpen } from 'lucide-react';
 import { useWatchlistStore } from '../../store/watchlistStore';
 import { useStockQuotes } from '../../hooks/useStockData';
 import { formatPrice } from '../../utils/formatters';
@@ -156,6 +156,7 @@ export function Sidebar({ onClose }: SidebarProps = {}) {
       <NavLink to="/news" icon={<Newspaper size={14} />} label="13D/13G Feed" onClose={onClose} />
       <NavLink to="/insiders" icon={<CircleDollarSign size={14} />} label="Insider $" onClose={onClose} />
       <NavLink to="/congress" icon={<Building2 size={14} />} label="Congress Trades" onClose={onClose} />
+      <NavLink to="/glossary" icon={<BookOpen size={14} />} label="Glossary" onClose={onClose} />
 
       <Divider />
 
