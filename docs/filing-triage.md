@@ -69,12 +69,12 @@ reading of public filings, not investment advice**. It is separate from `priorit
 which way it points and how hard.
 
 - **Direction and conviction per filing:** Form 4 open-market purchases are bullish (conviction by size: $1M+ 85, $250K+ 70, $100K+ 60,
-  $25K+ 45; +10 executive; cluster buys floor at 80); open-market sales are weakly bearish (10-40, halved for a 10b5-1 plan). 8-K
+  $25K+ 45; +10 executive; cluster buys floor at 75); open-market sales are weakly bearish (10-40, halved for a 10b5-1 plan). 8-K
   items map to bearish (1.03 bankruptcy 90, 4.02 restatement 85, 2.04 80, 3.01 70, ...), mixed (5.01, 2.01, 1.01, 5.02) or neutral
   (2.02 earnings, 8.01, 7.01); a classifier's `adverse_surprise` / `positive_catalyst` / `distress` answers override the item guess.
   13D: new 65 bullish (activist intent 85), amendment 40 neutral; 13G: new 30 bullish, amendments and index-fund crossings ~5-10 neutral.
 - **Ticker context (the deeper triage):** other filings on the same ticker in the last 30 days adjust the score: agreeing filings +8 each
-  (max +16), conflicting -10 each (max -20), a recent new 13D +8 for bullish, a recent distress 8-K -12 for bullish (+8 for bearish).
+  (max +16, not applied to cluster buys, which already encode it), conflicting -10 each (max -20), a recent new 13D +8 for bullish, a recent distress 8-K -12 for bullish (+8 for bearish).
   `reasons` lists every term so the number can be audited; the page shows it under "Why this signal".
 - **Labels:** 60+ Strong bullish, 25+ Bullish, within +/-25 Neutral, -25 Bearish, -60 Strong bearish; "Mixed" for two-sided events.
 - Feed/MCP: `direction=bullish|bearish` filters, `sort=signal` orders by strength. Market context (price trend, RSI, earnings date)

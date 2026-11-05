@@ -55,9 +55,9 @@ function baseInsider(row) {
     let c = value >= 1e6 ? 85 : value >= 250e3 ? 70 : value >= 100e3 ? 60 : value >= 25e3 ? 45 : 30;
     reasons.push(`Open-market purchase${value ? ` of about ${usd(value)}` : ''} (conviction ${c})`);
     if (exec) { c += 10; reasons.push('Bought by an executive (+10)'); }
-    if (cluster) { c = Math.max(c, 80) + 5; reasons.push('Several insiders bought in the same window (+5, floor 80)'); }
+    if (cluster) { c = Math.max(c, 75); reasons.push('Several insiders bought in the same window (floor 75)'); }
     if ((num(f.conviction_buy) ?? 0) >= 0.8) { c += 5; reasons.push('Classifier sees genuine conviction (+5)'); }
-    return { direction: 'bullish', conviction: Math.min(100, c), reasons };
+    return { direction: 'bullish', conviction: Math.min(100, c), reasons, clustered: cluster };
   }
   if (isSale) {
     let c = value >= 10e6 ? 40 : value >= 2e6 ? 30 : value >= 500e3 ? 20 : 10;
@@ -155,7 +155,8 @@ function buildRating(row, others = []) {
     const derived = others.map((o) => ({ o, b: deriveBase(o) })).filter(({ b }) => b.conviction >= 30);
     const agree = derived.filter(({ b }) => b.direction === base.direction);
     const oppose = derived.filter(({ b }) => b.direction !== base.direction && b.direction !== 'neutral' && b.direction !== 'mixed');
-    if (agree.length) {
+    // A cluster-buy flag already encodes "several insiders bought", so counting those filings again would double count.
+    if (agree.length && !base.clustered) {
       const bump = Math.min(16, agree.length * 8);
       adjust += bump;
       flags.push(`${agree.length} other ${base.direction} filing${agree.length > 1 ? 's' : ''} on this ticker in ${CONTEXT_WINDOW_DAYS} days`);
