@@ -35,6 +35,25 @@ The job drains the backlog with a worker pool (`FILING_TRIAGE_CONCURRENCY`, defa
 picked up first next run; the run summary reports `listed`, `unseen`, `skipped`, `scored`, `escalated` and `deferred`.
 A failed `filing_triage_seen` lookup aborts that type's run rather than risk re-scoring everything.
 
+## AI is on demand only (default)
+
+Automatic triage is **rules only**. The scheduled job never calls a model unless `FILING_TRIAGE_MODE` is explicitly set to `hybrid`
+or `jev`. A configured provider (an `OPENROUTER_API_KEY` implies the free `llm` classifier) is used only when someone asks for a
+read of one specific filing:
+
+- **Ask AI** button on a filing in `/filings`, or `POST /api/filings/analyze` `{accession_no, refresh?}`, or the MCP tool `analyze_filing`.
+- The free model reads the filing (SEC text for 13D/13G, 8-K, late filings, tender offers and proxy forms; the Form 4 transactions
+  rebuilt from the SEC XML; the stored structured fields for Form 144 and SEDI) and returns `headline`, `direction`, `why_it_matters`,
+  `key_facts`, `risks_or_unknowns` and `what_to_check_next`.
+- The result is saved on the filing (`llm_thesis`, `llm_model`, `escalated = true`) and reused by everyone; a filing is read at most
+  once unless `refresh` is true. It does **not** change the rule-based priority or rating.
+- **Owner only.** The route accepts the `MCP_API_KEY` bearer key, or a Supabase session token whose verified email is on
+  `VITE_ADMIN_EMAILS` (default: the client's default admin email). Anyone else gets 403 and no model call is made, so strangers cannot
+  spend the free quota. The same gate now protects `POST /api/filings/run-now`, `/discover`, `/classify` and `/api/ownership-filings/run-now`;
+  the old `x-admin-email` header was self-asserted (anyone could send it) and is no longer trusted.
+- Quota: calls count against `FILING_TRIAGE_LLM_DAILY_BUDGET` (default 45, free accounts get ~50/day); when it is used up the button
+  returns a clear "try later" message.
+
 ## Classifiers: Jev or a free OpenRouter model
 
 The text-aware scorer is chosen by `FILING_TRIAGE_CLASSIFIER` (`jev` | `llm` | `none`), or inferred from keys:

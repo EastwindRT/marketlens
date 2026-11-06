@@ -113,4 +113,48 @@ function normalizeLlmReply(def, parsed) {
   return { answers, thesis };
 }
 
-module.exports = { buildMessages, parseModelJson, normalizeLlmReply, describeQuestion };
+// ── On-demand single-filing read (not part of automatic triage) ──────────────
+const READ_SYSTEM_PROMPT = [
+  'You are a senior equity analyst reading ONE SEC or SEDI filing for a trader.',
+  'Respond with ONE JSON object and nothing else (no markdown, no commentary).',
+  'Shape: {"headline": "<max 15 words>", "direction": "bullish|bearish|neutral|mixed|unclear",',
+  '"why_it_matters": "<2-3 sentences>", "key_facts": ["<up to 5 short facts with numbers or dates taken from the filing>"],',
+  '"risks_or_unknowns": ["<up to 3 short items>"], "what_to_check_next": ["<up to 3 short items>"]}.',
+  'Base everything on the filing text provided. Separate facts from inference. Do not give investment advice.',
+].join(' ');
+
+function buildReadMessages(header, text) {
+  return [
+    { role: 'system', content: READ_SYSTEM_PROMPT },
+    { role: 'user', content: `${header}\n\n--- FILING ---\n${String(text).slice(0, MAX_STATE_CHARS)}` },
+  ];
+}
+
+function cleanList(value, max, maxLen) {
+  return Array.isArray(value)
+    ? value.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim().slice(0, maxLen)).slice(0, max)
+    : undefined;
+}
+
+// Throws when the reply has neither a headline nor an explanation, so callers can try the next model.
+function normalizeReadReply(parsed) {
+  const headline = typeof parsed?.headline === 'string' ? parsed.headline.trim().slice(0, 200) : '';
+  const why = typeof parsed?.why_it_matters === 'string' ? parsed.why_it_matters.trim().slice(0, 800) : '';
+  if (!headline && !why) throw new Error('model reply has no headline or explanation');
+  const direction = String(parsed?.direction || '').toLowerCase();
+  const known = ['bullish', 'bearish', 'neutral', 'mixed', 'unclear'];
+  const dir = known.includes(direction) ? direction : 'unclear';
+  return {
+    headline: headline || undefined,
+    direction: dir,
+    why_it_matters: why || undefined,
+    key_facts: cleanList(parsed?.key_facts, 5, 240),
+    risks_or_unknowns: cleanList(parsed?.risks_or_unknowns, 3, 240),
+    what_to_check_next: cleanList(parsed?.what_to_check_next, 3, 240),
+    // Aliases the 13D/13G page already reads.
+    signal: DIRECTION_TO_SIGNAL[dir] || 'WATCH',
+    thesis: why || undefined,
+  };
+}
+
+module.exports = { buildMessages, parseModelJson, normalizeLlmReply, describeQuestion, buildReadMessages, normalizeReadReply };

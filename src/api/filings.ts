@@ -69,8 +69,11 @@ export interface FilingSignal {
   rating?: SignalRating;
 }
 
+import { supabase } from './supabase';
+
 export interface FilingsFeedResponse {
   schemaVersion: number;
+  aiOnDemand?: boolean;
   triageMode?: 'rules' | 'hybrid' | 'jev';
   classifier?: 'jev' | 'llm' | 'none';
   signals: FilingSignal[];
@@ -89,6 +92,20 @@ export interface FilingsFeedParams {
   direction?: 'bullish' | 'bearish';
   sort?: 'priority' | 'signal';
   limit?: number;
+}
+
+// Asks the free AI model for a read of one filing. Owner only: the server checks the signed-in session.
+export async function analyzeFiling(accessionNo: string, refresh = false): Promise<{ cached: boolean; thesis: FilingThesis; model?: string }> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const res = await fetch('/api/filings/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ accession_no: accessionNo, refresh }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `AI read failed (${res.status})`);
+  return json;
 }
 
 export async function fetchFilingsFeed(params: FilingsFeedParams = {}): Promise<FilingsFeedResponse> {

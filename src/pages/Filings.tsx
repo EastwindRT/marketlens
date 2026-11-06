@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { BookOpen, ExternalLink, Layers, NotebookPen, Sparkles } from 'lucide-react';
 import { DataStatus } from '../components/ui/DataStatus';
 import { useFilingsFeed } from '../hooks/useFilingsFeed';
+import { analyzeFiling } from '../api/filings';
 import type { Finding, FindingVerdict, FilingSignal, FilingThesis, FilingType, PriorityTier, SignalRating } from '../api/filings';
 
 type TypeFilter = FilingType | 'all';
@@ -90,11 +92,14 @@ function describeSignal(s: FilingSignal): { summary: string; flags: string[] } {
   return { summary: EVENT_LABELS[String(f.event_category)] ?? '8-K current report', flags };
 }
 
-function thesisText(t: FilingThesis): { head: string | null; body: string | null; facts: string[] } {
+function thesisText(t: FilingThesis): { head: string | null; body: string | null; facts: string[]; risks: string[]; next: string[]; direction: string | null } {
   return {
     head: t.headline ?? null,
     body: t.why_it_matters ?? t.thesis ?? null,
     facts: [...(t.key_facts ?? []), ...(t.context_flags ?? [])].slice(0, 5),
+    risks: t.risks_or_unknowns ?? [],
+    next: t.what_to_check_next ?? [],
+    direction: t.direction ?? null,
   };
 }
 
@@ -208,14 +213,34 @@ function PriorityBadge({ priority, tier }: { priority: number; tier: PriorityTie
   );
 }
 
-function FilingRow({ signal }: { signal: FilingSignal }) {
+function FilingRow({ signal, aiAvailable }: { signal: FilingSignal; aiAvailable: boolean }) {
   const [open, setOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [whyOpen, setWhyOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const [localThesis, setLocalThesis] = useState<FilingThesis | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
   const findings = signal.findings ?? [];
   const type = TYPE_META[signal.filing_type];
   const { summary, flags } = describeSignal(signal);
-  const thesis = signal.llm_thesis ? thesisText(signal.llm_thesis) : null;
+  const thesisData = localThesis ?? signal.llm_thesis;
+  const thesis = thesisData ? thesisText(thesisData) : null;
+
+  const askAi = async () => {
+    setAsking(true);
+    setAskError(null);
+    try {
+      const result = await analyzeFiling(signal.accession_no);
+      setLocalThesis(result.thesis);
+      setOpen(true);
+      void queryClient.invalidateQueries({ queryKey: ['filings-feed'] });
+    } catch (err) {
+      setAskError(err instanceof Error ? err.message : 'AI read failed');
+    } finally {
+      setAsking(false);
+    }
+  };
 
   return (
     <div
@@ -260,7 +285,7 @@ function FilingRow({ signal }: { signal: FilingSignal }) {
               ))}
             </div>
           )}
-          {(flags.length > 0 || signal.escalated || findings.length > 0) && (
+          {(flags.length > 0 || Boolean(thesis) || aiAvailable || findings.length > 0) && (
             <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 6 }}>
               {flags.map((flag) => (
                 <span key={flag} style={{ fontSize: 11, fontWeight: 700, color: '#F7931A' }}>{flag}</span>
@@ -273,7 +298,17 @@ function FilingRow({ signal }: { signal: FilingSignal }) {
                   <NotebookPen size={12} /> {notesOpen ? 'Hide notes' : `Notes (${findings.length})`}
                 </button>
               )}
-              {signal.escalated && (
+              {!thesis && aiAvailable && (
+                <button
+                  onClick={askAi}
+                  disabled={asking}
+                  title="Ask the free AI model to read this filing (uses the small daily free quota)"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--accent-blue)', background: 'transparent', border: 'none', cursor: asking ? 'wait' : 'pointer', padding: 0, opacity: asking ? 0.6 : 1 }}
+                >
+                  <Sparkles size={12} /> {asking ? 'Reading...' : 'Ask AI'}
+                </button>
+              )}
+              {thesis && (
                 <button
                   onClick={() => setOpen((v) => !v)}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--accent-blue)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
@@ -305,6 +340,10 @@ function FilingRow({ signal }: { signal: FilingSignal }) {
 
       {notesOpen && findings.map((f) => <FindingNote key={f.id} finding={f} />)}
 
+      {askError && (
+        <p style={{ margin: '8px 0 0', fontSize: 12, color: '#F6465D' }}>{askError}</p>
+      )}
+
       {open && thesis && (
         <div style={{ background: 'var(--bg-elevated)', borderRadius: 10, padding: 12, marginTop: 10 }}>
           {thesis.head && <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{thesis.head}</p>}
@@ -314,6 +353,13 @@ function FilingRow({ signal }: { signal: FilingSignal }) {
               {thesis.facts.map((fact) => <li key={fact}>{fact}</li>)}
             </ul>
           )}
+          {thesis.risks.length > 0 && (
+            <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}><strong>Risks and unknowns:</strong> {thesis.risks.join(' - ')}</p>
+          )}
+          {thesis.next.length > 0 && (
+            <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}><strong>Check next:</strong> {thesis.next.join(' - ')}</p>
+          )}
+          <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--text-tertiary)' }}>AI read by a free model. Check it against the filing; not investment advice.</p>
         </div>
       )}
     </div>
@@ -383,10 +429,10 @@ export default function FilingsPage() {
       </div>
       <p className="hidden md:block" style={{ margin: '0 0 16px', fontSize: 14, color: 'var(--text-secondary)', maxWidth: 760 }}>
         Every new SEC 13D/13G, Form 4, 8-K, Form 144, late-filing notice, tender offer and contested proxy, plus Canadian SEDI insider
-        trades, is scored 0-100 (by a text-reading model for 13D/13G, Form 4 and 8-K when connected, otherwise by rules), and filings
-        with no real impact are filtered out. Only those that clear their type's bar get a written AI read. Low-priority
-        filings are hidden by default. Each filing also gets a directional signal (bullish or bearish, -100 to +100), an automated
-        reading of public filings and not investment advice.{' '}
+        trades, is scored 0-100 automatically by rules, and filings with no real impact are filtered out. Each also gets a directional
+        signal (bullish or bearish, -100 to +100), an automated reading of public filings and not investment advice. AI reads are on
+        request only, one filing at a time.
+        {' '}
         <Link to="/glossary" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent-blue)', fontWeight: 700, textDecoration: 'none' }}>
           <BookOpen size={13} /> What do these filings mean?
         </Link>
@@ -420,7 +466,17 @@ export default function FilingsPage() {
         <Metric label="AI read" value={counts.ai} color="var(--accent-blue)" />
       </div>
 
-      {data?.triageMode === 'rules' && (
+      {data?.triageMode === 'rules' && data?.aiOnDemand && (
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, padding: 12, marginBottom: 14 }}>
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
+            <strong style={{ color: 'var(--text-primary)' }}>Scored automatically by rules.</strong> Obvious noise is filtered and the rest is ranked
+            by form type, item codes, trade size and other filings on the same ticker. AI reads run only when you click <strong>Ask AI</strong> on a
+            filing (free model, small daily quota).
+          </p>
+        </div>
+      )}
+
+      {data?.triageMode === 'rules' && !data?.aiOnDemand && (
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, padding: 12, marginBottom: 14 }}>
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
             <strong style={{ color: 'var(--text-primary)' }}>Rule-based scoring.</strong> No Jev key is connected, so obvious noise
@@ -462,7 +518,7 @@ export default function FilingsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-          {signals.map((s) => <FilingRow key={s.id} signal={s} />)}
+          {signals.map((s) => <FilingRow key={s.id} signal={s} aiAvailable={Boolean(data?.aiOnDemand)} />)}
         </div>
       )}
     </div>

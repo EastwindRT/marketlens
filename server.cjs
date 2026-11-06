@@ -3729,7 +3729,7 @@ app.post('/api/analyze-filing', async (req, res) => {
 
 const { FILING_TYPES, buildSignal } = require('./filingTriage.cjs');
 const { rulesPriority, extractEightKItems } = require('./filingRules.cjs');
-const { buildMessages, parseModelJson, normalizeLlmReply } = require('./filingLlm.cjs');
+const { buildMessages, parseModelJson, normalizeLlmReply, buildReadMessages, normalizeReadReply } = require('./filingLlm.cjs');
 const { attachRatings, CONTEXT_WINDOW_DAYS } = require('./filingRating.cjs');
 
 // Text-aware scoring ("classifier") options, chosen by FILING_TRIAGE_CLASSIFIER or inferred from keys:
@@ -3757,13 +3757,15 @@ const FILING_TRIAGE_ENABLED =
   process.env.FILING_TRIAGE_ENABLED === '1' || process.env.OWNERSHIP_TRIAGE_ENABLED === '1';
 const JEV_MODEL = process.env.JEV_MODEL || (JEV_VIA_OPENROUTER ? '~typesafe/jev-latest' : 'jev-latest');
 
-// rules  = free rule-based noise filter + priority, no classifier needed
-// hybrid = rules drop the obvious noise, the classifier scores the rest (default when one is configured)
+// rules  = free rule-based noise filter + priority, no classifier needed (default)
+// hybrid = rules drop the obvious noise, the classifier scores the rest (opt in with FILING_TRIAGE_MODE=hybrid)
 // jev    = the classifier scores everything (no pre-filter, no fallback to rules)
 const FILING_TRIAGE_MODE = (() => {
   const requested = String(process.env.FILING_TRIAGE_MODE || '').toLowerCase();
   if (['rules', 'hybrid', 'jev'].includes(requested)) return requested;
-  return FILING_CLASSIFIER !== 'none' ? 'hybrid' : 'rules';
+  // Automatic runs never call a model unless FILING_TRIAGE_MODE says so. A configured AI provider is used only
+  // when someone asks for a read on a specific filing (POST /api/filings/analyze, the Ask AI button, MCP analyze_filing).
+  return 'rules';
 })();
 const TRIAGE_NOISE_FLOOR = Math.min(100, Math.max(0, parseInt(process.env.FILING_TRIAGE_NOISE_FLOOR || '15', 10) || 15));
 const INSIDER_CLUSTER_MIN = 3;
@@ -3877,10 +3879,9 @@ function openRouterChat(model, messages) {
   });
 }
 
-async function scoreFilingWithLlm(typeKey, state, context = {}) {
-  const started = Date.now();
-  const def = FILING_TYPES[typeKey];
-  const messages = buildMessages(def, state);
+// Runs a chat request through the free-model chain: fallback order, daily budget, pacing, and 429 handling.
+// handle(content, json, model) turns a reply into a result; if it throws, the next model is tried.
+async function runFreeModelChain(messages, handle) {
   let lastError = null;
   for (const model of OPENROUTER_MODELS) {
     if (!llmBudgetLeft()) break;
@@ -3910,27 +3911,125 @@ async function scoreFilingWithLlm(typeKey, state, context = {}) {
       if (json.error) throw new Error(String(json.error.message || JSON.stringify(json.error)).slice(0, 160));
       const choice = json.choices?.[0];
       if (!choice?.message?.content && choice?.finish_reason === 'length') throw new Error('model ran out of tokens before answering');
-      const { answers, thesis } = normalizeLlmReply(def, parseModelJson(choice?.message?.content));
+      const result = handle(choice?.message?.content, json, model);
       llmState.consecutive429 = 0;
-      const signal = buildSignal(typeKey, answers, context);
-      const usage = json.usage || {};
-      return {
-        ...signal,
-        classifier: 'llm',
-        thesis,
-        model: json.model || model,
-        jevRaw: { model: json.model || model, usage },
-        tokensUsed: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0),
-        msElapsed: Date.now() - started,
-      };
+      return result;
     } catch (err) {
       lastError = err;
-      console.error(`[filing-triage llm ${model}]`, err.message);
+      console.error(`[free-model ${model}]`, err.message);
       if (!llmBudgetLeft()) break;
     }
   }
   throw lastError || new Error('no OpenRouter model available (budget used or cooling down)');
 }
+
+async function scoreFilingWithLlm(typeKey, state, context = {}) {
+  const started = Date.now();
+  const def = FILING_TYPES[typeKey];
+  return runFreeModelChain(buildMessages(def, state), (content, json, model) => {
+    const { answers, thesis } = normalizeLlmReply(def, parseModelJson(content));
+    const signal = buildSignal(typeKey, answers, context);
+    const usage = json.usage || {};
+    return {
+      ...signal,
+      classifier: 'llm',
+      thesis,
+      model: json.model || model,
+      jevRaw: { model: json.model || model, usage },
+      tokensUsed: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0),
+      msElapsed: Date.now() - started,
+    };
+  });
+}
+
+// ── On-demand AI read of one filing ──────────────────────────────────────────
+// The only place the AI is called outside the admin classify test. Results are saved on the filing
+// (llm_thesis) and reused, so a filing is read at most once unless a refresh is requested.
+const analysisInFlight = new Map();
+
+function httpError(status, message) {
+  return Object.assign(new Error(message), { status });
+}
+
+function fieldsText(row) {
+  const f = row.signals || {};
+  const lines = [];
+  for (const [k, v] of Object.entries(f)) {
+    if (v === null || v === undefined || v === '' || k === 'scored_by') continue;
+    lines.push(`- ${k.replace(/_/g, ' ')}: ${v}`);
+  }
+  return lines.join('\n');
+}
+
+async function buildAnalysisText(row) {
+  const isSec = String(row.filing_url || '').startsWith('https://www.sec.gov/');
+  if (row.filing_type === 'insider') {
+    try {
+      const trades = await fetchSecInsiderActivityItem({
+        cik: row.subject_cik || '', accession: row.accession_no, filename: `edgar/data/${Number(row.subject_cik)}/${row.accession_no}.txt`,
+        formType: row.form_type, filedDate: row.filed_date, companyName: row.subject_company,
+      });
+      if (trades.length) {
+        const first = trades[0];
+        return ['FORM 4 INSIDER TRANSACTION REPORT', `Issuer: ${first.companyName} (${first.symbol})`,
+          `Reporting insider: ${first.insiderName}${first.title ? `, ${first.title}` : ''}`, `Filed: ${row.filed_date}`,
+          'Transactions:', ...trades.map(describeInsiderTransaction)].join('\n');
+      }
+    } catch (err) {
+      console.error('[analyze insider]', describeError(err));
+    }
+    return `FORM 4 (details unavailable, summary from stored fields)\n${fieldsText(row)}`;
+  }
+  if (isSec && ['ownership', 'event', 'late_filing', 'takeover', 'proxy_fight'].includes(row.filing_type)) {
+    try {
+      const text = await fetchEdgarFilingText(row.filing_url);
+      return row.filing_type === 'event' ? text.split(' ').slice(0, 3500).join(' ') : text;
+    } catch (err) {
+      throw httpError(502, `could not load the filing text from the SEC: ${describeError(err)}`);
+    }
+  }
+  // Form 144 and SEDI: the structured fields already hold what the filing says.
+  return `${(FILING_TYPES[row.filing_type]?.label || row.form_type)} notice (structured fields)\n${fieldsText(row)}`;
+}
+
+async function analyzeFilingOnDemand(accessionNo, { refresh = false } = {}) {
+  if (!hasFilingDb()) throw httpError(503, 'database not configured');
+  if (FILING_CLASSIFIER === 'none') throw httpError(503, 'No AI provider configured (set OPENROUTER_API_KEY)');
+  const row = await getFilingByAccession(accessionNo);
+  if (!row) throw httpError(404, `No triaged filing found for ${accessionNo}`);
+  if (row.llm_thesis && !refresh) return { cached: true, thesis: row.llm_thesis, model: row.llm_model };
+  if (analysisInFlight.has(accessionNo)) return analysisInFlight.get(accessionNo);
+
+  const job = (async () => {
+    const text = await buildAnalysisText(row);
+    const header = [
+      `Filing: ${row.form_type} (${FILING_TYPES[row.filing_type]?.label || row.filing_type})`,
+      `Company: ${row.subject_company}${row.symbol ? ` (${row.symbol})` : ''}`,
+      `Filer: ${row.filer_name}`,
+      `Filed: ${row.filed_date}`,
+      row.signals?.rule_reason ? `Automatic rule read (for context only): ${row.signals.rule_reason}` : '',
+    ].filter(Boolean).join('\n');
+    let result;
+    try {
+      result = await runFreeModelChain(buildReadMessages(header, text), (content, json, model) => ({
+        thesis: normalizeReadReply(parseModelJson(content)),
+        model: json.model || model,
+      }));
+    } catch (err) {
+      if (/budget|cooling|429/i.test(err.message)) throw httpError(429, "Today's free AI quota is used up or paused. Try again later.");
+      throw httpError(502, `AI read failed: ${describeError(err)}`);
+    }
+    const { error } = await serverSupabase
+      .from('filing_signals')
+      .update({ llm_thesis: result.thesis, llm_model: result.model, escalated: true, updated_at: new Date().toISOString() })
+      .eq('accession_no', accessionNo);
+    if (error) throw httpError(502, `could not save the AI read: ${error.message}`);
+    return { cached: false, thesis: result.thesis, model: result.model };
+  })().finally(() => analysisInFlight.delete(accessionNo));
+  analysisInFlight.set(accessionNo, job);
+  return job;
+}
+
 
 function parseJsonLoose(text) {
   const cleaned = String(text || '').replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim();
@@ -4938,10 +5037,23 @@ app.get('/api/filings/feed', async (req, res) => {
       limit: needsPool ? 500 : wantLimit,
     });
     const view = applyRatingView(signals, { direction: req.query.direction, sort: req.query.sort }).slice(0, wantLimit);
-    res.json({ schemaVersion: 2, triageMode: FILING_TRIAGE_MODE, classifier: FILING_CLASSIFIER, signals: view, generatedAt: new Date().toISOString() });
+    res.json({ schemaVersion: 2, triageMode: FILING_TRIAGE_MODE, classifier: FILING_CLASSIFIER, aiOnDemand: FILING_CLASSIFIER !== 'none', signals: view, generatedAt: new Date().toISOString() });
   } catch (err) {
     console.error('[api/filings/feed]', err.message);
     res.status(502).json({ schemaVersion: 2, signals: [], generatedAt: new Date().toISOString(), error: err.message });
+  }
+});
+
+app.post('/api/filings/analyze', async (req, res) => {
+  if (!(await authorizeAdmin(req)).ok) return res.status(403).json({ error: 'AI reads are limited to the site owner. Sign in as the owner, or send the MCP key.' });
+  const accession = String(req.body?.accession_no || '').trim();
+  if (!ACCESSION_RE.test(accession)) return res.status(400).json({ error: 'accession_no must look like 0001104659-26-120752' });
+  try {
+    const result = await analyzeFilingOnDemand(accession, { refresh: req.body?.refresh === true });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    if (!err.status) console.error('[api/filings/analyze]', describeError(err));
+    res.status(err.status || 500).json({ ok: false, error: err.message || 'AI read failed' });
   }
 });
 
@@ -4986,7 +5098,7 @@ app.get('/api/ownership-filings/triage', async (req, res) => {
 });
 
 app.post('/api/filings/run-now', async (req, res) => {
-  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  if (!(await authorizeAdmin(req)).ok) return res.status(403).json({ error: 'Owner access required: send the MCP key or sign in as the owner' });
   try {
     const types = parseTypesParam(req.query.types) || undefined;
     const result = await runFilingTriageJob({ types });
@@ -4997,7 +5109,7 @@ app.post('/api/filings/run-now', async (req, res) => {
 });
 
 app.post('/api/ownership-filings/run-now', async (req, res) => {
-  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  if (!(await authorizeAdmin(req)).ok) return res.status(403).json({ error: 'Owner access required: send the MCP key or sign in as the owner' });
   try {
     res.json({ ok: true, ...(await runFilingTriageJob({ types: ['ownership'] })) });
   } catch (err) {
@@ -5008,7 +5120,7 @@ app.post('/api/ownership-filings/run-now', async (req, res) => {
 // Runs the configured classifier on pasted filing text and returns the resulting signal. Nothing is
 // written. Use it to check that a key and model work, e.g. after setting OPENROUTER_API_KEY.
 app.post('/api/filings/classify', async (req, res) => {
-  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  if (!(await authorizeAdmin(req)).ok) return res.status(403).json({ error: 'Owner access required: send the MCP key or sign in as the owner' });
   const typeKey = String(req.body?.type || '');
   const text = String(req.body?.text || '');
   if (!FILING_TYPES[typeKey] || FILING_TYPES[typeKey].rulesOnly) return res.status(400).json({ error: `type must be one of ${Object.keys(FILING_TYPES).filter((k) => !FILING_TYPES[k].rulesOnly).join(', ')} (the other types are scored by rules only)` });
@@ -5041,7 +5153,7 @@ app.post('/api/filings/classify', async (req, res) => {
 // Dry run: lists what the next triage pass would pick up (and how much is
 // already handled) without calling Jev, the LLM, or writing anything.
 app.post('/api/filings/discover', async (req, res) => {
-  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
+  if (!(await authorizeAdmin(req)).ok) return res.status(403).json({ error: 'Owner access required: send the MCP key or sign in as the owner' });
   try {
     const types = parseTypesParam(req.query.types) || Object.keys(FILING_TYPES);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '25', 10) || 25, 1), 100);
@@ -5231,6 +5343,24 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: 'analyze_filing',
+    description: 'Ask the free AI model for a written read of one triaged filing (headline, direction, why it matters, key facts, risks, what to check next). Saved on the filing and reused; a filing is read at most once unless refresh is true. Uses the small daily free quota, so call it only when asked. Requires the server write key.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        accession_no: { type: 'string', description: 'Accession number of a triaged filing.' },
+        refresh: { type: 'boolean', description: 'Re-run even if a read already exists.' },
+      },
+      required: ['accession_no'],
+    },
+    handler: async (a, ctx) => {
+      requireWrite(ctx);
+      const accession = String(a.accession_no || '').trim();
+      if (!ACCESSION_RE.test(accession)) throw new Error('accession_no must look like 0001104659-26-120752');
+      return analyzeFilingOnDemand(accession, { refresh: a.refresh === true });
+    },
+  },
+  {
     name: 'update_finding',
     description: 'Revise an existing finding by id (from list_findings or add_finding). Only the fields you pass change. Requires the server write key.',
     inputSchema: {
@@ -5280,7 +5410,7 @@ app.post('/mcp', async (req, res) => {
   }
   try {
     const { status, body } = await handleMcpRequest(req.body, {
-      serverInfo: { name: 'tars-filings', version: '1.2.0' },
+      serverInfo: { name: 'tars-filings', version: '1.3.0' },
       instructions: MCP_INSTRUCTIONS,
       tools: MCP_TOOLS,
       // When MCP_API_KEY is set the request already passed the bearer check above, so it may write.
@@ -6078,10 +6208,31 @@ function adminEmails() {
   return (process.env.VITE_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 }
 
-function isAdminRequest(req) {
-  const emails = adminEmails();
-  const callerEmail = (req.headers['x-admin-email'] || '').toLowerCase().trim();
-  return emails.length === 0 || emails.includes(callerEmail);
+// Admin and AI routes accept either the MCP key or a verified Supabase session whose email is on the owner
+// allowlist (VITE_ADMIN_EMAILS, default matching the client's). The old x-admin-email header was self-asserted,
+// so anyone could send it; it is no longer trusted.
+const DEFAULT_OWNER_EMAILS = ['renjith914@gmail.com'];
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && require('crypto').timingSafeEqual(x, y);
+}
+
+async function authorizeAdmin(req) {
+  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  if (!bearer) return { ok: false };
+  if (MCP_API_KEY && safeEqual(bearer, MCP_API_KEY)) return { ok: true, who: 'mcp-key' };
+  if (!serverSupabase) return { ok: false };
+  try {
+    const { data, error } = await serverSupabase.auth.getUser(bearer);
+    const email = data?.user?.email?.toLowerCase();
+    const allowed = adminEmails().length ? adminEmails() : DEFAULT_OWNER_EMAILS;
+    if (!error && email && allowed.includes(email)) return { ok: true, who: email };
+  } catch (err) {
+    console.error('[auth]', describeError(err));
+  }
+  return { ok: false };
 }
 
 // ── Background scheduler ──────────────
