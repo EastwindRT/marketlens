@@ -2,7 +2,7 @@
 // Shape mirrors the schemaVersion 2 contract in server.cjs; per-type `signals`
 // keys are defined in filingTriage.cjs. Update all three together.
 
-export type FilingType = 'ownership' | 'insider' | 'event';
+export type FilingType = 'ownership' | 'insider' | 'event' | 'sale_notice' | 'late_filing' | 'takeover' | 'proxy_fight' | 'ca_insider';
 export type PriorityTier = 'critical' | 'high' | 'medium' | 'low';
 
 export interface FilingThesis {

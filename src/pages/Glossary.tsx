@@ -177,8 +177,8 @@ export default function GlossaryPage() {
       </div>
       <p style={{ margin: '0 0 16px', fontSize: 14, color: 'var(--text-secondary)', maxWidth: 760 }}>
         What each filing is, who files it, how fast, and what to look for. Each entry says whether TARS scores it, only shows it,
-        or does not read it yet. TARS reads US SEC filings; Canadian insider reports (SEDI) are shown but not scored, and
-        Canadian equivalents of the 13D and 8-K are not covered.
+        or does not read it yet. TARS reads US SEC filings and Canadian SEDI insider trades; the Canadian equivalents of the 13D and 8-K
+        (early warning and material change reports) are not covered yet.
       </p>
 
       <div data-agent-section="glossary-priority" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 14, padding: 14, marginBottom: 16 }}>

@@ -61,6 +61,22 @@ tokens (1,500 left no room for the answer); a 429 carrying `metadata.provider_na
 provider pool being busy, so the model is skipped for a minute and the next one is tried instead of pausing everything. Still spot-check
 results with `POST /api/filings/classify` before trusting a new model.
 
+## Additional filing types (rules only)
+
+Besides 13D/13G, Form 4 and 8-K, these are read and scored by rules only (no classifier or model calls, so they never use the
+free-model quota). All require a listed ticker; private funds and shells are recorded as skipped.
+
+| `filing_type` | Source | Rules (priority) | Rating |
+|---|---|---|---|
+| `sale_notice` (Form 144) | EDGAR `144` atom feed (paged) + daily index; the submission XML gives shares, dollar value, % of shares outstanding, the seller's role, past-3-month sales, and a 10b5-1 flag | by value: $50M+ 55, $10M+ 45, $2M+ 35, $500K+ 22, else 8; +8 if 1%+ of shares; +5 officer/director on $2M+; +5 after heavy recent selling; -10 under a 10b5-1 plan | bearish, weak (cap 60) |
+| `late_filing` (NT 10-K / NT 10-Q) | EDGAR atom feeds | NT 10-K 60, NT 10-Q 55 | bearish 60 / 50 |
+| `takeover` (SC TO-T, SC 14D9, SC 13E3) | EDGAR atom feeds (issuer tender offers SC TO-I are ignored: mostly repeat fund buybacks) | new TO-T 85, 13E3 80, 14D9 70; amendments lower | bullish (TO-T 75, 13E3 65) or mixed (14D9) |
+| `proxy_fight` (DFAN14A, DEFC14A, PREC14A) | EDGAR atom feeds | DEFC14A 70, PREC14A 65, DFAN14A 60 | bullish 50-60 |
+| `ca_insider` (SEDI) | the existing TMX insider data (7 days, open-market only), grouped per insider, ticker and filing date; synthetic id `sedi:<SYMBOL.TO>:<date>:<insider>`; amounts in CAD; the link goes to the TMX quote page | same as Form 4 | same as Form 4 |
+
+Not covered: Canadian early warning and material change reports (SEDAR+ has no free structured feed), cross-listed 6-K filings,
+10-K/10-Q text, dilution filings (424B5/S-3).
+
 ## Signal rating (direction + score)
 
 Every feed row carries `rating`: `{ score -100..100, label, direction, conviction, reasons[], context_flags[] }`. It is computed

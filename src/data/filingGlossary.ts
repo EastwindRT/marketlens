@@ -128,7 +128,7 @@ export const GLOSSARY: GlossaryEntry[] = [
     form: 'SEDI insider report',
     name: 'Canadian insider trading report',
     market: 'CA',
-    coverage: 'shown',
+    coverage: 'triaged',
     summary:
       'Canada\'s equivalent of the Form 4. Insiders of Canadian reporting issuers report trades through SEDI (the System for Electronic Disclosure by Insiders).',
     whoFiles: 'Officers, directors and 10% holders of Canadian reporting issuers.',
@@ -136,8 +136,38 @@ export const GLOSSARY: GlossaryEntry[] = [
     whyItMatters:
       'Same logic as Form 4: open-market buying by insiders is the signal. SEDI uses transaction codes (for example, 10 is an acquisition in the public market and 51 is an exercise of options); the trade direction is given by the sign of the amount.',
     lookFor: ['Open-market purchases by executives', 'Clusters of buys', 'Large sales outside normal option-exercise patterns'],
-    tarsNote:
-      'Shown on the Insider $ page ("CA Insiders" open-market trades, "CA Filings" all transaction types) for a curated list of TSX stocks. Not scored by Jev and not in the Filings feed.',
+    tarsNote: 'Open-market SEDI trades for a curated list of TSX stocks are grouped per insider and filing date, scored by rules (amounts in CAD) and rated like Form 4, in the Filings feed and on the Insider $ page.',
+  },
+
+  {
+    id: 'nt-10k',
+    form: 'NT 10-K / NT 10-Q',
+    name: 'Notification of late filing',
+    market: 'US',
+    coverage: 'triaged',
+    summary:
+      'A company files this when it cannot finish its annual (10-K) or quarterly (10-Q) report by the deadline. It gets a short extension (15 days for a 10-K, 5 for a 10-Q) if it files the notice on time.',
+    whoFiles: 'Any SEC-registered company that will miss a periodic report deadline.',
+    deadline: 'By the business day after the report was due.',
+    whyItMatters:
+      'Most companies file on time, so a late notice often points to an accounting problem, an auditor dispute, a liquidity issue or a restatement. Part III of the form usually gives the reason in a sentence or two.',
+    lookFor: ['The reason in Part III (auditor, accounting review, pending transaction)', 'Repeat late filers', 'A late notice combined with an 8-K item 4.01 (auditor change) or 4.02 (restatement)'],
+    tarsNote: 'Read from the SEC feed for listed companies, scored by rules and rated bearish (NT 10-K a little stronger than NT 10-Q).',
+  },
+  {
+    id: 'proxy-fight',
+    form: 'DFAN14A / DEFC14A / PREC14A',
+    name: 'Contested proxy and dissident solicitation',
+    market: 'US',
+    coverage: 'triaged',
+    summary:
+      'Filings by an activist (a "dissident") trying to win board seats or force a change at a company. PREC14A is a preliminary proxy statement, DEFC14A the definitive one, and DFAN14A is any additional soliciting material such as letters and presentations to shareholders.',
+    whoFiles: 'Activist investors running a proxy contest, filed against the company being targeted.',
+    deadline: 'Before and during the proxy solicitation, ahead of the shareholder meeting.',
+    whyItMatters:
+      'A proxy fight is the escalated stage of an activist campaign, usually following a 13D. It can lead to board changes, a sale of the company, or a settlement, and the stock often moves on each new filing.',
+    lookFor: ['A 13D from the same activist shortly before', 'Demands for a sale, spin-off, or buyback', 'A settlement or board seats agreed'],
+    tarsNote: 'Read from the SEC feed for listed companies, scored by rules and rated bullish with moderate conviction (activist pressure often, but not always, lifts the stock).',
   },
 
   // ── Not covered (US) ───────────────────────────────────────────────────────
@@ -170,12 +200,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     form: 'Form 144',
     name: 'Notice of proposed sale of restricted securities',
     market: 'US',
-    coverage: 'not_covered',
+    coverage: 'triaged',
     summary: 'A heads-up that an insider or affiliate intends to sell restricted or control shares under Rule 144.',
     whoFiles: 'Affiliates and holders of restricted stock before selling.',
     deadline: 'At the time the sale order is placed.',
     whyItMatters: 'It arrives before the Form 4, so it is an early warning of insider selling.',
-    tarsNote: 'Not read yet.',
+    tarsNote: 'Read from the SEC feed and the daily index. Rated bearish but weak: scored by rules on the dollar size, share of the company, the seller\'s role and recent sales, with 10b5-1 plans discounted. Small sales are filtered out.',
   },
   {
     id: 'form-10k',
@@ -218,12 +248,12 @@ export const GLOSSARY: GlossaryEntry[] = [
     form: 'Schedule TO / 14D-9',
     name: 'Tender offer filings',
     market: 'US',
-    coverage: 'not_covered',
+    coverage: 'triaged',
     summary: 'Schedule TO is filed by a buyer making a tender offer directly to shareholders; Schedule 14D-9 is the target company\'s response and recommendation.',
     whoFiles: 'The bidder (TO) and the target company (14D-9).',
     deadline: 'On launch of the offer; the target responds within 10 business days.',
     whyItMatters: 'A tender offer is a live takeover attempt, usually at a premium. The 14D-9 says whether the board recommends accepting.',
-    tarsNote: 'Not read yet. Many offers also show up as an 8-K Item 1.01 or 8.01.',
+    tarsNote: 'Third-party tender offers (SC TO-T), board responses (SC 14D9) and going-private filings (SC 13E3) for listed companies are scored by rules and rated bullish or mixed. Issuer buyback tender offers (SC TO-I) are ignored.',
   },
   {
     id: 'form-s1',

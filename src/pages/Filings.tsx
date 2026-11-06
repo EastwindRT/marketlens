@@ -12,6 +12,11 @@ const TYPE_META: Record<FilingType, { label: string; color: string }> = {
   ownership: { label: '13D/13G', color: '#2F80ED' },
   insider: { label: 'Form 4', color: '#079A6A' },
   event: { label: '8-K', color: '#F7931A' },
+  sale_notice: { label: 'Form 144', color: '#8E6BD8' },
+  late_filing: { label: 'Late filing', color: '#C0562B' },
+  takeover: { label: 'Tender offer', color: '#2D6BFF' },
+  proxy_fight: { label: 'Proxy fight', color: '#B8860B' },
+  ca_insider: { label: 'SEDI', color: '#C8372D' },
 };
 
 const TIER_META: Record<PriorityTier, { label: string; color: string; background: string }> = {
@@ -96,6 +101,11 @@ function thesisText(t: FilingThesis): { head: string | null; body: string | null
 function glossaryAnchor(s: FilingSignal): string {
   if (s.filing_type === 'insider') return 'form-4';
   if (s.filing_type === 'event') return 'form-8k';
+  if (s.filing_type === 'sale_notice') return 'form-144';
+  if (s.filing_type === 'late_filing') return 'nt-10k';
+  if (s.filing_type === 'takeover') return 'sc-to';
+  if (s.filing_type === 'proxy_fight') return 'proxy-fight';
+  if (s.filing_type === 'ca_insider') return 'sedi';
   return s.form_type.toUpperCase().includes('13G') ? 'sch-13g' : 'sch-13d';
 }
 
@@ -315,6 +325,11 @@ const TYPE_FILTERS: { id: TypeFilter; label: string }[] = [
   { id: 'ownership', label: '13D/13G' },
   { id: 'insider', label: 'Form 4' },
   { id: 'event', label: '8-K' },
+  { id: 'sale_notice', label: 'Form 144' },
+  { id: 'late_filing', label: 'Late filings' },
+  { id: 'takeover', label: 'Tender offers' },
+  { id: 'proxy_fight', label: 'Proxy fights' },
+  { id: 'ca_insider', label: 'SEDI (Canada)' },
 ];
 
 const TIER_FILTERS: { id: TierFilter; label: string }[] = [
@@ -367,7 +382,8 @@ export default function FilingsPage() {
         <DataStatus updatedAt={generatedAt} refreshing={isFetching} />
       </div>
       <p className="hidden md:block" style={{ margin: '0 0 16px', fontSize: 14, color: 'var(--text-secondary)', maxWidth: 760 }}>
-        Every new SEC 13D/13G, Form 4 and 8-K is scored 0-100 (by Jev when connected, otherwise by rules), and filings
+        Every new SEC 13D/13G, Form 4, 8-K, Form 144, late-filing notice, tender offer and contested proxy, plus Canadian SEDI insider
+        trades, is scored 0-100 (by a text-reading model for 13D/13G, Form 4 and 8-K when connected, otherwise by rules), and filings
         with no real impact are filtered out. Only those that clear their type's bar get a written AI read. Low-priority
         filings are hidden by default. Each filing also gets a directional signal (bullish or bearish, -100 to +100), an automated
         reading of public filings and not investment advice.{' '}

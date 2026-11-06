@@ -213,7 +213,21 @@ const event = {
 "risks_or_unknowns" (array of up to 3 short strings). Separate facts from inference. Do not give investment advice.`,
 };
 
-const FILING_TYPES = { ownership, insider, event };
+// Rules-only types: scored by filingRules.cjs and rated by filingRating.cjs, never sent to a classifier.
+function rulesOnlyType(key, label) {
+  return { key, label, rulesOnly: true, questions: {}, shouldEscalate: () => false, thesisPrompt: null };
+}
+
+const FILING_TYPES = {
+  ownership,
+  insider,
+  event,
+  sale_notice: rulesOnlyType('sale_notice', 'Form 144'),
+  late_filing: rulesOnlyType('late_filing', 'NT 10-K/Q'),
+  takeover: rulesOnlyType('takeover', 'Tender offer'),
+  proxy_fight: rulesOnlyType('proxy_fight', 'Proxy fight'),
+  ca_insider: rulesOnlyType('ca_insider', 'SEDI'),
+};
 
 // Run Jev's answers through a type definition and return the unified signal.
 function buildSignal(typeKey, answers, context = {}) {

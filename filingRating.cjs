@@ -52,7 +52,7 @@ function baseInsider(row) {
   const reasons = [];
 
   if (isBuy || cluster) {
-    let c = value >= 1e6 ? 85 : value >= 250e3 ? 70 : value >= 100e3 ? 60 : value >= 25e3 ? 45 : 30;
+    let c = value >= 10e6 ? 92 : value >= 5e6 ? 88 : value >= 1e6 ? 85 : value >= 250e3 ? 70 : value >= 100e3 ? 60 : value >= 25e3 ? 45 : 30;
     reasons.push(`Open-market purchase${value ? ` of about ${usd(value)}` : ''} (conviction ${c})`);
     if (exec) { c += 10; reasons.push('Bought by an executive (+10)'); }
     if (cluster) { c = Math.max(c, 75); reasons.push('Several insiders bought in the same window (floor 75)'); }
@@ -128,8 +128,46 @@ function baseOwnership(row) {
     : { direction: 'bullish', conviction: 30, reasons: ['New passive 13G: a holder above 5% (conviction 30)'] };
 }
 
+function baseSaleNotice(row) {
+  const f = row.signals || {};
+  const value = num(f.total_value) || 0;
+  let c = value >= 50e6 ? 45 : value >= 10e6 ? 38 : value >= 2e6 ? 28 : value >= 500e3 ? 18 : 8;
+  const reasons = [`Form 144 planned sale${value ? ` of about ${usd(value)}` : ''}: a weak, early bearish signal that precedes the Form 4 (conviction ${c})`];
+  if (f.plan) { c = Math.round(c / 2); reasons.push('Under a 10b5-1 plan (halved)'); }
+  const pct = num(f.pct_outstanding) ?? 0;
+  if (pct >= 1) { c += 8; reasons.push(`Sale is ${pct.toFixed(1)}% of shares outstanding (+8)`); }
+  return { direction: 'bearish', conviction: Math.min(60, c), reasons };
+}
+
+function baseLateFiling(row) {
+  const annual = /NT 10-K/i.test(String(row.form_type));
+  const c = annual ? 60 : 50;
+  return { direction: 'bearish', conviction: c, reasons: [`Late ${annual ? 'annual' : 'quarterly'} report notice: late filers often have accounting or liquidity problems (conviction ${c})`] };
+}
+
+function baseTakeover(row) {
+  const f = String(row.form_type || '').toUpperCase();
+  const amendment = f.includes('/A');
+  const note = 'the price often already reflects the offer';
+  if (f.startsWith('SC TO-T')) return { direction: 'bullish', conviction: amendment ? 40 : 75, reasons: [`Third-party tender offer${amendment ? ' (amended)' : ''}: usually at a premium, but ${note}`] };
+  if (f.startsWith('SC 13E3')) return { direction: 'bullish', conviction: amendment ? 40 : 65, reasons: [`Going-private transaction${amendment ? ' (amended)' : ''}: ${note}`] };
+  if (f.startsWith('SC 14D9')) return { direction: 'mixed', conviction: 35, reasons: ['Board response to a tender offer: read whether it recommends accepting or rejecting'] };
+  if (f.startsWith('SC TO-I')) return { direction: 'bullish', conviction: amendment ? 25 : 35, reasons: ['Issuer tender offer: a company buyback'] };
+  return { direction: 'neutral', conviction: 20, reasons: [`Tender offer filing (${f})`] };
+}
+
+function baseProxyFight(row) {
+  const f = String(row.form_type || '').toUpperCase();
+  const c = f.startsWith('DEFC14A') ? 60 : f.startsWith('PREC14A') ? 55 : 50;
+  return { direction: 'bullish', conviction: c, reasons: [`Dissident proxy campaign (${f}): activist pressure often, but not always, lifts the stock (conviction ${c})`] };
+}
+
 function deriveBase(row) {
-  if (row.filing_type === 'insider') return baseInsider(row);
+  if (row.filing_type === 'sale_notice') return baseSaleNotice(row);
+  if (row.filing_type === 'late_filing') return baseLateFiling(row);
+  if (row.filing_type === 'takeover') return baseTakeover(row);
+  if (row.filing_type === 'proxy_fight') return baseProxyFight(row);
+  if (row.filing_type === 'insider' || row.filing_type === 'ca_insider') return baseInsider(row);
   if (row.filing_type === 'event') return baseEvent(row);
   return baseOwnership(row);
 }
@@ -170,12 +208,14 @@ function buildRating(row, others = []) {
     }
     const activist = others.find((o) => o.filing_type === 'ownership' && String(o.form_type).toUpperCase().includes('13D') && !String(o.form_type).includes('/A'));
     if (activist && base.direction === 'bullish') { adjust += 8; flags.push('New 13D filed recently'); reasons.push('A new 13D was filed recently (+8)'); }
-    const distress = others.find((o) => o.filing_type === 'event' && deriveBase(o).direction === 'bearish' && deriveBase(o).conviction >= 70);
+    const distress = others.find((o) => (o.filing_type === 'event' || o.filing_type === 'late_filing') && deriveBase(o).direction === 'bearish' && deriveBase(o).conviction >= 60);
     if (distress && base.direction === 'bullish') { adjust -= 12; flags.push('Recent distress 8-K'); reasons.push('A distress 8-K is on file recently (-12)'); }
     if (distress && base.direction === 'bearish' && row.accession_no !== distress.accession_no) { adjust += 8; flags.push('Recent distress 8-K'); reasons.push('Another distress 8-K is on file (+8)'); }
   }
 
-  const magnitude = Math.max(0, Math.min(100, base.conviction + adjust));
+  // Soft cap above 85 so several strong filings do not all tie at 100.
+  const raw = Math.max(0, base.conviction + adjust);
+  const magnitude = Math.min(100, raw <= 85 ? raw : 85 + (raw - 85) * 0.4);
   const score = Math.round(sign * magnitude);
   return {
     score,

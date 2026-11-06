@@ -92,7 +92,65 @@ function rulesEvent({ itemCodes = [] }) {
   return result(priority, `Item ${best}: ${label}`);
 }
 
+// Form 144: notice that an insider or affiliate intends to sell. Weak, early bearish signal that arrives before the Form 4.
+function rulesSaleNotice({ value = 0, pctOutstanding = 0, relationship = '', plan = false, soldPast3Months = 0 }) {
+  let p = value >= 50e6 ? 55 : value >= 10e6 ? 45 : value >= 2e6 ? 35 : value >= 500e3 ? 22 : 8;
+  const parts = [`planned sale of about ${money(value)}`];
+  if (pctOutstanding >= 1) { p += 8; parts.push(`${pctOutstanding.toFixed(1)}% of shares outstanding`); }
+  else if (pctOutstanding >= 0.2) parts.push(`${pctOutstanding.toFixed(2)}% of shares outstanding`);
+  if (/officer|director|chief|ceo|cfo|president/i.test(relationship) && value >= 2e6) { p += 5; parts.push('by an officer or director'); }
+  else if (relationship) parts.push(`by ${/^[aeiou]/i.test(relationship) ? 'an' : 'a'} ${relationship.toLowerCase()}`);
+  if (soldPast3Months >= value && soldPast3Months > 0) { p += 5; parts.push(`after ${money(soldPast3Months)} already sold in 3 months`); }
+  if (plan) { p -= 10; parts.push('under a 10b5-1 plan'); }
+  return result(p, `Form 144: ${parts.join(', ')}`);
+}
+
+// NT 10-K / NT 10-Q: the company says it cannot file its report on time.
+function rulesLateFiling({ formType = '' }) {
+  const annual = /NT 10-K/i.test(formType);
+  return result(annual ? 60 : 55, `Late filing notice (${String(formType).toUpperCase()}): the company says it cannot file its ${annual ? 'annual' : 'quarterly'} report on time`);
+}
+
+// Tender offers and going-private transactions, keyed by form type.
+function rulesTakeover({ formType = '' }) {
+  const f = String(formType).toUpperCase();
+  const amendment = f.includes('/A');
+  if (f.startsWith('SC TO-T')) return result(amendment ? 50 : 85, `${amendment ? 'Amended' : 'New'} third-party tender offer for the company (often at a premium)`);
+  if (f.startsWith('SC 13E3')) return result(amendment ? 55 : 80, `${amendment ? 'Amended' : 'New'} going-private transaction filing`);
+  if (f.startsWith('SC 14D9')) return result(amendment ? 45 : 70, `${amendment ? 'Amended' : 'New'} board response to a tender offer`);
+  if (f.startsWith('SC TO-I')) return result(amendment ? 30 : 45, `${amendment ? 'Amended' : 'New'} issuer tender offer (a buyback)`);
+  return result(35, `Tender offer filing (${f})`);
+}
+
+// Contested proxies and dissident solicitations, keyed by form type.
+function rulesProxyFight({ formType = '' }) {
+  const f = String(formType).toUpperCase();
+  if (f.startsWith('DFAN14A')) return result(60, 'Dissident soliciting material: an activist is campaigning against the board');
+  if (f.startsWith('DEFC14A')) return result(70, 'Definitive proxy statement from a dissident: a contested election is under way');
+  if (f.startsWith('PREC14A')) return result(65, 'Preliminary proxy statement from a dissident: a contested election is being set up');
+  return result(40, `Proxy contest filing (${f})`);
+}
+
+// Canadian insider trades from SEDI (CAD amounts), same shape as the US Form 4 rules.
+function rulesCaInsider(input) {
+  const r = rulesInsider(input);
+  return { ...r, reason: `${r.reason} (CAD, SEDI)` };
+}
+
+function money(value) {
+  const v = Number(value) || 0;
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `$${Math.round(v / 1e3)}K`;
+  return `$${Math.round(v)}`;
+}
+
 function rulesPriority(typeKey, input) {
+  if (typeKey === 'sale_notice') return rulesSaleNotice(input);
+  if (typeKey === 'late_filing') return rulesLateFiling(input);
+  if (typeKey === 'takeover') return rulesTakeover(input);
+  if (typeKey === 'proxy_fight') return rulesProxyFight(input);
+  if (typeKey === 'ca_insider') return rulesCaInsider(input);
   if (typeKey === 'ownership') return rulesOwnership(input);
   if (typeKey === 'insider') return rulesInsider(input);
   if (typeKey === 'event') return rulesEvent(input);

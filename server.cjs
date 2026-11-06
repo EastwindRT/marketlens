@@ -3967,7 +3967,8 @@ const FILING_SIGNAL_COLUMNS =
 // separately from the automatic score and never change it.
 const FINDING_COLUMNS = 'id,accession_no,author,verdict,confidence,summary,details,sources,created_at,updated_at';
 const FINDING_VERDICTS = ['bullish', 'bearish', 'neutral', 'watch', 'dismiss'];
-const ACCESSION_RE = /^\d{10}-\d{2}-\d{6}$/;
+// SEC accession numbers, or the synthetic ids used for SEDI groups: sedi:<symbol>:<filing date>:<insider slug>.
+const ACCESSION_RE = /^(\d{10}-\d{2}-\d{6}|sedi:[A-Z0-9.\-]{1,12}:\d{4}-\d{2}-\d{2}:[a-z0-9\-]{1,60})$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function cleanText(value, max) {
@@ -4420,10 +4421,265 @@ async function discoverEventCandidates({ maxNew, dryRun }) {
   return { candidates, stats: { listed: items.length, unseen: unseen.length, skipped: routine.length } };
 }
 
+
+// ── Additional US forms (rules only): Form 144 sale notices, NT 10-K/10-Q late filings, tender offers,
+// contested proxies. Low-volume forms are read from the SEC's per-form "current filings" atom feeds, whose
+// titles carry each party's role: "<FORM> - <Name> (<CIK>) (Subject|Filed by|Filer|Reporting)".
+
+const ATOM_FORM_TYPES = {
+  late_filing: { forms: ['NT 10-K', 'NT 10-Q'], pages: 3 },
+  takeover: { forms: ['SC TO-T', 'SC 14D9', 'SC 13E3'], pages: 1 },
+  proxy_fight: { forms: ['DFAN14A', 'DEFC14A', 'PREC14A'], pages: 1 },
+};
+
+function tickerForCik(directory, cik) {
+  if (!directory?.byCik || !cik) return null;
+  return (directory.byCik.get(String(cik)) || directory.byCik.get(String(Number(cik))) || null)?.ticker || null;
+}
+
+async function fetchAtomFormEntries(formType, page) {
+  const atom = await httpsGet(
+    `https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent(formType)}&owner=include&count=${TRIAGE_ATOM_PAGE_SIZE}&start=${page * TRIAGE_ATOM_PAGE_SIZE}&output=atom`,
+    { 'User-Agent': SEC_UA, Accept: 'application/atom+xml,application/xml,text/xml' }
+  );
+  const entries = [];
+  for (const match of atom.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)) {
+    const block = match[1];
+    const title = htmlDecode(block.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '');
+    const href = htmlDecode(block.match(/<link[^>]*href="([^"]+)"/i)?.[1] || '');
+    const summary = htmlDecode(block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i)?.[1] || '').replace(/<[^>]+>/g, ' ');
+    const t = title.match(/^(.+?)\s+-\s+(.+?)\s+\((\d{6,10})\)\s+\((Subject|Filed by|Filer|Reporting|Issuer)\)$/i);
+    const accessionNo = summary.match(/AccNo:\s*([\d-]+)/i)?.[1];
+    const filedDate = summary.match(/Filed:\s*(\d{4}-\d{2}-\d{2})/i)?.[1];
+    if (!t || !accessionNo || !filedDate) continue;
+    entries.push({ form: t[1].trim().toUpperCase(), name: t[2].trim(), cik: t[3], role: t[4].toLowerCase(), accessionNo, filedDate, href });
+  }
+  return entries;
+}
+
+function groupByAccession(entries) {
+  const byAccession = new Map();
+  for (const e of entries) {
+    const g = byAccession.get(e.accessionNo) || { accessionNo: e.accessionNo, form: e.form, filedDate: e.filedDate, href: e.href, subject: null, other: null };
+    if (e.role === 'subject' || e.role === 'issuer' || e.role === 'filer') g.subject = g.subject || e;
+    else g.other = g.other || e;
+    byAccession.set(e.accessionNo, g);
+  }
+  return [...byAccession.values()];
+}
+
+async function discoverAtomFormCandidates(typeKey, { maxNew, dryRun }) {
+  const cfg = ATOM_FORM_TYPES[typeKey];
+  const entries = [];
+  let sourceError = null;
+  for (const form of cfg.forms) {
+    for (let page = 0; page < cfg.pages; page += 1) {
+      let batch = [];
+      try {
+        batch = await fetchAtomFormEntries(form, page);
+      } catch (err) {
+        sourceError = err;
+        console.error(`[triage ${form} atom page ${page}]`, err.message);
+        break;
+      }
+      if (!batch.length) break;
+      entries.push(...batch);
+      if (batch.length < TRIAGE_ATOM_PAGE_SIZE) break;
+    }
+  }
+  if (!entries.length && sourceError) throw new Error(`${cfg.forms.join('/')} feeds unavailable: ${describeError(sourceError)}`);
+
+  const grouped = groupByAccession(entries).sort(byNewest);
+  const seen = await getSeenAccessionNumbers(grouped.map((g) => g.accessionNo));
+  const unseen = grouped.filter((g) => !seen.has(g.accessionNo));
+  const directory = unseen.length ? await loadSecCompanyTickerDirectory().catch(() => null) : null;
+  // Only listed companies matter here: private funds and shells (no ticker) are recorded as skipped.
+  const resolved = unseen.slice(0, maxNew * 3).map((g) => {
+    const subject = g.subject || g.other;
+    return { g, subject, symbol: tickerForCik(directory, subject?.cik) };
+  });
+  const unlisted = resolved.filter((r) => !r.symbol);
+  if (!dryRun) await markAccessionsSeen(unlisted.map((r) => ({ accession_no: r.g.accessionNo, filing_type: typeKey, outcome: 'skipped' })));
+  const candidates = resolved.filter((r) => r.symbol).slice(0, maxNew).map(({ g, subject, symbol }) => {
+    return {
+      accessionNo: g.accessionNo,
+      formType: g.form,
+      filedDate: g.filedDate,
+      filingUrl: g.href,
+      symbol,
+      subjectCompany: subject?.name || '',
+      subjectCik: subject?.cik || null,
+      filerName: (g.other || subject)?.name || '',
+      sector: null,
+      industry: null,
+      context: {},
+      ruleInput: { formType: g.form },
+      loadState: async () => '',
+    };
+  });
+  return { candidates, stats: { listed: grouped.length, unseen: unseen.length, skipped: unlisted.length } };
+}
+
+function xmlField(xml, tag) {
+  return xml.match(new RegExp(`<(?:\\w+:)?${tag}>\\s*([^<]*?)\\s*</(?:\\w+:)?${tag}>`, 'i'))?.[1] || '';
+}
+
+function parseForm144(text) {
+  const xml = text.match(/<(?:\w+:)?edgarSubmission[\s\S]*?<\/(?:\w+:)?edgarSubmission>/i)?.[0];
+  if (!xml) return null;
+  const value = Number(xmlField(xml, 'aggregateMarketValue')) || 0;
+  const units = Number(xmlField(xml, 'noOfUnitsSold')) || 0;
+  const outstanding = Number(xmlField(xml, 'noOfUnitsOutstanding')) || 0;
+  const relationships = [...xml.matchAll(/<(?:\w+:)?relationshipToIssuer>\s*([^<]*?)\s*</gi)].map((m) => m[1]).filter(Boolean);
+  const pastSales = [...xml.matchAll(/<(?:\w+:)?grossProceeds>\s*([^<]*?)\s*</gi)].reduce((sum, m) => sum + (Number(m[1]) || 0), 0);
+  return {
+    issuerCik: xmlField(xml, 'issuerCik'),
+    issuerName: htmlDecode(xmlField(xml, 'issuerName')),
+    person: htmlDecode(xmlField(xml, 'nameOfPersonForWhoseAccountTheSecuritiesAreToBeSold')),
+    relationship: relationships.join(', '),
+    shares: units,
+    value,
+    pctOutstanding: outstanding > 0 ? (units / outstanding) * 100 : 0,
+    soldPast3Months: pastSales,
+    plan: /planAdoptionDate/i.test(xml),
+  };
+}
+
+async function discoverSaleNoticeCandidates({ maxNew, dryRun }) {
+  const merged = new Map();
+  let sourceError = null;
+  for (let page = 0; page < TRIAGE_ATOM_MAX_PAGES; page += 1) {
+    let batch = [];
+    try {
+      batch = await fetchAtomFormEntries('144', page);
+    } catch (err) {
+      sourceError = err;
+      console.error(`[triage 144 atom page ${page}]`, err.message);
+      break;
+    }
+    if (!batch.length) break;
+    for (const g of groupByAccession(batch)) {
+      const issuer = g.subject || g.other;
+      if (issuer && !merged.has(g.accessionNo)) merged.set(g.accessionNo, { accession: g.accessionNo, cik: issuer.cik, filedDate: g.filedDate, href: g.href });
+    }
+  }
+  const indexed = await fetchDailyIndexEntries(TRIAGE_INDEX_DAYS, (form) => form === '144').catch((err) => { sourceError = sourceError || err; return []; });
+  for (const e of indexed) {
+    if (!merged.has(e.accession)) merged.set(e.accession, { accession: e.accession, cik: e.cik, filedDate: e.filedDate, href: indexPageUrl(e) });
+  }
+  if (!merged.size && sourceError) throw new Error(`Form 144 sources unavailable: ${describeError(sourceError)}`);
+
+  const entries = [...merged.values()].sort(byNewest);
+  const seen = await getSeenAccessionNumbers(entries.map((e) => e.accession));
+  const unseen = entries.filter((e) => !seen.has(e.accession));
+  const directory = unseen.length ? await loadSecCompanyTickerDirectory().catch(() => null) : null;
+
+  const candidates = [];
+  const skipped = [];
+  for (const entry of unseen.slice(0, maxNew * 2)) {
+    let parsed = null;
+    try {
+      const text = await httpsGet(`https://www.sec.gov/Archives/edgar/data/${Number(entry.cik)}/${entry.accession}.txt`, { 'User-Agent': SEC_UA, Accept: 'text/plain,application/xml,text/xml' });
+      parsed = parseForm144(text);
+    } catch (err) {
+      console.error(`[triage 144 ${entry.accession}]`, describeError(err));
+    }
+    if (!parsed || !parsed.value) {
+      // Unreadable or empty notices (and transient SEC errors) are retried once before being recorded as skipped.
+      const attempts = (triageEmptyAttempts.get(entry.accession) || 0) + 1;
+      triageEmptyAttempts.set(entry.accession, attempts);
+      if (attempts >= 2) skipped.push({ accession_no: entry.accession, filing_type: 'sale_notice', outcome: 'skipped' });
+      continue;
+    }
+    const symbol = tickerForCik(directory, parsed.issuerCik || entry.cik);
+    if (!symbol) { skipped.push({ accession_no: entry.accession, filing_type: 'sale_notice', outcome: 'skipped' }); continue; }
+    if (candidates.length >= maxNew) break;
+    candidates.push({
+      accessionNo: entry.accession,
+      formType: '144',
+      filedDate: entry.filedDate,
+      filingUrl: entry.href,
+      symbol,
+      subjectCompany: parsed.issuerName,
+      subjectCik: parsed.issuerCik || entry.cik,
+      filerName: parsed.person,
+      sector: null,
+      industry: null,
+      context: {},
+      ruleInput: { value: parsed.value, pctOutstanding: parsed.pctOutstanding, relationship: parsed.relationship, plan: parsed.plan, soldPast3Months: parsed.soldPast3Months },
+      signalFields: { total_value: Math.round(parsed.value), shares: parsed.shares, pct_outstanding: Math.round(parsed.pctOutstanding * 100) / 100, relationship: parsed.relationship || null, plan: parsed.plan, sold_past_3_months: Math.round(parsed.soldPast3Months) },
+      loadState: async () => '',
+    });
+  }
+  if (!dryRun) await markAccessionsSeen(skipped);
+  return { candidates, stats: { listed: entries.length, unseen: unseen.length, skipped: skipped.length } };
+}
+
+
+// ── Canadian insider trades (SEDI via TMX), rules only. The existing Insider $ data is grouped into one
+// "filing" per insider, ticker and filing date, and run through the same insider rules (amounts are CAD).
+function slugName(value) {
+  return String(value || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'unknown';
+}
+
+async function discoverCaInsiderCandidates({ maxNew, dryRun }) {
+  let trades = caInsiderCaches['7-insiders']?.trades;
+  if (!trades?.length && hasMarketDataDb()) trades = await readCaInsiderTradesFromDb(7, 'insiders').catch(() => []);
+  if (!trades?.length) trades = (await buildCaInsiderCache(7, 'insiders'))?.trades || [];
+
+  const groups = new Map();
+  for (const t of trades) {
+    if (t.type !== 'BUY' && t.type !== 'SELL') continue;
+    if (!t.filingDate || !t.symbol) continue;
+    const key = `sedi:${t.symbol}:${t.filingDate}:${slugName(t.insiderName)}`;
+    const g = groups.get(key) || { key, symbol: t.symbol, company: t.companyName, insider: t.insiderName, title: t.title || '', filingDate: t.filingDate, buy: 0, sell: 0 };
+    if (t.type === 'BUY') g.buy += t.totalValue || 0;
+    else g.sell += t.totalValue || 0;
+    groups.set(key, g);
+  }
+  const all = [...groups.values()].sort((a, b) => String(b.filingDate).localeCompare(String(a.filingDate)));
+
+  const buyersBySymbol = new Map();
+  for (const g of all) {
+    if (g.buy <= 0) continue;
+    if (!buyersBySymbol.has(g.symbol)) buyersBySymbol.set(g.symbol, new Set());
+    buyersBySymbol.get(g.symbol).add(g.insider);
+  }
+
+  const seen = await getSeenAccessionNumbers(all.map((g) => g.key));
+  const unseen = all.filter((g) => !seen.has(g.key));
+  const candidates = unseen.slice(0, maxNew).map((g) => {
+    const clusterBuy = g.buy > 0 && (buyersBySymbol.get(g.symbol)?.size || 0) >= INSIDER_CLUSTER_MIN;
+    const isExecutive = /chief|\bceo\b|\bcfo\b|\bcoo\b|president|chair/i.test(g.title);
+    return {
+      accessionNo: g.key,
+      formType: 'SEDI',
+      filedDate: g.filingDate,
+      filingUrl: `https://money.tmx.com/en/quote/${encodeURIComponent(g.symbol.replace(/\.TO$/i, ''))}`,
+      symbol: g.symbol,
+      subjectCompany: g.company,
+      subjectCik: null,
+      filerName: g.insider,
+      sector: null,
+      industry: null,
+      context: {},
+      ruleInput: { buyValue: g.buy, sellValue: g.sell, clusterBuy, isExecutive },
+      signalFields: { total_value: Math.round(g.buy + g.sell), cluster_buy: clusterBuy, is_executive: isExecutive, currency: 'CAD', relationship: g.title || null },
+      loadState: async () => '',
+    };
+  });
+  return { candidates, stats: { listed: all.length, unseen: unseen.length, skipped: 0 } };
+}
+
 const FILING_DISCOVERERS = {
   ownership: discoverOwnershipCandidates,
   insider: discoverInsiderCandidates,
   event: discoverEventCandidates,
+  sale_notice: discoverSaleNoticeCandidates,
+  late_filing: (opts) => discoverAtomFormCandidates('late_filing', opts),
+  takeover: (opts) => discoverAtomFormCandidates('takeover', opts),
+  proxy_fight: (opts) => discoverAtomFormCandidates('proxy_fight', opts),
+  ca_insider: discoverCaInsiderCandidates,
 };
 
 async function saveTriageRow(typeKey, candidate, row) {
@@ -4464,6 +4720,7 @@ function buildRuleVerdict(typeKey, candidate, stateText) {
     signals.total_value = Math.round((input.buyValue || 0) + (input.sellValue || 0)) || null;
   }
   if (typeKey === 'event') signals.items = (input.itemCodes || []).join(',');
+  Object.assign(signals, candidate.signalFields || {});
   return { verdict, signals };
 }
 
@@ -4490,7 +4747,7 @@ async function triageCandidate(typeKey, candidate) {
   const { verdict, signals: ruleSignals } = buildRuleVerdict(typeKey, candidate, stateText || '');
 
   // Noise: recorded as seen so it is never re-fetched, but not stored in the feed.
-  if (FILING_TRIAGE_MODE !== 'jev' && verdict.priority < TRIAGE_NOISE_FLOOR) {
+  if ((FILING_TRIAGE_MODE !== 'jev' || def.rulesOnly) && verdict.priority < TRIAGE_NOISE_FLOOR) {
     await markAccessionsSeen([{ accession_no: candidate.accessionNo, filing_type: typeKey, outcome: 'skipped' }]);
     return { tokens: 0, escalated: false, noise: true };
   }
@@ -4508,7 +4765,7 @@ async function triageCandidate(typeKey, candidate) {
     llm_model: null,
   };
 
-  if (FILING_TRIAGE_MODE === 'rules') {
+  if (FILING_TRIAGE_MODE === 'rules' || def.rulesOnly) {
     await saveTriageRow(typeKey, candidate, rulesRow);
     return { tokens: 0, escalated: false };
   }
@@ -4649,7 +4906,7 @@ function parseSymbolsParam(value) {
 
 function parseTypesParam(value) {
   if (!value) return null;
-  const wanted = String(value).split(',').map((s) => s.trim()).filter((s) => FILING_TYPES[s]);
+  const wanted = String(value).split(',').map((s) => s.trim()).filter((s) => FILING_TYPES[s] && FILING_DISCOVERERS[s]);
   return wanted.length ? wanted : null;
 }
 
@@ -4681,7 +4938,7 @@ app.get('/api/filings/feed', async (req, res) => {
 app.get('/api/filings/findings', async (req, res) => {
   try {
     const accession = req.query.accession_no ? String(req.query.accession_no) : null;
-    if (accession && !ACCESSION_RE.test(accession)) return res.status(400).json({ error: 'accession_no must look like 0001104659-26-120752' });
+    if (accession && !ACCESSION_RE.test(accession)) return res.status(400).json({ error: 'accession_no must look like 0001104659-26-120752 (or sedi:SYMBOL.TO:YYYY-MM-DD:insider-name)' });
     const findings = await listFindings({
       accessionNo: accession,
       symbol: req.query.symbol ? normalizeSymbol(String(req.query.symbol)) : null,
@@ -4744,7 +5001,7 @@ app.post('/api/filings/classify', async (req, res) => {
   if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin access required' });
   const typeKey = String(req.body?.type || '');
   const text = String(req.body?.text || '');
-  if (!FILING_TYPES[typeKey]) return res.status(400).json({ error: `type must be one of ${Object.keys(FILING_TYPES).join(', ')}` });
+  if (!FILING_TYPES[typeKey] || FILING_TYPES[typeKey].rulesOnly) return res.status(400).json({ error: `type must be one of ${Object.keys(FILING_TYPES).filter((k) => !FILING_TYPES[k].rulesOnly).join(', ')} (the other types are scored by rules only)` });
   if (text.trim().length < 20) return res.status(400).json({ error: 'text is required' });
   if (FILING_CLASSIFIER === 'none') return res.status(503).json({ ok: false, classifier: 'none', error: 'No classifier configured (set OPENROUTER_API_KEY or TYPESAFE_API_KEY)' });
   try {
@@ -4885,7 +5142,7 @@ const MCP_TOOLS = [
     },
     handler: async (a) => {
       const accession = String(a.accession_no || '').trim();
-      if (!/^\d{10}-\d{2}-\d{6}$/.test(accession)) throw new Error('accession_no must look like 0001104659-26-120752');
+      if (!/^\d{10}-\d{2}-\d{6}$/.test(accession)) throw new Error('accession_no must look like 0001104659-26-120752 (or sedi:SYMBOL.TO:YYYY-MM-DD:insider-name)');
       const filing = await getFilingByAccession(accession);
       if (!filing) throw new Error(`No triaged filing found for ${accession}`);
       return filing;
@@ -4928,7 +5185,7 @@ const MCP_TOOLS = [
     },
     handler: async (a) => {
       const accession = a.accession_no ? String(a.accession_no).trim() : null;
-      if (accession && !ACCESSION_RE.test(accession)) throw new Error('accession_no must look like 0001104659-26-120752');
+      if (accession && !ACCESSION_RE.test(accession)) throw new Error('accession_no must look like 0001104659-26-120752 (or sedi:SYMBOL.TO:YYYY-MM-DD:insider-name)');
       const findings = await listFindings({
         accessionNo: accession,
         symbol: a.symbol ? normalizeSymbol(String(a.symbol)) : null,
@@ -4955,7 +5212,7 @@ const MCP_TOOLS = [
     handler: async (a, ctx) => {
       requireWrite(ctx);
       const accession = String(a.accession_no || '').trim();
-      if (!ACCESSION_RE.test(accession)) throw new Error('accession_no must look like 0001104659-26-120752');
+      if (!ACCESSION_RE.test(accession)) throw new Error('accession_no must look like 0001104659-26-120752 (or sedi:SYMBOL.TO:YYYY-MM-DD:insider-name)');
       const filing = await getFilingByAccession(accession);
       if (!filing) throw new Error(`No triaged filing found for ${accession}; findings can only be added to filings in the feed`);
       const fields = cleanFindingFields(a, { partial: false });
