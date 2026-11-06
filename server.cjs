@@ -387,11 +387,16 @@ async function writeCaInsiderTradesToDb(trades) {
     updated_at: new Date().toISOString(),
   }));
 
-  const { error } = await serverSupabase
-    .from('ca_insider_filings')
-    .upsert(rows, { onConflict: 'id' });
-  if (error) {
-    throw new Error(`ca insider db write failed: ${error.message}`);
+  // One upsert statement cannot contain the same conflict key twice ("cannot affect row a second time"),
+  // and SEDI data repeats ids, so keep the last row per id and write in chunks.
+  const unique = [...new Map(rows.map((row) => [row.id, row])).values()];
+  for (let i = 0; i < unique.length; i += 200) {
+    const { error } = await serverSupabase
+      .from('ca_insider_filings')
+      .upsert(unique.slice(i, i + 200), { onConflict: 'id' });
+    if (error) {
+      throw new Error(`ca insider db write failed: ${error.message}`);
+    }
   }
 }
 
@@ -2347,11 +2352,16 @@ async function buildCaInsiderCache(days, mode) {
         || ((b.totalValue || 0) - (a.totalValue || 0))
       );
 
+      // Persisting is best effort: a failed write must not stop the in-memory cache from being served.
       if (hasMarketDataDb()) {
-        if (allTrades.length) {
-          await writeCaInsiderTradesToDb(allTrades);
+        try {
+          if (allTrades.length) {
+            await writeCaInsiderTradesToDb(allTrades);
+          }
+          await setMarketDataSyncState(MARKET_DATA_DATASETS.caInsiders(days, mode), allTrades.length);
+        } catch (dbErr) {
+          console.error(`[ca-insider-db:${cacheKey}]`, dbErr.message);
         }
-        await setMarketDataSyncState(MARKET_DATA_DATASETS.caInsiders(days, mode), allTrades.length);
       }
 
       caInsiderCaches[cacheKey] = { trades: allTrades };
