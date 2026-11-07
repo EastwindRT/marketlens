@@ -3144,6 +3144,60 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── Access control for routes that spend paid AI quota ───────────────────────
+// These routes call Anthropic/Groq with the server's keys, so they require a verified signed-in session
+// (any signed-in user, the owner, or the MCP key) and are rate limited: per user per hour and per day, plus a
+// site-wide daily cap that bounds the worst-case bill. The owner and the MCP key skip the per-user limits
+// but still count toward the site cap. In-memory counters reset on restart, which only loosens the limits briefly.
+const AI_USER_HOURLY_LIMIT = Math.max(1, parseInt(process.env.AI_USER_HOURLY_LIMIT || '20', 10) || 20);
+const AI_USER_DAILY_LIMIT = Math.max(1, parseInt(process.env.AI_USER_DAILY_LIMIT || '80', 10) || 80);
+const AI_GLOBAL_DAILY_LIMIT = Math.max(1, parseInt(process.env.AI_GLOBAL_DAILY_LIMIT || '400', 10) || 400);
+const aiUsage = { day: '', global: 0, byUser: new Map() };
+
+async function authenticateAiUser(req) {
+  const owner = await authorizeAdmin(req);
+  if (owner.ok) return { ok: true, id: `owner:${owner.who}`, owner: true };
+  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  if (!bearer || !serverSupabase) return { ok: false };
+  try {
+    const { data, error } = await serverSupabase.auth.getUser(bearer);
+    if (!error && data?.user?.id) return { ok: true, id: data.user.id, owner: false };
+  } catch (err) {
+    console.error('[ai-auth]', describeError(err));
+  }
+  return { ok: false };
+}
+
+async function requireAiAccess(req, res, next) {
+  try {
+    const user = await authenticateAiUser(req);
+    if (!user.ok) return res.status(401).json({ error: 'Sign in to use AI features.' });
+
+    const now = Date.now();
+    const day = new Date(now).toISOString().slice(0, 10);
+    if (aiUsage.day !== day) { aiUsage.day = day; aiUsage.global = 0; aiUsage.byUser.clear(); }
+    if (aiUsage.global >= AI_GLOBAL_DAILY_LIMIT) {
+      return res.status(429).json({ error: "The site's daily AI limit has been reached. Try again tomorrow." });
+    }
+    if (!user.owner) {
+      const stamps = (aiUsage.byUser.get(user.id) || []).filter((t) => now - t < 24 * 3600 * 1000);
+      const lastHour = stamps.filter((t) => now - t < 3600 * 1000).length;
+      if (lastHour >= AI_USER_HOURLY_LIMIT || stamps.length >= AI_USER_DAILY_LIMIT) {
+        const wait = lastHour >= AI_USER_HOURLY_LIMIT ? 3600 : 6 * 3600;
+        res.set('Retry-After', String(wait));
+        return res.status(429).json({ error: 'You have reached your AI usage limit. Try again later.' });
+      }
+      stamps.push(now);
+      aiUsage.byUser.set(user.id, stamps);
+    }
+    aiUsage.global += 1;
+    next();
+  } catch (err) {
+    console.error('[ai-access]', describeError(err));
+    res.status(500).json({ error: 'Could not verify access' });
+  }
+}
+
 // AI response cache — keyed by hash of (symbol, question, context-summary).
 // Identical repeat questions are common (reloading the tab, etc.) — 15min TTL.
 const AI_CACHE_TTL = 15 * 60 * 1000;
@@ -3639,7 +3693,7 @@ function buildDeepNewsContext(news, symbol) {
   return parts.join('\n');
 }
 
-app.post('/api/deep-analyze', async (req, res) => {
+app.post('/api/deep-analyze', requireAiAccess, async (req, res) => {
   const { type, symbol, context, filing, news, focus } = req.body ?? {};
 
   if (!type || !['stock', 'filing', 'news'].includes(type)) {
@@ -3691,7 +3745,7 @@ app.post('/api/deep-analyze', async (req, res) => {
   }
 });
 
-app.post('/api/analyze-filing', async (req, res) => {
+app.post('/api/analyze-filing', requireAiAccess, async (req, res) => {
   const { edgarUrl } = req.body ?? {};
 
   if (!edgarUrl || typeof edgarUrl !== 'string')
@@ -5497,7 +5551,7 @@ function buildInsiderSummary(symbol, trades) {
   return lines.join('\n');
 }
 
-app.post('/api/analyze-insiders', async (req, res) => {
+app.post('/api/analyze-insiders', requireAiAccess, async (req, res) => {
   const { symbol, trades } = req.body ?? {};
 
   if (!symbol || typeof symbol !== 'string')
@@ -5578,7 +5632,7 @@ function buildCongressSummary(trades) {
   return lines.join('\n');
 }
 
-app.post('/api/analyze-congress', async (req, res) => {
+app.post('/api/analyze-congress', requireAiAccess, async (req, res) => {
   const { trades } = req.body ?? {};
 
   if (!Array.isArray(trades))
@@ -5975,9 +6029,12 @@ function buildAskStockContext(symbol, context, intelligence) {
   };
 }
 
-app.post('/api/ask-stock', async (req, res) => {
+app.post('/api/ask-stock', requireAiAccess, async (req, res) => {
   const { question, symbol, context, history } = req.body ?? {};
   if (!question || !symbol) return res.status(400).json({ error: 'Missing question or symbol' });
+  if (typeof question !== 'string' || question.length > 1500 || typeof symbol !== 'string' || symbol.length > 16) {
+    return res.status(400).json({ error: 'question must be under 1,500 characters and symbol under 16' });
+  }
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;

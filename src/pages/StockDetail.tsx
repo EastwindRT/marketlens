@@ -1,3 +1,4 @@
+import { authedFetch } from '../api/authedFetch';
 import { lazy, Suspense, useRef, useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { Plus, Check, RefreshCw, Send, Bot } from 'lucide-react';
@@ -999,7 +1000,7 @@ function StockAIChat({ symbol, context }: {
         role: message.role === 'ai' ? 'assistant' : 'user',
         content: message.text,
       }));
-      const res = await fetch('/api/ask-stock', {
+      const res = await authedFetch('/api/ask-stock', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question, symbol, context, history }),

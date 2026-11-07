@@ -54,6 +54,14 @@ read of one specific filing:
 - Quota: calls count against `FILING_TRIAGE_LLM_DAILY_BUDGET` (default 45, free accounts get ~50/day); when it is used up the button
   returns a clear "try later" message.
 
+## Access control for paid AI routes
+
+`POST /api/deep-analyze`, `/api/ask-stock`, `/api/analyze-filing`, `/api/analyze-insiders` and `/api/analyze-congress` call Anthropic or Groq
+with the server's keys. They require a verified Supabase session (any signed-in user), the owner, or the MCP key; the browser sends the
+session token through `src/api/authedFetch.ts`. Limits (in-memory, reset on restart): `AI_USER_HOURLY_LIMIT` (20) and `AI_USER_DAILY_LIMIT`
+(80) per user, and a site-wide `AI_GLOBAL_DAILY_LIMIT` (400) that also applies to the owner. The owner and the MCP key skip the per-user
+limits. `ask-stock` rejects questions over 1,500 characters. Before 2026-11-06 these routes were open to the internet.
+
 ## Classifiers: Jev or a free OpenRouter model
 
 The text-aware scorer is chosen by `FILING_TRIAGE_CLASSIFIER` (`jev` | `llm` | `none`), or inferred from keys:

@@ -1,3 +1,4 @@
+import { authedFetch } from '../../api/authedFetch';
 import { useEffect, useState } from 'react';
 import { X, Sparkles, RotateCcw, Copy, Check } from 'lucide-react';
 import type { MarketFiling } from '../../api/edgar';
@@ -180,7 +181,7 @@ export function DeepAnalyzeDrawer({ open, onClose, target }: Props) {
         target.type === 'filing' ? { type: 'filing', filing: target.filing } :
                                    { type: 'news',   symbol: target.symbol, news: target.news };
 
-      const res = await fetch('/api/deep-analyze', {
+      const res = await authedFetch('/api/deep-analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

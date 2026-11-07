@@ -1,3 +1,4 @@
+import { authedFetch } from '../../api/authedFetch';
 import { useState, useEffect } from 'react';
 import { ChevronDown, ChevronUp, Sparkles, TrendingUp, TrendingDown, Minus, AlertTriangle, RotateCcw } from 'lucide-react';
 import type { InsiderTransaction, OHLCVBar } from '../../api/types';
@@ -65,7 +66,7 @@ function InsiderAICard({
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/analyze-insiders', {
+      const res = await authedFetch('/api/analyze-insiders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol, trades: transactions }),

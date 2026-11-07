@@ -1,3 +1,4 @@
+import { authedFetch } from '../../api/authedFetch';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { ExternalLink, X, Sparkles, RotateCcw } from 'lucide-react';
 import type { MarketFiling } from '../../api/edgar';
@@ -216,7 +217,7 @@ export function FilingSheet({ filing, onClose }: FilingSheetProps) {
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/analyze-filing', {
+      const res = await authedFetch('/api/analyze-filing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ edgarUrl: filing.edgarUrl }),
