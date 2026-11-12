@@ -1,4 +1,6 @@
 import { authedFetch } from '../api/authedFetch';
+import { bridge } from '../api/claudeBridge';
+import stockAskInstructions from '../../shared/stockAskInstructions.json';
 import { lazy, Suspense, useRef, useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { Plus, Check, RefreshCw, Send, Bot } from 'lucide-react';
@@ -985,6 +987,26 @@ function StockAIChat({ symbol, context }: {
   const [isOpen, setIsOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // "Use my Claude Code": answers come from the owner's own Claude Code through the local claude-bridge helper.
+  // Owner mode (visit once with ?bridge=1) waits up to 30 s for the browser's local-network prompt; everyone else
+  // gets a 1 s check, so the option only appears for people who run the bridge.
+  const [bridgeState, setBridgeState] = useState<'off' | 'unpaired' | 'paired'>('off');
+  const [useBridge, setUseBridge] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      if (new URLSearchParams(window.location.search).get('bridge') === '1') bridge.want(true);
+    } catch { /* ignore */ }
+    bridge.status(bridge.wanted() ? 30_000 : 1000).then((st) => { if (!cancelled) setBridgeState(st); });
+    return () => { cancelled = true; };
+  }, []);
+  const pairBridge = useCallback(() => {
+    const token = window.prompt('Paste the pairing token printed by the bridge (node bridge.mjs):');
+    if (!token?.trim()) return;
+    bridge.pair(token);
+    bridge.status(5000).then(setBridgeState);
+  }, []);
+
   // Scroll to bottom on new message
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
@@ -996,6 +1018,31 @@ function StockAIChat({ symbol, context }: {
     setMessages(prev => [...prev, { role: 'user', text: question }]);
     setLoading(true);
     try {
+      if (bridgeState === 'paired' && useBridge) {
+        try {
+          // Only the question, this page's context, recent history and the shared instructions leave the browser.
+          const pairs: { q: string; a: string }[] = [];
+          for (let i = 0; i + 1 < messages.length; i++) {
+            if (messages[i].role === 'user' && messages[i + 1].role === 'ai') pairs.push({ q: messages[i].text, a: messages[i + 1].text.slice(0, 2500) });
+          }
+          const bars = (context.candles ?? []).slice(-90).map((b) => ({ t: b.time, o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume }));
+          const answer = await bridge.ask({
+            question,
+            context: { symbol, ...context, candles: bars, insiders: (context.insiders ?? []).slice(0, 25), news: (context.news ?? []).slice(0, 12) },
+            history: pairs.slice(-4),
+            system: `${stockAskInstructions.opening.replace('{company}', context.companyName || symbol)}
+
+${stockAskInstructions.body}`,
+          });
+          setMessages(prev => [...prev, { role: 'ai', text: `_Answered by your Claude Code_
+
+${answer}` }]);
+          return;
+        } catch (bridgeErr) {
+          const why = bridgeErr instanceof Error ? bridgeErr.message : 'unavailable';
+          setMessages(prev => [...prev, { role: 'ai', text: `_Your Claude Code could not answer (${why}). Using the server AI instead._` }]);
+        }
+      }
       const history = messages.slice(-6).map((message) => ({
         role: message.role === 'ai' ? 'assistant' : 'user',
         content: message.text,
@@ -1033,7 +1080,7 @@ function StockAIChat({ symbol, context }: {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, symbol, context]);
+  }, [input, loading, messages, symbol, context, bridgeState, useBridge]);
 
   const SUGGESTIONS = [
     `What is the strongest actionable read on ${symbol} right now?`,
@@ -1049,6 +1096,17 @@ function StockAIChat({ symbol, context }: {
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
           Ask AI about {symbol}
         </span>
+        {bridgeState === 'unpaired' && (
+          <button type="button" onClick={pairBridge}
+            style={{ marginLeft: 'auto', fontSize: 11, padding: '3px 8px', borderRadius: 6, cursor: 'pointer', background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', color: 'var(--text-secondary)' }}
+          >Use my Claude Code</button>
+        )}
+        {bridgeState === 'paired' && (
+          <label style={{ marginLeft: 'auto', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={useBridge} onChange={e => setUseBridge(e.target.checked)} />
+            Use my Claude Code
+          </label>
+        )}
       </div>
 
       {/* Suggestion chips — hide once conversation starts */}
